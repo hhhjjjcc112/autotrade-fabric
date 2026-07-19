@@ -17,7 +17,9 @@ public class Hotkeys {
 			"Sets the output (item to buy) container");
 	public static final ConfigHotkey OPEN_GUI_SETTINGS = new ConfigHotkey("openGuiSettings", "RIGHT_SHIFT,T",
 			"Open the Config GUI");
+	public static final ConfigHotkey ADD_TRADE_PAIR_KEY = new ConfigHotkey("addTradePair", "",
+			"Adds villager trades as new pairs (must be on MerchantScreen)");
 
 	public static final List<ConfigHotkey> HOTKEY_LIST = ImmutableList.of(TOGGLE_KEY, SET_SELL_KEY, SET_BUY_KEY,
-			SET_INPUT_KEY, SET_OUTPUT_KEY, OPEN_GUI_SETTINGS);
+			SET_INPUT_KEY, SET_OUTPUT_KEY, OPEN_GUI_SETTINGS, ADD_TRADE_PAIR_KEY);
 }

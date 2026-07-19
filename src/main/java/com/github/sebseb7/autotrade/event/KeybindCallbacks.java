@@ -4,6 +4,10 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.Hotkeys;
 import com.github.sebseb7.autotrade.gui.GuiConfigs;
+import com.github.sebseb7.autotrade.gui.MerchantScreenPairInjector;
+import com.github.sebseb7.autotrade.gui.PairListScreen;
+import com.github.sebseb7.autotrade.util.ItemStringHelper;
+import com.github.sebseb7.autotrade.util.TradePairList;
 import fi.dy.masa.malilib.config.options.ConfigHotkey;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.Message;
@@ -13,6 +17,9 @@ import fi.dy.masa.malilib.hotkeys.KeyAction;
 import fi.dy.masa.malilib.interfaces.IClientTickHandler;
 import fi.dy.masa.malilib.util.GuiUtils;
 import fi.dy.masa.malilib.util.InfoUtils;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.Vector;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.MinecraftClient;
@@ -23,8 +30,10 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ItemFrameEntity;
 import net.minecraft.entity.passive.VillagerEntity;
 import net.minecraft.entity.passive.WanderingTraderEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.network.packet.c2s.play.SelectMerchantTradeC2SPacket;
 import net.minecraft.predicate.entity.EntityPredicates;
@@ -49,11 +58,16 @@ import net.minecraft.village.TradeOfferList;
 public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 	private static final KeybindCallbacks INSTANCE = new KeybindCallbacks();
 
+	// region Constants
+	private static final int TRADE_COOLDOWN_TICKS = 2;
+	private static final int RESULT_EMPTY_RETRY_TICKS = 2;
+	private static final int RESULT_EMPTY_MAX_WAITS = 15;
+	// endregion
+
 	// region State Fields
 	private final Vector<Entity> villagersInRange = new Vector<>();
 	private int villagerActive = 0;
 
-	private boolean state = false;
 	private boolean inputInRange = false;
 	private boolean inputOpened = false;
 	private boolean outputInRange = false;
@@ -62,6 +76,14 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 	private int tickCount = 0;
 	private int voidDelay = 0;
 	private int containerDelay = 0;
+
+	// Cooldown between trades (QUICK_MOVE puts result directly into inventory)
+	private int tradeCooldownTicks = 0;
+	private int merchantResultQuickMoveOfferIndex = -1;
+	private boolean merchantResultQuickMoveIsBuy = false;
+	private int merchantResultEmptyWaits = 0;
+
+	// Merchant screen button injection tracking
 	// endregion
 
 	private KeybindCallbacks() {
@@ -89,6 +111,130 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 	public boolean functionalityEnabled() {
 		return Configs.Generic.ENABLED.getBooleanValue();
 	}
+
+	// region Merchant Trade Helpers
+
+	private void clearMerchantQuickMoveDefer() {
+		tradeCooldownTicks = 0;
+		merchantResultQuickMoveOfferIndex = -1;
+		merchantResultEmptyWaits = 0;
+	}
+
+	/**
+	 * Checks whether the player has enough items in their inventory to pay for the
+	 * given trade offer.
+	 */
+	private static boolean playerHasMerchantCosts(PlayerEntity player, TradeOffer offer) {
+		ItemStack costA = offer.getAdjustedFirstBuyItem();
+		if (!costA.isEmpty() && !hasEnough(player, costA)) {
+			AutoTrade.logger.info("[AutoTrade] Cannot afford: need {}x{} (NBT: {}), not enough in inventory",
+					costA.getCount(), Registries.ITEM.getId(costA.getItem()),
+					costA.getNbt() != null ? costA.getNbt().toString() : "none");
+			return false;
+		}
+		ItemStack costB = offer.getSecondBuyItem();
+		if (!costB.isEmpty() && !hasEnough(player, costB)) {
+			AutoTrade.logger.info("[AutoTrade] Cannot afford: need {}x{} (NBT: {}), not enough in inventory",
+					costB.getCount(), Registries.ITEM.getId(costB.getItem()),
+					costB.getNbt() != null ? costB.getNbt().toString() : "none");
+			return false;
+		}
+		return true;
+	}
+
+	private static boolean hasEnough(PlayerEntity player, ItemStack required) {
+		int need = required.getCount();
+		int have = 0;
+		PlayerInventory inv = player.getInventory();
+		for (int s = 0; s < inv.size(); s++) {
+			ItemStack stack = inv.getStack(s);
+			if (stacksMatchExact(stack, required)) {
+				have += stack.getCount();
+				if (have >= need) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks if two ItemStacks match exactly: same item type AND same NBT data.
+	 * This is critical for modded items where the same item ID may have different
+	 * NBT tags (e.g., nether_star with different custom tags).
+	 */
+	private static boolean stacksMatchExact(ItemStack a, ItemStack b) {
+		if (a.isEmpty() || b.isEmpty()) {
+			AutoTrade.logger.info("[AutoTrade] stacksMatchExact: one is empty a={} b={}", a.isEmpty(), b.isEmpty());
+			return false;
+		}
+		if (!a.isOf(b.getItem())) {
+			AutoTrade.logger.info("[AutoTrade] stacksMatchExact: item mismatch a={} b={}",
+					Registries.ITEM.getId(a.getItem()), Registries.ITEM.getId(b.getItem()));
+			return false;
+		}
+		// Compare NBT data
+		NbtCompound tagA = a.getNbt();
+		NbtCompound tagB = b.getNbt();
+		if (tagA == null && tagB == null) {
+			AutoTrade.logger.info("[AutoTrade] stacksMatchExact: both no NBT -> match for {}",
+					Registries.ITEM.getId(a.getItem()));
+			return true;
+		}
+		if (tagA == null || tagB == null) {
+			AutoTrade.logger.info("[AutoTrade] stacksMatchExact: NBT mismatch one is null a.hasNbt={} b.hasNbt={}",
+					tagA != null, tagB != null);
+			return false;
+		}
+		boolean match = tagA.equals(tagB);
+		if (!match) {
+			AutoTrade.logger.info("[AutoTrade] stacksMatchExact: NBT differs a={} b={}", tagA, tagB);
+		}
+		return match;
+	}
+
+	/**
+	 * Checks if a villager trade offer matches a configured trade pair. A match
+	 * occurs when: - The villager's cost item (what the player gives) matches the
+	 * pair's giveItem (ID + optional NBT) - The villager's result item (what the
+	 * player receives) matches the pair's getItem (ID + optional NBT)
+	 */
+	private static boolean doesOfferMatchPair(TradeOffer offer, TradePair pair) {
+		ItemStack costItem = offer.getAdjustedFirstBuyItem();
+		ItemStack resultItem = offer.getSellItem();
+		boolean costMatch = ItemStringHelper.matches(costItem, pair.getGiveItem());
+		boolean resultMatch = ItemStringHelper.matches(resultItem, pair.getGetItem());
+		AutoTrade.logger.info(
+				"[AutoTrade] Matching: offer({} cost={} result={}) vs pair(give={} get={}) -> costMatch={} resultMatch={}",
+				Registries.ITEM.getId(costItem.getItem()).toString(),
+				costItem.getNbt() != null ? costItem.getNbt().toString() : "noNbt",
+				Registries.ITEM.getId(resultItem.getItem()).toString(), ItemStringHelper.getItemId(pair.getGiveItem()),
+				ItemStringHelper.getItemId(pair.getGetItem()), costMatch, resultMatch);
+		return costMatch && resultMatch;
+	}
+
+	/**
+	 * Counts how many of a given item ID the player has in their inventory.
+	 */
+	private static int countInInventory(PlayerEntity player, String itemId) {
+		if (player == null || itemId == null || itemId.isBlank())
+			return 0;
+		int total = 0;
+		PlayerInventory inv = player.getInventory();
+		for (int s = 0; s < inv.size(); s++) {
+			ItemStack stack = inv.getStack(s);
+			if (!stack.isEmpty() && Registries.ITEM.getId(stack.getItem()).toString().equals(itemId)) {
+				total += stack.getCount();
+			}
+		}
+		return total;
+	}
+
+	private static void showTradeNotice(MinecraftClient mc, String translationKey, Object... args) {
+		InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, translationKey, args);
+	}
+
+	// endregion
 
 	// region Hotkey Handling
 
@@ -170,13 +316,30 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 						blockHit.getBlockPos().getX(), blockHit.getBlockPos().getY(), blockHit.getBlockPos().getZ());
 			}
 		} else if (key == Hotkeys.SET_BUY_KEY.getKeybind()) {
-			String buyItem = Registries.ITEM.getId(mc.player.getInventory().getMainHandStack().getItem()).toString();
-			InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.buy_item_set", buyItem);
-			Configs.Generic.BUY_ITEM.setValueFromString(buyItem);
+			ItemStack held = mc.player.getInventory().getMainHandStack();
+			String encoded = ItemStringHelper.encode(held);
+			String json = Configs.Generic.TRADE_PAIRS.getStringValue();
+			// Add as new pair with a placeholder give item
+			Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.addPair(json, "minecraft:air", encoded, 64));
+			Configs.saveToFile();
+			InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.buy_item_set",
+					ItemStringHelper.getItemId(encoded));
 		} else if (key == Hotkeys.SET_SELL_KEY.getKeybind()) {
-			String sellItem = Registries.ITEM.getId(mc.player.getInventory().getMainHandStack().getItem()).toString();
-			InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.sell_item_set", sellItem);
-			Configs.Generic.SELL_ITEM.setValueFromString(sellItem);
+			ItemStack held = mc.player.getInventory().getMainHandStack();
+			String encoded = ItemStringHelper.encode(held);
+			String json = Configs.Generic.TRADE_PAIRS.getStringValue();
+			// Add as new pair with a placeholder get item
+			Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.addPair(json, encoded, "minecraft:air", 64));
+			Configs.saveToFile();
+			InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.sell_item_set",
+					ItemStringHelper.getItemId(encoded));
+		} else if (key == Hotkeys.ADD_TRADE_PAIR_KEY.getKeybind()) {
+			if (mc.currentScreen instanceof net.minecraft.client.gui.screen.ingame.MerchantScreen) {
+				GuiBase.openGui(new PairListScreen());
+			} else {
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
+						"autotrade.message.not_on_merchant_screen");
+			}
 		}
 		return false;
 	}
@@ -185,14 +348,59 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 
 	// region Client Tick Handling
 
+	// Track which screens have already had buttons injected
+	private final Set<net.minecraft.client.gui.screen.Screen> injectedScreens = new HashSet<>();
+
 	@Override
 	public void onClientTick(MinecraftClient mc) {
+		// Tick-based MerchantScreen button injection (offers arrive after server sync)
+		if (mc.currentScreen instanceof net.minecraft.client.gui.screen.ingame.MerchantScreen screen
+				&& !injectedScreens.contains(screen)) {
+			net.minecraft.village.TradeOfferList offers = screen.getScreenHandler().getRecipes();
+			if (offers != null && offers.size() > 0) {
+				MerchantScreenPairInjector.addPairButtons(mc, screen);
+				injectedScreens.add(screen);
+			}
+		} else if (!(mc.currentScreen instanceof net.minecraft.client.gui.screen.ingame.MerchantScreen)) {
+			injectedScreens.clear();
+		}
+
 		// Main entry point for the tick-based logic
 		if (!shouldExecuteTick(mc)) {
 			return;
 		}
 
 		handleTickLogic(mc);
+	}
+
+	/**
+	 * Injects an "Add as Trade Pair" button into the MerchantScreen for each trade
+	 * offer. Clicking a button adds that trade as a new pair. Uses Screen reference
+	 * tracking to avoid re-adding every tick.
+	 */
+	private void addTradeAsPair(MinecraftClient mc, MerchantScreenHandler handler, int tradeIndex) {
+		TradeOfferList offers = handler.getRecipes();
+		if (offers == null || tradeIndex < 0 || tradeIndex >= offers.size())
+			return;
+
+		TradeOffer offer = offers.get(tradeIndex);
+		if (offer.isDisabled())
+			return;
+
+		ItemStack costItem = offer.getAdjustedFirstBuyItem();
+		ItemStack resultItem = offer.getSellItem();
+		if (costItem.isEmpty() || resultItem.isEmpty())
+			return;
+
+		String giveEncoded = ItemStringHelper.encode(costItem);
+		String getEncoded = ItemStringHelper.encode(resultItem);
+		int limit = Math.max(costItem.getCount(), 1);
+
+		String json = Configs.Generic.TRADE_PAIRS.getStringValue();
+		Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.addPair(json, giveEncoded, getEncoded, limit));
+		Configs.saveToFile();
+
+		InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, "autotrade.message.added_trade_pairs", 1);
 	}
 
 	/**
@@ -275,15 +483,16 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 	}
 
 	/**
-	 * Resets the internal state of the auto-trader.
+	 * Resets the internal state of the auto-trader. Does NOT close the merchant
+	 * screen (may be in the middle of multi-trade).
 	 */
 	private void resetState() {
 		tickCount = 0;
 		villagersInRange.clear();
 		inputInRange = false;
 		outputInRange = false;
-		if (GuiUtils.getCurrentScreen() instanceof MerchantScreen
-				|| GuiUtils.getCurrentScreen() instanceof ShulkerBoxScreen
+		clearMerchantQuickMoveDefer();
+		if (GuiUtils.getCurrentScreen() instanceof ShulkerBoxScreen
 				|| GuiUtils.getCurrentScreen() instanceof GenericContainerScreen) {
 			GuiUtils.getCurrentScreen().close();
 		}
@@ -379,10 +588,12 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 	 */
 	private boolean handleGuiScreens(MinecraftClient mc) {
 		if (mc.currentScreen instanceof MerchantScreen screen) {
-			handleMerchantScreen(mc, screen);
-			return true;
+			this.tickCount = 0;
+			handleMerchantScreenTick(mc, screen);
+			return true; // MerchantScreen is handled tick-by-tick, keep returning true
 		}
 		if (mc.currentScreen instanceof ShulkerBoxScreen screen) {
+			this.tickCount = 0;
 			if (inputOpened || outputOpened) {
 				handleContainerScreen(screen.getScreenHandler());
 				// Set the delay, don't close immediately
@@ -393,6 +604,7 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 			return true;
 		}
 		if (mc.currentScreen instanceof GenericContainerScreen screen) {
+			this.tickCount = 0;
 			if (inputOpened || outputOpened) {
 				handleContainerScreen(screen.getScreenHandler());
 				// Set the delay, don't close immediately
@@ -406,73 +618,219 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 	}
 
 	/**
-	 * Handles the trading logic when the merchant screen is open.
-	 * 
-	 * @param mc
-	 *            The Minecraft client instance.
-	 * @param screen
-	 *            The merchant screen.
+	 * Tick-based merchant screen handler. Processes ONE step per tick: 1. If a
+	 * deferred quick-move is pending, wait for the delay. 2. If the result slot
+	 * (slot 2) has items, move them to the player inventory. 3. Try to execute ONE
+	 * matching trade offer. 4. If no more matching trades, close the screen.
 	 */
-	private void handleMerchantScreen(MinecraftClient mc, MerchantScreen screen) {
-		if (state) { // Already processed this screen
-			return;
-		}
-		state = true;
-
-		String sellItemStr = Configs.Generic.SELL_ITEM.getStringValue();
-		String buyItemStr = Configs.Generic.BUY_ITEM.getStringValue();
+	private void handleMerchantScreenTick(MinecraftClient mc, MerchantScreen screen) {
 		MerchantScreenHandler handler = screen.getScreenHandler();
 		TradeOfferList offers = handler.getRecipes();
+
+		if (offers != null && !offers.isEmpty()) {
+			for (int oi = 0; oi < offers.size(); oi++) {
+				TradeOffer of = offers.get(oi);
+				if (!of.isDisabled()) {
+					ItemStack c = of.getAdjustedFirstBuyItem();
+					ItemStack r = of.getSellItem();
+					AutoTrade.logger.info(
+							"[AutoTrade] Available offer[{}]: cost={}x{} (NBT: {}) result={}x{} (NBT: {}) uses={}/{}",
+							oi, c.getCount(), Registries.ITEM.getId(c.getItem()),
+							c.getNbt() != null ? c.getNbt().toString() : "none", r.getCount(),
+							Registries.ITEM.getId(r.getItem()), r.getNbt() != null ? r.getNbt().toString() : "none",
+							of.getUses(), of.getMaxUses());
+				}
+			}
+		} else {
+			AutoTrade.logger.info("[AutoTrade] No offers available from merchant");
+		}
+
+		// Step 1: Cooldown between trades (QUICK_MOVE already moved result to
+		// inventory)
+		if (tradeCooldownTicks > 0) {
+			tradeCooldownTicks--;
+			return;
+		}
+
+		// Step 2: If the result slot has items (e.g. from server sync), move them
+		Slot slot2 = handler.getSlot(2);
+		if (slot2.hasStack()) {
+			AutoTrade.logger.info("[AutoTrade] Slot 2 has item, quick-moving: {}x{}", slot2.getStack().getCount(),
+					Registries.ITEM.getId(slot2.getStack().getItem()));
+			quickMoveOrPickupResult(mc, handler, slot2);
+			return;
+		}
+
+		// Step 3: Try to execute one matching trade
+		List<TradePair> pairs = TradePair.loadAllPairs();
+		AutoTrade.logger.info("[AutoTrade] Scanning {} offers, {} configured trade pairs",
+				offers != null ? offers.size() : 0, pairs.size());
+		if (pairs.isEmpty()) {
+			AutoTrade.logger.info("[AutoTrade] No trade pairs configured, closing merchant screen");
+			clearMerchantQuickMoveDefer();
+			screen.close();
+			inputInRange = false;
+			outputInRange = false;
+			return;
+		}
 
 		for (int i = 0; i < offers.size(); i++) {
 			TradeOffer offer = offers.get(i);
 			if (offer.isDisabled())
 				continue;
+			if (offer.getUses() >= offer.getMaxUses())
+				continue; // No uses left
 
-			String sellId = Registries.ITEM.getId(offer.getSellItem().getItem()).toString();
-			String buyId = Registries.ITEM.getId(offer.getAdjustedFirstBuyItem().getItem()).toString();
+			for (TradePair pair : pairs) {
+				if (!pair.isEnabled()) {
+					continue; // Pair is disabled (toggled OFF)
+				}
+				if (!doesOfferMatchPair(offer, pair)) {
+					AutoTrade.logger.info("[AutoTrade] Offer {} -> pair(give={} get={}) NO MATCH", i,
+							ItemStringHelper.getItemId(pair.getGiveItem()),
+							ItemStringHelper.getItemId(pair.getGetItem()));
+					continue;
+				}
+				AutoTrade.logger.info("[AutoTrade] Offer {} matched pair! give={} get={} limit={}", i,
+						ItemStringHelper.getItemId(pair.getGiveItem()), ItemStringHelper.getItemId(pair.getGetItem()),
+						pair.getLimit());
 
-			// Buy logic
-			if (Configs.Generic.ENABLE_BUY.getBooleanValue() && sellId.equals(buyItemStr)
-					&& offer.getAdjustedFirstBuyItem().getCount() <= Configs.Generic.BUY_LIMIT.getIntegerValue()) {
-				executeTrade(mc, handler, i);
-				AutoTrade.sold += offer.getMaxUses() - offer.getUses();
-			}
+				int price = offer.getAdjustedFirstBuyItem().getCount();
+				if (price > pair.getLimit()) {
+					AutoTrade.logger.info("[AutoTrade] Price {} > limit {}, skipping", price, pair.getLimit());
+					continue;
+				}
 
-			// Sell logic
-			if (Configs.Generic.ENABLE_SELL.getBooleanValue() && buyId.equals(sellItemStr)
-					&& offer.getAdjustedFirstBuyItem().getCount() <= Configs.Generic.SELL_LIMIT.getIntegerValue()) {
-				executeTrade(mc, handler, i);
-				AutoTrade.bought += offer.getMaxUses() - offer.getUses();
+				if (!playerHasMerchantCosts(mc.player, offer)) {
+					AutoTrade.logger.info("[AutoTrade] Cannot afford offer {}, skipping", i);
+					continue;
+				}
+
+				// Found a matching, affordable trade ?execute it
+				AutoTrade.logger.info("[AutoTrade] EXECUTING trade offer {} pair(give={} get={})", i,
+						ItemStringHelper.getItemId(pair.getGiveItem()), ItemStringHelper.getItemId(pair.getGetItem()));
+				executeOneTrade(mc, handler, i, offer, pair);
+				return;
 			}
 		}
 
+		// Step 4: No more matching trades ?close the screen
+		AutoTrade.logger.info("[AutoTrade] No more matching/affordable trades, closing merchant screen");
+		clearMerchantQuickMoveDefer();
 		screen.close();
 		inputInRange = false;
 		outputInRange = false;
 	}
 
 	/**
-	 * Executes a trade by selecting the offer and quick-moving the result.
-	 * 
-	 * @param mc
-	 *            The Minecraft client instance.
-	 * @param handler
-	 *            The merchant screen handler.
-	 * @param tradeIndex
-	 *            The index of the trade to execute.
+	 * Selects a trade on the server and sets up the deferred quick-move. The actual
+	 * result pickup happens in a later tick.
 	 */
-	private void executeTrade(MinecraftClient mc, MerchantScreenHandler handler, int tradeIndex) {
+	private void executeOneTrade(MinecraftClient mc, MerchantScreenHandler handler, int tradeIndex, TradeOffer offer,
+			TradePair pair) {
+		// Log the exact NBT details of what's being traded
+		ItemStack costItem = offer.getAdjustedFirstBuyItem();
+		ItemStack resultItem = offer.getSellItem();
+		AutoTrade.logger.info("[AutoTrade] EXECUTE tradeIndex={} cost={}x{} (NBT: {}) result={}x{} (NBT: {}) syncId={}",
+				tradeIndex, costItem.getCount(), Registries.ITEM.getId(costItem.getItem()),
+				costItem.getNbt() != null ? costItem.getNbt().toString() : "none", resultItem.getCount(),
+				Registries.ITEM.getId(resultItem.getItem()),
+				resultItem.getNbt() != null ? resultItem.getNbt().toString() : "none", handler.syncId);
+		AutoTrade.logger.info("[AutoTrade] EXECUTE pair giveEncoded={} getEncoded={}", pair.getGiveItem(),
+				pair.getGetItem());
+
 		handler.switchTo(tradeIndex);
 		if (mc.getNetworkHandler() != null) {
 			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(tradeIndex));
 		}
+		// Shift-click the result slot (slot 2) to execute the trade and move result to
+		// inventory
 		try {
-			if (mc.interactionManager != null) {
-				mc.interactionManager.clickSlot(handler.syncId, 2, 0, SlotActionType.QUICK_MOVE, mc.player);
-			}
+			mc.interactionManager.clickSlot(handler.syncId, 2, 0, SlotActionType.QUICK_MOVE, mc.player);
 		} catch (Exception e) {
-			AutoTrade.logger.error("Error executing trade", e);
+			AutoTrade.logger.warn("[AutoTrade] Failed to click merchant result slot", e);
+		}
+		// Track statistics
+		String resultId = Registries.ITEM.getId(offer.getSellItem().getItem()).toString();
+		if (resultId.equals(pair.getGetItem())) {
+			// This is a "get" operation ?player gives giveItem, receives getItem
+			AutoTrade.bought += offer.getSellItem().getCount();
+		} else {
+			AutoTrade.sold += offer.getAdjustedFirstBuyItem().getCount();
+		}
+		// Set cooldown before next trade
+		tradeCooldownTicks = TRADE_COOLDOWN_TICKS;
+		merchantResultQuickMoveOfferIndex = tradeIndex;
+		merchantResultQuickMoveIsBuy = resultId.equals(pair.getGetItem());
+		merchantResultEmptyWaits = 0;
+	}
+
+	/**
+	 * Moves the trade result from slot 2 to the player inventory. For enchanted
+	 * books, uses PICKUP instead of QUICK_MOVE to avoid shift-click chaining other
+	 * book trades.
+	 */
+	private void quickMoveOrPickupResult(MinecraftClient mc, MerchantScreenHandler handler, Slot slot) {
+		ItemStack stack = slot.getStack();
+		if (stack.isEmpty())
+			return;
+
+		// Enchanted books: use PICKUP to avoid shift-click chaining
+		if (stack.isOf(Items.ENCHANTED_BOOK) && stack.hasNbt() && stack.getNbt().contains("StoredEnchantments")) {
+			try {
+				// Pick up from result slot
+				mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.PICKUP, mc.player);
+				// Place into a suitable player inventory slot
+				ItemStack carried = handler.getCursorStack();
+				if (!carried.isEmpty()) {
+					for (int i = 0; i < handler.slots.size(); i++) {
+						Slot s = handler.getSlot(i);
+						if (s.inventory instanceof PlayerInventory) {
+							ItemStack existing = s.getStack();
+							if (existing.isEmpty()) {
+								mc.interactionManager.clickSlot(handler.syncId, s.id, 0, SlotActionType.PICKUP,
+										mc.player);
+								break;
+							}
+							if (existing.isOf(carried.getItem()) && ItemStack.areEqual(existing, carried)
+									&& existing.getCount() < existing.getMaxCount()) {
+								mc.interactionManager.clickSlot(handler.syncId, s.id, 0, SlotActionType.PICKUP,
+										mc.player);
+								break;
+							}
+						}
+					}
+				}
+			} catch (Exception e) {
+				AutoTrade.logger.warn("[AutoTrade] enchanted book pickup failed", e);
+			}
+		} else {
+			try {
+				mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.QUICK_MOVE, mc.player);
+			} catch (Exception e) {
+				AutoTrade.logger.warn("[AutoTrade] quick-move result failed", e);
+			}
+		}
+	}
+
+	/**
+	 * Quick helper: for internal use by the container close path to sync inventory
+	 * after merchant operations. No mixin needed ?this is best-effort.
+	 */
+	private static class ContainerIoHelper {
+		static void syncPlayerInventoryAfterMerchant(MinecraftClient mc) {
+			// Without mixin, we skip ensureHasSentCarriedItem().
+			// The network handler will catch up naturally.
+			if (mc.player != null && mc.getNetworkHandler() != null) {
+				// Flush any pending inventory changes by sending a dummy slot click
+				// on the player's cursor slot (slot -1). This is a no-op but forces
+				// the server to sync back.
+				try {
+					mc.interactionManager.clickSlot(mc.player.playerScreenHandler.syncId, -1, 0, SlotActionType.PICKUP,
+							mc.player);
+				} catch (Exception ignored) {
+				}
+			}
 		}
 	}
 
@@ -507,12 +865,13 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 			if ((entity instanceof VillagerEntity || entity instanceof WanderingTraderEntity)
 					&& entity.getBoundingBox().intersects(interactionBox) && !villagersInRange.contains(entity)) {
 
+				this.tickCount = 0;
 				if (mc.interactionManager != null) {
 					mc.interactionManager.interactEntity(mc.player, entity, Hand.MAIN_HAND);
 				}
 				voidDelay = Configs.Generic.VOID_TRADING_DELAY.getIntegerValue();
 				villagerActive = entity.getId();
-				state = false;
+				clearMerchantQuickMoveDefer();
 				villagersInRange.add(entity); // Add to known villagers to avoid re-interacting
 				return true;
 			}
@@ -546,10 +905,12 @@ public class KeybindCallbacks implements IHotkeyCallback, IClientTickHandler {
 
 		// Interact with containers if in range and not already interacted with
 		if (!inputInRange && inputPos.toCenterPos().distanceTo(mc.player.getPos()) < 4) {
+			this.tickCount = 0;
 			interactWithContainer(mc, inputPos, true);
 			return;
 		}
 		if (!outputInRange && outputPos.toCenterPos().distanceTo(mc.player.getPos()) < 4) {
+			this.tickCount = 0;
 			interactWithContainer(mc, outputPos, false);
 		}
 	}

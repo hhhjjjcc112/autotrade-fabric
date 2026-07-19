@@ -58,10 +58,14 @@ public class Configs implements IConfigHandler {
 		public static final ConfigInteger CONTAINER_CLOSE_DELAY = new ConfigInteger("containerCloseDelay", 0, 0,
 				30000000, "delay in ticks; to get signal from trapped chest");
 
+		// Dynamic trade pair list stored as JSON array
+		public static final ConfigString TRADE_PAIRS = new ConfigString("tradePairs", "[]",
+				"Trade pair list (JSON). Use the in-game GUI to manage.");
+
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, ITEM_FRAME, GLASS_BLOCK,
-				SELECTOR_OFFSET, ENABLE_SELL, SELL_ITEM, SELL_LIMIT, ENABLE_BUY, BUY_ITEM, BUY_LIMIT, MAX_INPUT_ITEMS,
-				INPUT_CONTAINER_X, INPUT_CONTAINER_Y, INPUT_CONTAINER_Z, OUTPUT_CONTAINER_X, OUTPUT_CONTAINER_Y,
-				OUTPUT_CONTAINER_Z, VOID_TRADING_DELAY, VOID_TRADING_DELAY_AFTER_TELEPORT, CONTAINER_CLOSE_DELAY);
+				SELECTOR_OFFSET, MAX_INPUT_ITEMS, INPUT_CONTAINER_X, INPUT_CONTAINER_Y, INPUT_CONTAINER_Z,
+				OUTPUT_CONTAINER_X, OUTPUT_CONTAINER_Y, OUTPUT_CONTAINER_Z, VOID_TRADING_DELAY,
+				VOID_TRADING_DELAY_AFTER_TELEPORT, CONTAINER_CLOSE_DELAY, TRADE_PAIRS);
 	}
 
 	public static void loadFromFile() {

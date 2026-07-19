@@ -5,6 +5,7 @@ import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.Hotkeys;
 import com.google.common.collect.ImmutableList;
 import fi.dy.masa.malilib.config.IConfigBase;
+import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase;
 import fi.dy.masa.malilib.gui.button.ButtonBase;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
@@ -30,6 +31,15 @@ public class GuiConfigs extends GuiConfigsBase {
 
 		for (ConfigGuiTab tab : ConfigGuiTab.VALUES) {
 			x += this.createButton(x, y, -1, tab);
+		}
+
+		// Add "Manage Pairs" button on GENERIC tab, below the config list
+		if (GuiConfigs.tab == ConfigGuiTab.GENERIC) {
+			ButtonGeneric manageBtn = new ButtonGeneric(10, this.height - 30, 120, 20,
+					StringUtils.translate("autotrade.gui.button.manage_pairs"));
+			this.addButton(manageBtn, (button, mouseButton) -> {
+				GuiBase.openGui(new PairListScreen());
+			});
 		}
 	}
 
