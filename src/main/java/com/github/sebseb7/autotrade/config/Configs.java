@@ -10,7 +10,9 @@ import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
 import fi.dy.masa.malilib.config.options.ConfigInteger;
 import fi.dy.masa.malilib.config.options.ConfigString;
+import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.FileUtils;
+import fi.dy.masa.malilib.util.InfoUtils;
 import fi.dy.masa.malilib.util.JsonUtils;
 import java.io.File;
 
@@ -18,57 +20,44 @@ public class Configs implements IConfigHandler {
 	private static final String CONFIG_FILE_NAME = Reference.MOD_ID + ".json";
 
 	public static class Generic {
+		static boolean isLoading = false;
+
 		public static final ConfigBoolean ENABLED = new ConfigBoolean("enabled", false,
 				"Do auto trading with villagers in range");
-		public static final ConfigBoolean ITEM_FRAME = new ConfigBoolean("selectUsingItemFrame", true,
-				"Select buy/sell items with item frames (max. distance 3) with items nametagged \"buy\" or \"sell\"");
-		public static final ConfigBoolean GLASS_BLOCK = new ConfigBoolean("selectUsingGlassBlock", false,
-				"Select input and output containers by placing red (input) and blue (output) stained glass blocks <selectionBlockOffset> blocks above them (or below if negative)");
-		public static final ConfigInteger SELECTOR_OFFSET = new ConfigInteger("selectionBlockOffset", 3, -10, 10, "");
-		public static final ConfigBoolean ENABLE_SELL = new ConfigBoolean("enableSell", false,
-				"Enable selling (if disabled emeralds are taken from the input container)");
-		public static final ConfigString SELL_ITEM = new ConfigString("sellItem", "minecraft:gold_ingot",
-				"The item to sell for emerald.");
-		public static final ConfigInteger SELL_LIMIT = new ConfigInteger("sellLimit", 64, 1, 64,
-				"max price to sell for");
-		public static final ConfigBoolean ENABLE_BUY = new ConfigBoolean("enableBuy", false,
-				"Enable buying (if disabled emeralds are placed in the output container)");
-		public static final ConfigString BUY_ITEM = new ConfigString("buyItem", "minecraft:redstone",
-				"The item to buy using emerald.");
-		public static final ConfigInteger BUY_LIMIT = new ConfigInteger("buyLimit", 64, 1, 64, "max price to buy for");
-		public static final ConfigInteger MAX_INPUT_ITEMS = new ConfigInteger("maxInputStacks", 9, 1, 35,
-				"stacks to take from input container (or emerald container in buy-only mode)");
-		public static final ConfigInteger INPUT_CONTAINER_X = new ConfigInteger("inputContainerX", 0, -30000000,
-				30000000, "Input container X (not used when sell disabled)");
-		public static final ConfigInteger INPUT_CONTAINER_Y = new ConfigInteger("inputContainerY", 0, -64, 320,
-				"Input container Y (not used when sell disabled)");
-		public static final ConfigInteger INPUT_CONTAINER_Z = new ConfigInteger("inputContainerZ", 0, -30000000,
-				30000000, "Input container Z (not used when sell disabled)");
-		public static final ConfigInteger OUTPUT_CONTAINER_X = new ConfigInteger("outputContainerX", 0, -30000000,
-				30000000, "Output container X (not used when buy disabled)");
-		public static final ConfigInteger OUTPUT_CONTAINER_Y = new ConfigInteger("outputContainerY", 0, -64, 320,
-				"Output container Y (not used when buy disabled)");
-		public static final ConfigInteger OUTPUT_CONTAINER_Z = new ConfigInteger("outputContainerZ", 0, -30000000,
-				30000000, "Output container Z (not used when buy disabled)");
 		public static final ConfigInteger VOID_TRADING_DELAY = new ConfigInteger("voidTradingDelay", 0, 0, 30000000,
-				"delay in ticks for void trading");
+				"Delay in ticks for void trading");
 		public static final ConfigBoolean VOID_TRADING_DELAY_AFTER_TELEPORT = new ConfigBoolean("delayAfterTeleport",
-				true,
+				false,
 				"true: Start the delay after the villager was unloaded; false: Start the delay after the trade has been initiated");
-		public static final ConfigInteger CONTAINER_CLOSE_DELAY = new ConfigInteger("containerCloseDelay", 0, 0,
-				30000000, "delay in ticks; to get signal from trapped chest");
+		public static final ConfigInteger CONTAINER_TIMEOUT = new ConfigInteger("containerTimeout", 10, 0, 200,
+				"Timeout ticks waiting for container screen to open");
+		public static final ConfigInteger TRAP_CHEST_DELAY = new ConfigInteger("trapChestDelay", 5, 0, 100,
+				"Extra ticks after opening a trapped chest (signal stabilization)");
+		public static final ConfigInteger TRADE_INTERVAL = new ConfigInteger("tradeInterval", 100, 20, 1200,
+				"Minimum ticks between villager trade sessions (100 ticks = 5 seconds)");
+		public static final ConfigInteger CONTAINER_IO_INTERVAL = new SafeConfigInteger("containerIOInterval", 10, 0,
+				200, "Min ticks between container IO operations (0=check every tick)");
+		public static final ConfigInteger CONTAINER_IO_IDLE_INTERVAL = new SafeConfigInteger("containerIOIdleInterval",
+				5, 0, 100, "Ticks to wait when no container IO is needed");
+		public static final ConfigInteger INTERACT_TIMEOUT = new ConfigInteger("interactTimeout", 5, 0, 100,
+				"Timeout ticks waiting for trade screen to open");
 
-		// Dynamic trade pair list stored as JSON array
+		public static final ConfigOptionListValue TRADE_MODE = new SafeConfigOptionListValue("tradeMode",
+				TradeMode.STATIC, "Trade mode: STATIC, MOVING, VOID");
+		public static final ConfigInteger VILLAGER_SCAN_RANGE = new SafeConfigInteger("villagerScanRange", 4, 1, 10,
+				"Villager scan radius (blocks)");
+
 		public static final ConfigString TRADE_PAIRS = new ConfigString("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
 
-		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, ITEM_FRAME, GLASS_BLOCK,
-				SELECTOR_OFFSET, MAX_INPUT_ITEMS, INPUT_CONTAINER_X, INPUT_CONTAINER_Y, INPUT_CONTAINER_Z,
-				OUTPUT_CONTAINER_X, OUTPUT_CONTAINER_Y, OUTPUT_CONTAINER_Z, VOID_TRADING_DELAY,
-				VOID_TRADING_DELAY_AFTER_TELEPORT, CONTAINER_CLOSE_DELAY, TRADE_PAIRS);
+		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
+				VILLAGER_SCAN_RANGE, CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL, VOID_TRADING_DELAY,
+				VOID_TRADING_DELAY_AFTER_TELEPORT, CONTAINER_TIMEOUT, TRAP_CHEST_DELAY, TRADE_INTERVAL,
+				INTERACT_TIMEOUT);
 	}
 
 	public static void loadFromFile() {
+		Generic.isLoading = true;
 		File configFile = new File(FileUtils.getConfigDirectory(), CONFIG_FILE_NAME);
 
 		if (configFile.exists() && configFile.isFile() && configFile.canRead()) {
@@ -79,8 +68,17 @@ public class Configs implements IConfigHandler {
 
 				ConfigUtils.readConfigBase(root, "Generic", Generic.OPTIONS);
 				ConfigUtils.readConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
+
+				// Read TRADE_PAIRS separately (not in OPTIONS to hide from GUI)
+				if (root.has("Generic") && root.getAsJsonObject("Generic").has("tradePairs")) {
+					Generic.TRADE_PAIRS
+							.setValueFromString(root.getAsJsonObject("Generic").get("tradePairs").getAsString());
+				}
 			}
 		}
+
+		Generic.isLoading = false;
+		Generic.ENABLED.setBooleanValue(false);
 	}
 
 	public static void saveToFile() {
@@ -91,6 +89,14 @@ public class Configs implements IConfigHandler {
 
 			ConfigUtils.writeConfigBase(root, "Generic", Generic.OPTIONS);
 			ConfigUtils.writeConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
+
+			// Write TRADE_PAIRS separately
+			JsonObject generic = root.getAsJsonObject("Generic");
+			if (generic == null) {
+				generic = new JsonObject();
+				root.add("Generic", generic);
+			}
+			generic.addProperty("tradePairs", Generic.TRADE_PAIRS.getStringValue());
 
 			JsonUtils.writeJsonToFile(root, new File(dir, CONFIG_FILE_NAME));
 		}
@@ -104,5 +110,43 @@ public class Configs implements IConfigHandler {
 	@Override
 	public void save() {
 		saveToFile();
+	}
+
+	/**
+	 * 在启用时拒绝修改值的 ConfigInteger。
+	 */
+	private static class SafeConfigInteger extends ConfigInteger {
+		SafeConfigInteger(String name, int defaultValue, int min, int max, String comment) {
+			super(name, defaultValue, min, max, comment);
+		}
+
+		@Override
+		public void setValueFromString(String value) {
+			if (!Generic.isLoading && Generic.ENABLED.getBooleanValue()) {
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
+						"autotrade.message.disable_before_change");
+				return;
+			}
+			super.setValueFromString(value);
+		}
+	}
+
+	/**
+	 * 在启用时拒绝修改值的 ConfigOptionListValue。
+	 */
+	private static class SafeConfigOptionListValue extends ConfigOptionListValue {
+		SafeConfigOptionListValue(String name, TradeMode defaultValue, String comment) {
+			super(name, defaultValue, comment);
+		}
+
+		@Override
+		public void setValueFromString(String value) {
+			if (!Generic.isLoading && Generic.ENABLED.getBooleanValue()) {
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
+						"autotrade.message.disable_before_change");
+				return;
+			}
+			super.setValueFromString(value);
+		}
 	}
 }

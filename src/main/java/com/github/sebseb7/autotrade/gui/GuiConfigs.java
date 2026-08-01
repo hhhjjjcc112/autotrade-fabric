@@ -22,11 +22,18 @@ public class GuiConfigs extends GuiConfigsBase {
 	}
 
 	@Override
+	protected int getBrowserWidth() {
+		return this.width * 8 / 10;
+	}
+
+	@Override
 	public void initGui() {
+		this.setListPosition(this.width / 10, this.getListY());
+		this.reCreateListWidget();
 		super.initGui();
 		this.clearOptions();
 
-		int x = 10;
+		int x = this.width / 10;
 		int y = 26;
 
 		for (ConfigGuiTab tab : ConfigGuiTab.VALUES) {
@@ -35,7 +42,7 @@ public class GuiConfigs extends GuiConfigsBase {
 
 		// Add "Manage Pairs" button on GENERIC tab, below the config list
 		if (GuiConfigs.tab == ConfigGuiTab.GENERIC) {
-			ButtonGeneric manageBtn = new ButtonGeneric(10, this.height - 30, 120, 20,
+			ButtonGeneric manageBtn = new ButtonGeneric(this.width / 10, this.height - 30, 120, 20,
 					StringUtils.translate("autotrade.gui.button.manage_pairs"));
 			this.addButton(manageBtn, (button, mouseButton) -> {
 				GuiBase.openGui(new PairListScreen());
@@ -56,7 +63,7 @@ public class GuiConfigs extends GuiConfigsBase {
 		ConfigGuiTab tab = GuiConfigs.tab;
 
 		if (tab == ConfigGuiTab.GENERIC) {
-			return 200;
+			return Math.max(200, getBrowserWidth() * 2 / 5);
 		}
 
 		return super.getConfigWidth();
@@ -78,14 +85,7 @@ public class GuiConfigs extends GuiConfigsBase {
 		return ConfigOptionWrapper.createFor(configs);
 	}
 
-	private static class ButtonListener implements IButtonActionListener {
-		private final GuiConfigs parent;
-		private final ConfigGuiTab tab;
-
-		public ButtonListener(ConfigGuiTab tab, GuiConfigs parent) {
-			this.tab = tab;
-			this.parent = parent;
-		}
+	private record ButtonListener(ConfigGuiTab tab, GuiConfigs parent) implements IButtonActionListener {
 
 		@Override
 		public void actionPerformedWithButton(ButtonBase button, int mouseButton) {

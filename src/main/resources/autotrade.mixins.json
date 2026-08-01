@@ -1,0 +1,13 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "com.github.sebseb7.autotrade.mixin",
+	"compatibilityLevel": "JAVA_17",
+	"client": [
+		"MerchantScreenHotkeyMixin",
+		"accessor.MerchantScreenAccessor"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
