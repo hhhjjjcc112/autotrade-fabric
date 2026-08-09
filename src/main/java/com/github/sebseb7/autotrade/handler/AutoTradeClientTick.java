@@ -1,6 +1,5 @@
 package com.github.sebseb7.autotrade.handler;
 
-import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.TradeMode;
 import com.github.sebseb7.autotrade.trade.TradingModeMachine;
@@ -30,9 +29,6 @@ public class AutoTradeClientTick implements IClientTickHandler {
 		for (TradingModeMachine m : machines.values()) {
 			m.reset();
 		}
-		AutoTrade.sold = 0;
-		AutoTrade.bought = 0;
-		AutoTrade.sessionStart = System.currentTimeMillis() / 1000L;
 	}
 
 	@Override
