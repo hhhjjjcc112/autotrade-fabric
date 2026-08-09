@@ -79,10 +79,19 @@ public class PairListScreen extends GuiConfigsBase {
 			String statusKey = p.isEnabled()
 					? "autotrade.gui.pair_list.status_on"
 					: "autotrade.gui.pair_list.status_off";
+			// 行标签：give1 后跟 x{limit}；give2 非空时追加 x{give2Count}（0 = 未记录 → 不显示），再箭头 + get（get
+			// 后跟 x{getCount}）
 			String label = StringUtils.translate("autotrade.gui.pair_list.trade_number", i + 1) + ". "
 					+ StringUtils.translate(statusKey) + " " + giveName + " "
-					+ StringUtils.translate("autotrade.gui.pair_list.arrow") + " " + getName + " "
 					+ StringUtils.translate("autotrade.gui.pair_list.limit_prefix", p.getLimit());
+			if (!p.getGiveItem2().isEmpty()) {
+				label += " + " + ItemStringHelper.getItemId(p.getGiveItem2());
+				if (p.getGive2Count() > 0)
+					label += " " + StringUtils.translate("autotrade.gui.pair_list.limit_prefix", p.getGive2Count());
+			}
+			label += " " + StringUtils.translate("autotrade.gui.pair_list.arrow") + " " + getName;
+			if (p.getGetCount() > 0)
+				label += " " + StringUtils.translate("autotrade.gui.pair_list.limit_prefix", p.getGetCount());
 			configs.add(new ConfigOptionWrapper(new ConfigString("pair_" + i, label, "")));
 		}
 		return configs;
@@ -156,17 +165,27 @@ public class PairListScreen extends GuiConfigsBase {
 				// 解码物品栈
 				giveStack = ItemStringHelper.decode(p.getGiveItem());
 				getStack = ItemStringHelper.decode(p.getGetItem());
+				// 解码可选第二给出物品栈（空串时为单成本交易对，不渲染图标/Input2 文本）
+				ItemStack give2Stack = ItemStringHelper.decode(p.getGiveItem2());
 				String noteText = p.getNote() != null ? p.getNote() : "";
 
 				String inputText = p.isInputEnabled()
 						? StringUtils.translate("autotrade.gui.pair_list.input_enabled", p.getInputX(), p.getInputY(),
 								p.getInputZ())
 						: StringUtils.translate("autotrade.gui.pair_list.input_disabled");
+				// 第二给出物品的独立输入容器状态（翻译键 input2_* 由 i18n 批次提供）
+				String input2Text = p.isGive2InputEnabled()
+						? StringUtils.translate("autotrade.gui.pair_list.input2_enabled", p.getGive2InputX(),
+								p.getGive2InputY(), p.getGive2InputZ())
+						: StringUtils.translate("autotrade.gui.pair_list.input2_disabled");
 				String outputText = p.isOutputEnabled()
 						? StringUtils.translate("autotrade.gui.pair_list.output_enabled", p.getOutputX(),
 								p.getOutputY(), p.getOutputZ())
 						: StringUtils.translate("autotrade.gui.pair_list.output_disabled");
-				String ioText = inputText + "  " + outputText;
+				// 双成本交易对展示两个输入段；单成本保持原样（回归防护）
+				String ioText = give2Stack.isEmpty()
+						? inputText + "  " + outputText
+						: inputText + "  " + input2Text + "  " + outputText;
 
 				int cx = x + 2;
 
@@ -185,11 +204,24 @@ public class PairListScreen extends GuiConfigsBase {
 					this.addWidget(new ItemIconWidget(cx, y + 1, giveStack));
 				}
 				cx += 22;
-
+				// give1 数量标签（x{limit}，每笔交易上限）
 				String limitLabel = StringUtils.translate("autotrade.gui.pair_list.limit_prefix", p.getLimit());
 				int limitWidth = this.getStringWidth(limitLabel);
 				this.addLabel(cx, y + 6, limitWidth, 8, 0xFFFFFFFF, limitLabel);
 				cx += limitWidth + 6;
+
+				// give2 图标 + 其每笔数量（x{give2Count}，0 = 未记录 → 不显示）；单成本交易对时整个块跳过（回归防护）
+				if (!give2Stack.isEmpty()) {
+					this.addWidget(new ItemIconWidget(cx, y + 1, give2Stack));
+					cx += 22;
+					if (p.getGive2Count() > 0) {
+						String count2Label = StringUtils.translate("autotrade.gui.pair_list.limit_prefix",
+								p.getGive2Count());
+						int count2Width = this.getStringWidth(count2Label);
+						this.addLabel(cx, y + 6, count2Width, 8, 0xFFFFFFFF, count2Label);
+						cx += count2Width + 6;
+					}
+				}
 
 				String arrow = StringUtils.translate("autotrade.gui.pair_list.arrow");
 				int arrowWidth = this.getStringWidth(arrow);
@@ -200,6 +232,14 @@ public class PairListScreen extends GuiConfigsBase {
 					this.addWidget(new ItemIconWidget(cx, y + 1, getStack));
 				}
 				cx += 22;
+				// 产出物品每笔数量（x{getCount}，0 = 未记录 → 不显示）
+				if (p.getGetCount() > 0) {
+					String getCountLabel = StringUtils.translate("autotrade.gui.pair_list.limit_prefix",
+							p.getGetCount());
+					int getCountWidth = this.getStringWidth(getCountLabel);
+					this.addLabel(cx, y + 6, getCountWidth, 8, 0xFFFFFFFF, getCountLabel);
+					cx += getCountWidth + 6;
+				}
 
 				if (!noteText.isEmpty()) {
 					String displayNote = noteText;

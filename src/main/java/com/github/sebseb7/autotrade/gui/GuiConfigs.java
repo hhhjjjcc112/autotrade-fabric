@@ -35,9 +35,14 @@ public class GuiConfigs extends GuiConfigsBase {
 
 		int x = this.width / 10;
 		int y = 26;
+		int gap = 2;
+		int tabCount = ConfigGuiTab.VALUES.size();
+		// 单按钮最大宽度：均分浏览器宽度，保证标签按钮组不超出滚动条区域
+		int maxTabWidth = (this.getBrowserWidth() - gap * (tabCount - 1)) / tabCount;
 
 		for (ConfigGuiTab tab : ConfigGuiTab.VALUES) {
-			x += this.createButton(x, y, -1, tab);
+			int width = Math.min(this.getStringWidth(tab.getDisplayName()) + 10, maxTabWidth);
+			x += this.createButton(x, y, width, tab);
 		}
 
 		// Add "Manage Pairs" button on GENERIC tab, below the config list
@@ -61,12 +66,21 @@ public class GuiConfigs extends GuiConfigsBase {
 	@Override
 	protected int getConfigWidth() {
 		ConfigGuiTab tab = GuiConfigs.tab;
-
-		if (tab == ConfigGuiTab.GENERIC) {
-			return Math.max(200, getBrowserWidth() * 2 / 5);
+		int browserWidth = this.getBrowserWidth();
+		// 期望宽度：通用页取浏览器宽度的 2/5，快捷键页沿用 malilib 默认宽度
+		int desired = tab == ConfigGuiTab.GENERIC ? Math.max(200, browserWidth * 2 / 5) : super.getConfigWidth();
+		// 预留空间：标签与控件间距 10 + 控件与重置按钮间距 2 + 重置按钮宽度（RESET 约 40，中文约 28）；
+		// 快捷键行额外包含设置按钮 20 + 后续间距 22
+		int reserved = tab == ConfigGuiTab.GENERIC ? 58 : 78;
+		// 最大标签宽度（与 malilib 内部 maxLabelWidth 计算方式一致）
+		int maxLabel = 0;
+		for (ConfigOptionWrapper wrapper : this.getConfigs()) {
+			if (wrapper.getType() == ConfigOptionWrapper.Type.CONFIG && wrapper.getConfig() != null) {
+				maxLabel = Math.max(maxLabel, this.getStringWidth(wrapper.getConfig().getConfigGuiDisplayName()));
+			}
 		}
-
-		return super.getConfigWidth();
+		// 收窄值控件宽度，保证「标签 + 值控件 + 重置按钮」不超出浏览器区域（滚动条），任何 GUI 缩放下都不溢出
+		return Math.max(120, Math.min(desired, browserWidth - 14 - maxLabel - reserved));
 	}
 
 	@Override

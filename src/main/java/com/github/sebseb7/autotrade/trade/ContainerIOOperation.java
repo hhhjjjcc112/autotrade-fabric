@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.trade;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
+import com.github.sebseb7.autotrade.trade.ContainerIOHelper.IOIntent;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import net.minecraft.block.BarrelBlock;
 import net.minecraft.block.BlockState;
@@ -28,8 +29,7 @@ public class ContainerIOOperation extends Operation {
 	}
 
 	private State state = State.OPENING;
-	private final TradePair pair;
-	private final boolean isInput;
+	private final IOIntent intent;
 	private int containerTimeout = 0;
 	private int trapChestDelay = 0;
 	private int transferLimit = 0;
@@ -37,10 +37,14 @@ public class ContainerIOOperation extends Operation {
 	private int failCount = 0;
 	private static final int MAX_FAILURES = 3;
 
-	public ContainerIOOperation(TradePair pair, boolean isInput) {
-		this.pair = pair;
-		this.isInput = isInput;
-		this.transferLimit = isInput ? pair.getInputTakeAmount() : 999;
+	public ContainerIOOperation(IOIntent intent) {
+		this.intent = intent;
+		this.transferLimit = intent.isInput() ? intent.pair().getInputTakeAmount() : 999;
+	}
+
+	/** 是否为输入操作（从容器取货，give1/give2 均算输入）；输出操作完成后背包空间释放，机器层可据此解除交易暂停 */
+	public boolean isInputOp() {
+		return intent.isInput();
 	}
 
 	@Override
@@ -61,10 +65,16 @@ public class ContainerIOOperation extends Operation {
 	}
 
 	private void tickOpening(MinecraftClient mc) {
-		// 根据输入/输出选择目标容器坐标
-		BlockPos pos = isInput
-				? new BlockPos(pair.getInputX(), pair.getInputY(), pair.getInputZ())
-				: new BlockPos(pair.getOutputX(), pair.getOutputY(), pair.getOutputZ());
+		// 根据输入/输出选择目标容器坐标；输入侧槽位 1（give2）使用 give2 自有输入容器坐标
+		BlockPos pos;
+		if (intent.isInput()) {
+			pos = intent.inputSlot() == 1
+					? new BlockPos(intent.pair().getGive2InputX(), intent.pair().getGive2InputY(),
+							intent.pair().getGive2InputZ())
+					: new BlockPos(intent.pair().getInputX(), intent.pair().getInputY(), intent.pair().getInputZ());
+		} else {
+			pos = new BlockPos(intent.pair().getOutputX(), intent.pair().getOutputY(), intent.pair().getOutputZ());
+		}
 
 		if (mc.world != null) {
 			BlockState blockState = mc.world.getBlockState(pos);
@@ -153,7 +163,7 @@ public class ContainerIOOperation extends Operation {
 			return;
 		}
 
-		boolean clicked = isInput ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
+		boolean clicked = intent.isInput() ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
 
 		if (clicked) {
 			transferred++;
@@ -170,9 +180,12 @@ public class ContainerIOOperation extends Operation {
 			return false;
 		}
 
+		// 输入侧槽位 1（give2）以 give2 物品为目标，其余输入/输出沿用 give1/get 物品
 		String targetItem = isInputOp
-				? ItemStringHelper.getItemId(pair.getGiveItem())
-				: ItemStringHelper.getItemId(pair.getGetItem());
+				? (intent.inputSlot() == 1
+						? ItemStringHelper.getItemId(intent.pair().getGiveItem2())
+						: ItemStringHelper.getItemId(intent.pair().getGiveItem()))
+				: ItemStringHelper.getItemId(intent.pair().getGetItem());
 
 		for (int i = 0; i < handler.slots.size(); i++) {
 			Slot slot = handler.getSlot(i);
