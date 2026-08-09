@@ -41,6 +41,9 @@ public class Configs implements IConfigHandler {
 				5, 0, 100, "Ticks to wait when no container IO is needed");
 		public static final ConfigInteger INTERACT_TIMEOUT = new ConfigInteger("interactTimeout", 5, 0, 100,
 				"Timeout ticks waiting for trade screen to open");
+		public static final ConfigInteger SESSION_ZERO_PROGRESS_COOLDOWN = new SafeConfigInteger(
+				"sessionZeroProgressCooldown", 20, 0, 200,
+				"Cooldown ticks after a zero-progress session (MOVING/VOID) to prevent busy loops (0=restart immediately)");
 
 		public static final ConfigOptionListValue TRADE_MODE = new SafeConfigOptionListValue("tradeMode",
 				TradeMode.STATIC, "Trade mode: STATIC, MOVING, VOID");
@@ -53,7 +56,7 @@ public class Configs implements IConfigHandler {
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
 				VILLAGER_SCAN_RANGE, CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL, VOID_TRADING_DELAY,
 				VOID_TRADING_DELAY_AFTER_TELEPORT, CONTAINER_TIMEOUT, TRAP_CHEST_DELAY, TRADE_INTERVAL,
-				INTERACT_TIMEOUT);
+				INTERACT_TIMEOUT, SESSION_ZERO_PROGRESS_COOLDOWN);
 	}
 
 	public static void loadFromFile() {

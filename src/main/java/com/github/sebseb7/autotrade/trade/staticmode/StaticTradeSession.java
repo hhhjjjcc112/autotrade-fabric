@@ -34,6 +34,16 @@ public class StaticTradeSession implements TradeSession {
 	}
 
 	@Override
+	public int getVillagersInteracted() {
+		return state.getVillagersInteracted();
+	}
+
+	@Override
+	public boolean isInventoryBlocked() {
+		return state.isInventoryBlocked();
+	}
+
+	@Override
 	public void clear() {
 		state.clear();
 		processedVillagers.clear();

@@ -31,6 +31,8 @@ public class StaticModeMachine extends AbstractModeMachine {
 			// 容器 IO 结束 → 设置 IO 间隔冷却
 			containerIOCooldown = Configs.Generic.CONTAINER_IO_INTERVAL.getIntegerValue();
 		}
+		// 基类同步背包满暂停状态（会话 blocked → 暂停交易；输出 IO 完成 → 解除暂停）
+		super.onTaskDone();
 	}
 
 	@Override
@@ -39,6 +41,10 @@ public class StaticModeMachine extends AbstractModeMachine {
 			tradeCooldown--;
 		if (containerIOCooldown > 0)
 			containerIOCooldown--;
+
+		// 背包满暂停：期间只做输出优先的容器 IO，不启动交易会话
+		if (tickInventoryPause(mc))
+			return;
 
 		// 交易冷却结束且范围内有村民 → 开启新一轮交易会话
 		if (tradeCooldown == 0 && ContainerIOHelper.hasVillagerInRange(mc)) {

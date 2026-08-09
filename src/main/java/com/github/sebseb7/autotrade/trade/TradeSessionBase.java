@@ -28,6 +28,10 @@ public class TradeSessionBase extends Operation implements TradeSession {
 	private int interactTimeout = 0;
 	private int voidDelay = 0;
 	private boolean voidTrade = false;
+	/** 本次会话运行中实际找到并开始交互的村民数（用于零进度冷却判定） */
+	private int villagerInteracted = 0;
+	/** 本次会话是否因背包空间不足提前结束（由 executor 在 TRADING 结束时同步） */
+	private boolean inventoryBlocked = false;
 
 	public TradeSessionBase(SessionHooks hooks) {
 		this.hooks = hooks;
@@ -62,6 +66,7 @@ public class TradeSessionBase extends Operation implements TradeSession {
 		Entity villager = hooks.findNextVillager(mc);
 		if (villager != null) {
 			villagerActive = villager.getId();
+			villagerInteracted++;
 			state = State.INTERACTING;
 			AutoTrade.logger.info("[TradeSession] SCANNING → INTERACTING (villager id={})", villagerActive);
 		} else {
@@ -154,8 +159,11 @@ public class TradeSessionBase extends Operation implements TradeSession {
 
 		boolean hasMoreWork = executor.handleMerchantScreenTick(mc, screen);
 		if (!hasMoreWork) {
+			// 同步「背包空间不足」标志：由 executor 判断是正常无匹配还是结果放不下
+			inventoryBlocked = executor.isInventoryBlocked();
 			state = State.CLOSING_SCREEN;
-			AutoTrade.logger.info("[TradeSession] TRADING → CLOSING_SCREEN");
+			AutoTrade.logger.info("[TradeSession] TRADING → CLOSING_SCREEN{}",
+					inventoryBlocked ? " (inventory full)" : "");
 		}
 	}
 
@@ -163,7 +171,8 @@ public class TradeSessionBase extends Operation implements TradeSession {
 		if (mc.currentScreen instanceof MerchantScreen screen) {
 			screen.close();
 		}
-		if (!done && hooks.onVillagerDone(mc, villagerActive)) {
+		// 背包满导致会话提前结束：不标记村民已处理（保留记录，背包清空后下轮会话重试该村民），直接结束会话
+		if (!done && !inventoryBlocked && hooks.onVillagerDone(mc, villagerActive)) {
 			state = State.SCANNING;
 			AutoTrade.logger.info("[TradeSession] CLOSING_SCREEN → SCANNING (next villager)");
 		} else {
@@ -182,12 +191,24 @@ public class TradeSessionBase extends Operation implements TradeSession {
 	}
 
 	@Override
+	public int getVillagersInteracted() {
+		return villagerInteracted;
+	}
+
+	@Override
+	public boolean isInventoryBlocked() {
+		return inventoryBlocked;
+	}
+
+	@Override
 	public void clear() {
 		state = State.SCANNING;
 		villagerActive = 0;
 		interactTimeout = 0;
 		voidDelay = 0;
 		voidTrade = false;
+		villagerInteracted = 0;
+		inventoryBlocked = false;
 		done = false;
 		executor.clearDefer();
 	}
@@ -198,6 +219,8 @@ public class TradeSessionBase extends Operation implements TradeSession {
 		villagerActive = 0;
 		interactTimeout = 0;
 		voidDelay = 0;
+		villagerInteracted = 0;
+		inventoryBlocked = false;
 		done = false;
 		executor.clearDefer();
 	}
