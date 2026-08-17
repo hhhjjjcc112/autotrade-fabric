@@ -4,7 +4,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    environment: modrinth
     steps:
     - uses: actions/checkout@v3
     - name: Set up JDK 17
@@ -32,12 +31,3 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/')
       with:
         files: build/libs/*.jar
-    - name: Modrinth Readme Sync
-      env:
-         MODRINTH_TOKEN: ${{ vars.MODRINTH_TOKEN }}
-      run: ./gradlew modrinthSyncBody
-    - name: Modrinth Release
-      if: startsWith(github.ref, 'refs/tags/')
-      env:
-         MODRINTH_TOKEN: ${{ vars.MODRINTH_TOKEN }}
-      run: ./gradlew modrinth

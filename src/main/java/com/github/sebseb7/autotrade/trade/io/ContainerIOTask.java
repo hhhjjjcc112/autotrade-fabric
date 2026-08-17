@@ -1,8 +1,9 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.io;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.trade.ContainerIOHelper.IOIntent;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper.IOIntent;
+import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import net.minecraft.block.BarrelBlock;
 import net.minecraft.block.BlockState;
@@ -22,7 +23,7 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 
-public class ContainerIOOperation extends Operation {
+public class ContainerIOTask extends Task {
 
 	private enum State {
 		OPENING, TRANSFERRING, CLOSING, DONE
@@ -37,7 +38,7 @@ public class ContainerIOOperation extends Operation {
 	private int failCount = 0;
 	private static final int MAX_FAILURES = 3;
 
-	public ContainerIOOperation(IOIntent intent) {
+	public ContainerIOTask(IOIntent intent) {
 		this.intent = intent;
 		this.transferLimit = intent.isInput() ? intent.pair().getInputTakeAmount() : 999;
 	}
@@ -45,6 +46,11 @@ public class ContainerIOOperation extends Operation {
 	/** 是否为输入操作（从容器取货，give1/give2 均算输入）；输出操作完成后背包空间释放，机器层可据此解除交易暂停 */
 	public boolean isInputOp() {
 		return intent.isInput();
+	}
+
+	/** 返回本次 IO 意图（MOVING 饥饿记账清零用，见 {@link IOIntent#ioKey()}） */
+	public IOIntent getIntent() {
+		return intent;
 	}
 
 	@Override
@@ -99,7 +105,7 @@ public class ContainerIOOperation extends Operation {
 					new BlockHitResult(pos.toCenterPos(), Direction.UP, pos, false));
 		}
 
-		containerTimeout = Configs.Generic.CONTAINER_TIMEOUT.getIntegerValue();
+		containerTimeout = Configs.Generic.OPEN_TIMEOUT.getIntegerValue();
 		state = State.TRANSFERRING;
 	}
 

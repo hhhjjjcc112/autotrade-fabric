@@ -1,13 +1,13 @@
 package com.github.sebseb7.autotrade.gui;
 
-import com.github.sebseb7.autotrade.config.ConfigItem;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.TradePairList;
-import com.github.sebseb7.autotrade.gui.widget.ItemIconWidget;
-import com.github.sebseb7.autotrade.trade.TradePair;
+import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
+import com.github.sebseb7.autotrade.config.options.ConfigItem;
+import com.github.sebseb7.autotrade.gui.widget.CustomWidgetListConfigOptions;
+import com.github.sebseb7.autotrade.trade.data.TradePair;
+import com.github.sebseb7.autotrade.trade.data.TradePairList;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import com.google.common.collect.ImmutableList;
-import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
 import fi.dy.masa.malilib.config.options.ConfigInteger;
@@ -16,18 +16,12 @@ import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
-import fi.dy.masa.malilib.gui.interfaces.IKeybindConfigGui;
-import fi.dy.masa.malilib.gui.widgets.WidgetConfigOption;
 import fi.dy.masa.malilib.gui.widgets.WidgetListConfigOptions;
-import fi.dy.masa.malilib.gui.widgets.WidgetListConfigOptionsBase;
 import fi.dy.masa.malilib.util.InfoUtils;
 import fi.dy.masa.malilib.util.StringUtils;
 import java.util.List;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.item.TooltipContext;
 import net.minecraft.item.ItemStack;
-import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 
 public class PairEditScreen extends GuiConfigsBase {
@@ -39,11 +33,11 @@ public class PairEditScreen extends GuiConfigsBase {
 	private ConfigItem getConfig;
 	private ConfigInteger limitConfig;
 	private ConfigBoolean enableInputConfig;
-	private ConfigString inputPosConfig;
+	private ConfigCoordinate inputPosConfig;
 	private ConfigBoolean enableGive2InputConfig;
-	private ConfigString give2InputPosConfig;
+	private ConfigCoordinate give2InputPosConfig;
 	private ConfigBoolean enableOutputConfig;
-	private ConfigString outputPosConfig;
+	private ConfigCoordinate outputPosConfig;
 	private ConfigInteger inputThresholdConfig, inputTakeAmountConfig, outputThresholdConfig, give2InputThresholdConfig;
 	private ConfigString noteConfig;
 
@@ -99,12 +93,12 @@ public class PairEditScreen extends GuiConfigsBase {
 		enableInputConfig = new ConfigBoolean("paireditEnableInput", currentPair.isInputEnabled(),
 				"Auto restock give items from input container");
 		// 三个坐标合并为一个空格分隔字符串字段（仅 GUI 展示），JSON 持久化仍为三个 int
-		inputPosConfig = new ConfigString("paireditInputPos",
+		inputPosConfig = new ConfigCoordinate("paireditInputPos",
 				formatPos(currentPair.getInputX(), currentPair.getInputY(), currentPair.getInputZ()),
 				"Input container position (x y z)");
 		enableGive2InputConfig = new ConfigBoolean("paireditEnableGive2Input", currentPair.isGive2InputEnabled(),
 				"Auto restock give2 items from its own input container");
-		give2InputPosConfig = new ConfigString("paireditGive2InputPos",
+		give2InputPosConfig = new ConfigCoordinate("paireditGive2InputPos",
 				formatPos(currentPair.getGive2InputX(), currentPair.getGive2InputY(), currentPair.getGive2InputZ()),
 				"Give2 input container position (x y z)");
 		give2InputThresholdConfig = new ConfigInteger("paireditGive2InputThreshold",
@@ -112,7 +106,7 @@ public class PairEditScreen extends GuiConfigsBase {
 				"Restock when give2 items drop below this threshold (in slots)");
 		enableOutputConfig = new ConfigBoolean("paireditEnableOutput", currentPair.isOutputEnabled(),
 				"Auto deposit products to output container");
-		outputPosConfig = new ConfigString("paireditOutputPos",
+		outputPosConfig = new ConfigCoordinate("paireditOutputPos",
 				formatPos(currentPair.getOutputX(), currentPair.getOutputY(), currentPair.getOutputZ()),
 				"Output container position (x y z)");
 		inputThresholdConfig = new ConfigInteger("paireditInputThreshold", currentPair.getInputThreshold(), 1, 2304,
@@ -221,31 +215,31 @@ public class PairEditScreen extends GuiConfigsBase {
 		currentPair.setLimit(limitConfig.getIntegerValue());
 		currentPair.setInputEnabled(enableInputConfig.getBooleanValue());
 		// 解析输入容器坐标；解析失败时保留上次有效坐标并提示，绝不让异常逃出回调链（客户端防崩溃护栏）
-		int[] inputPos = new int[3];
-		if (parsePos(inputPosConfig.getStringValue(), inputPos)) {
-			currentPair.setInputX(inputPos[0]);
-			currentPair.setInputY(inputPos[1]);
-			currentPair.setInputZ(inputPos[2]);
+		BlockPos inputPos = inputPosConfig.toBlockPos();
+		if (inputPos != null) {
+			currentPair.setInputX(inputPos.getX());
+			currentPair.setInputY(inputPos.getY());
+			currentPair.setInputZ(inputPos.getZ());
 		} else {
 			warnInvalidPos();
 		}
 		currentPair.setGive2InputEnabled(enableGive2InputConfig.getBooleanValue());
 		// 解析 give2 输入容器坐标；失败时同样保留上次有效坐标
-		int[] give2InputPos = new int[3];
-		if (parsePos(give2InputPosConfig.getStringValue(), give2InputPos)) {
-			currentPair.setGive2InputX(give2InputPos[0]);
-			currentPair.setGive2InputY(give2InputPos[1]);
-			currentPair.setGive2InputZ(give2InputPos[2]);
+		BlockPos give2InputPos = give2InputPosConfig.toBlockPos();
+		if (give2InputPos != null) {
+			currentPair.setGive2InputX(give2InputPos.getX());
+			currentPair.setGive2InputY(give2InputPos.getY());
+			currentPair.setGive2InputZ(give2InputPos.getZ());
 		} else {
 			warnInvalidPos();
 		}
 		currentPair.setOutputEnabled(enableOutputConfig.getBooleanValue());
 		// 解析输出容器坐标；失败时保留上次有效坐标
-		int[] outputPos = new int[3];
-		if (parsePos(outputPosConfig.getStringValue(), outputPos)) {
-			currentPair.setOutputX(outputPos[0]);
-			currentPair.setOutputY(outputPos[1]);
-			currentPair.setOutputZ(outputPos[2]);
+		BlockPos outputPos = outputPosConfig.toBlockPos();
+		if (outputPos != null) {
+			currentPair.setOutputX(outputPos.getX());
+			currentPair.setOutputY(outputPos.getY());
+			currentPair.setOutputZ(outputPos.getZ());
 		} else {
 			warnInvalidPos();
 		}
@@ -259,23 +253,6 @@ public class PairEditScreen extends GuiConfigsBase {
 	// 将三个坐标格式化为 "x y z" 空格分隔字符串，用于 GUI 展示
 	private String formatPos(int x, int y, int z) {
 		return x + " " + y + " " + z;
-	}
-
-	// 解析 "x y z" 坐标字符串到 out = {x,y,z}；段数不符或数字非法返回 false（Metis D1/D3：容错空白、绝不抛异常）
-	private boolean parsePos(String text, int[] out) {
-		try {
-			String[] parts = text.trim().split("\\s+");
-			if (parts.length != 3)
-				return false;
-			for (int i = 0; i < 3; i++) {
-				long v = Long.parseLong(parts[i]);
-				// 钳制到原 ConfigInteger 的 ±30000000 范围，防止越界坐标写入（Metis D2）
-				out[i] = (int) Math.max(-30000000, Math.min(30000000, v));
-			}
-			return true;
-		} catch (NumberFormatException e) {
-			return false;
-		}
 	}
 
 	// 坐标格式非法时提示用户；对应组坐标保持上次有效值，不覆盖不崩溃
@@ -341,68 +318,5 @@ public class PairEditScreen extends GuiConfigsBase {
 		String json = Configs.Generic.TRADE_PAIRS.getStringValue();
 		Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.updatePair(json, pairIndex, currentPair));
 		Configs.saveToFile();
-	}
-
-	private static class CustomWidgetListConfigOptions extends WidgetListConfigOptions {
-		public CustomWidgetListConfigOptions(int x, int y, int width, int height, int configWidth, float zLevel,
-				boolean useKeybindSearch, GuiConfigsBase parent) {
-			super(x, y, width, height, configWidth, zLevel, useKeybindSearch, parent);
-		}
-
-		@Override
-		protected WidgetConfigOption createListEntryWidget(int x, int y, int listIndex, boolean isOdd,
-				ConfigOptionWrapper wrapper) {
-			return new CustomWidgetConfigOption(x, y, this.browserEntryWidth, this.browserEntryHeight,
-					this.maxLabelWidth, this.configWidth, wrapper, listIndex, (IKeybindConfigGui) this.parent, this);
-		}
-	}
-
-	private static class CustomWidgetConfigOption extends WidgetConfigOption {
-		private final PairEditScreen screen;
-		private ItemStack hoverIconStack;
-		private int iconX, iconY;
-
-		public CustomWidgetConfigOption(int x, int y, int width, int height, int labelWidth, int configWidth,
-				ConfigOptionWrapper wrapper, int listIndex, IKeybindConfigGui host,
-				WidgetListConfigOptionsBase<?, ?> parent) {
-			super(x, y, width, height, labelWidth, configWidth, wrapper, listIndex, host, parent);
-			if (host instanceof PairEditScreen) {
-				this.screen = (PairEditScreen) host;
-			} else {
-				this.screen = null;
-			}
-		}
-
-		@Override
-		protected void addConfigOption(int x, int y, float zLevel, int labelWidth, int configWidth,
-				IConfigBase config) {
-			if (config instanceof ConfigItem) {
-				String encoded = ((IConfigValue) config).getStringValue();
-				ItemStack stack = ItemStringHelper.decode(encoded);
-				hoverIconStack = stack;
-				super.addConfigOption(x, y, zLevel, labelWidth, configWidth, config);
-				iconX = x + labelWidth - 10;
-				iconY = y + 1;
-				if (!stack.isEmpty()) {
-					this.addWidget(new ItemIconWidget(iconX, iconY, stack));
-				}
-			} else {
-				hoverIconStack = null;
-				super.addConfigOption(x, y, zLevel, labelWidth, configWidth, config);
-			}
-		}
-
-		@Override
-		public void postRenderHovered(int mouseX, int mouseY, boolean hovered, DrawContext ctx) {
-			if (hoverIconStack != null && !hoverIconStack.isEmpty() && ctx != null) {
-				MinecraftClient mc = MinecraftClient.getInstance();
-				if (mouseX >= iconX && mouseX <= iconX + 18 && mouseY >= iconY && mouseY <= iconY + 18
-						&& mc.player != null && mc.textRenderer != null) {
-					List<Text> tooltip = hoverIconStack.getTooltip(mc.player, TooltipContext.Default.ADVANCED);
-					ctx.drawTooltip(mc.textRenderer, tooltip, mouseX, mouseY);
-				}
-			}
-			super.postRenderHovered(mouseX, mouseY, hovered, ctx);
-		}
 	}
 }

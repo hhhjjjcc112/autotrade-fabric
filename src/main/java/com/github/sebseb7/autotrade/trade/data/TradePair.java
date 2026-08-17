@@ -1,7 +1,6 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.data;
 
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.TradePairList;
 import java.util.List;
 
 /**

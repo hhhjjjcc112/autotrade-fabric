@@ -31,8 +31,8 @@
 	],
 
 	"depends": {
-		"minecraft": ">=${minecraft_version_min}",
+		"minecraft": "${minecraft_version_range}",
 		"malilib": ">=${malilib_version}",
-		"fabric-api": ">=0.92.1"
+		"fabric-api": ">=${fabric_api_version_min}"
 	}
 }

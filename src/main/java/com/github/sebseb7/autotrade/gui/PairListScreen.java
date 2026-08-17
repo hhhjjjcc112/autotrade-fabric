@@ -1,9 +1,9 @@
 package com.github.sebseb7.autotrade.gui;
 
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.TradePairList;
 import com.github.sebseb7.autotrade.gui.widget.ItemIconWidget;
-import com.github.sebseb7.autotrade.trade.TradePair;
+import com.github.sebseb7.autotrade.trade.data.TradePair;
+import com.github.sebseb7.autotrade.trade.data.TradePairList;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import com.google.common.collect.ImmutableList;
 import fi.dy.masa.malilib.config.IConfigBase;

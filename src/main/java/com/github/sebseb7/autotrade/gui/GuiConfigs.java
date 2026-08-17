@@ -67,11 +67,12 @@ public class GuiConfigs extends GuiConfigsBase {
 	protected int getConfigWidth() {
 		ConfigGuiTab tab = GuiConfigs.tab;
 		int browserWidth = this.getBrowserWidth();
-		// 期望宽度：通用页取浏览器宽度的 2/5，快捷键页沿用 malilib 默认宽度
-		int desired = tab == ConfigGuiTab.GENERIC ? Math.max(200, browserWidth * 2 / 5) : super.getConfigWidth();
+		// 期望宽度：值类型页（通用/静止交易/虚空交易）取浏览器宽度的 2/5，快捷键页沿用 malilib 默认宽度
+		boolean valueTab = tab != ConfigGuiTab.HOTKEYS;
+		int desired = valueTab ? Math.max(200, browserWidth * 2 / 5) : super.getConfigWidth();
 		// 预留空间：标签与控件间距 10 + 控件与重置按钮间距 2 + 重置按钮宽度（RESET 约 40，中文约 28）；
 		// 快捷键行额外包含设置按钮 20 + 后续间距 22
-		int reserved = tab == ConfigGuiTab.GENERIC ? 58 : 78;
+		int reserved = valueTab ? 58 : 78;
 		// 最大标签宽度（与 malilib 内部 maxLabelWidth 计算方式一致）
 		int maxLabel = 0;
 		for (ConfigOptionWrapper wrapper : this.getConfigs()) {
@@ -88,12 +89,12 @@ public class GuiConfigs extends GuiConfigsBase {
 		List<? extends IConfigBase> configs;
 		ConfigGuiTab tab = GuiConfigs.tab;
 
-		if (tab == ConfigGuiTab.GENERIC) {
-			configs = Configs.Generic.OPTIONS;
-		} else if (tab == ConfigGuiTab.HOTKEYS) {
-			configs = Hotkeys.HOTKEY_LIST;
-		} else {
-			return Collections.emptyList();
+		switch (tab) {
+			case GENERIC -> configs = Configs.Generic.OPTIONS;
+			case STATIC -> configs = Configs.Static.OPTIONS;
+			case VOID -> configs = Configs.Void.OPTIONS;
+			case HOTKEYS -> configs = Hotkeys.HOTKEY_LIST;
+			default -> configs = Collections.emptyList();
 		}
 
 		return ConfigOptionWrapper.createFor(configs);
@@ -112,7 +113,8 @@ public class GuiConfigs extends GuiConfigsBase {
 	}
 
 	public enum ConfigGuiTab {
-		GENERIC("autotrade.gui.button.config_gui.generic"), HOTKEYS("autotrade.gui.button.config_gui.hotkeys");
+		GENERIC("autotrade.gui.button.config_gui.generic"), STATIC("autotrade.gui.button.config_gui.static"), VOID(
+				"autotrade.gui.button.config_gui.void"), HOTKEYS("autotrade.gui.button.config_gui.hotkeys");
 
 		private final String translationKey;
 

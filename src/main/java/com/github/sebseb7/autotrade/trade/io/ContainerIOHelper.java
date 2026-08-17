@@ -1,8 +1,12 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.io;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
+import com.github.sebseb7.autotrade.trade.data.TradePair;
+import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,101 +20,100 @@ import net.minecraft.util.math.BlockPos;
 public final class ContainerIOHelper {
 
 	/** 容器 IO 意图：交易对 + 输入/输出方向 + 输入侧 give 槽位（0=give1，1=give2；输出操作恒为 0） */
-	record IOIntent(TradePair pair, boolean isInput, int inputSlot) {
+	public record IOIntent(TradePair pair, boolean isInput, int inputSlot) {
+		/** 饥饿记账用的稳定标识：容器坐标 + 方向 + 槽位（跨 TradePair 实例稳定，同一容器意图共享饥饿计数） */
+		public String ioKey() {
+			return new ContainerCandidate(pair, isInput, inputSlot, 0).ioKey();
+		}
 	}
 
-	public static boolean startContainerIO(MinecraftClient mc, Consumer<ContainerIOOperation> starter) {
+	/** 容器 IO 候选：交易对 + 方向 + 输入槽位 + 距离（MOVING 模式饥饿评分用；距离 ≤ 4 格） */
+	public record ContainerCandidate(TradePair pair, boolean isInput, int inputSlot, double distance) {
+		/** 饥饿记账用的稳定标识：容器坐标 + 方向 + 槽位（跨 TradePair 实例稳定，同一容器意图共享饥饿计数） */
+		public String ioKey() {
+			String pos;
+			if (isInput) {
+				pos = inputSlot == 1
+						? pair.getGive2InputX() + "," + pair.getGive2InputY() + "," + pair.getGive2InputZ()
+						: pair.getInputX() + "," + pair.getInputY() + "," + pair.getInputZ();
+			} else {
+				pos = pair.getOutputX() + "," + pair.getOutputY() + "," + pair.getOutputZ();
+			}
+			return pos + "#" + isInput + "#" + inputSlot;
+		}
+	}
+
+	public static boolean startContainerIO(MinecraftClient mc, Consumer<ContainerIOTask> starter) {
 		if (mc.player == null || mc.world == null) {
 			return false;
 		}
 
+		// 全部需 IO 候选（输入 give1/give2 + 输出）中取距离最近者（输入/输出各自最近再取更近 ≡ 全局最近）
+		List<ContainerCandidate> candidates = findPendingContainers(mc);
+		if (candidates.isEmpty()) {
+			return false;
+		}
+		ContainerCandidate best = candidates.stream().min(Comparator.comparingDouble(ContainerCandidate::distance))
+				.orElse(null);
+		return startContainerIO(best, starter);
+	}
+
+	/** 按指定候选启动容器 IO（MOVING 模式饥饿评分选中后使用） */
+	public static boolean startContainerIO(ContainerCandidate candidate, Consumer<ContainerIOTask> starter) {
+		if (candidate == null) {
+			return false;
+		}
+		starter.accept(new ContainerIOTask(new IOIntent(candidate.pair(), candidate.isInput(), candidate.inputSlot())));
+		logIOStart(candidate);
+		return true;
+	}
+
+	/** 收集所有 ≤4 格需要 IO 的容器候选（输入 give1/give2 + 输出各为独立候选），MOVING 饥饿评分用 */
+	public static List<ContainerCandidate> findPendingContainers(MinecraftClient mc) {
+		if (mc.player == null || mc.world == null) {
+			return List.of();
+		}
+
 		List<TradePair> pairs = TradePair.loadAllPairs();
 		Map<String, Integer> slotCounts = buildInventorySlotCounts(mc.player, pairs);
-
-		// 输入/输出容器分别找最近的需 IO 者（输入侧区分 give1/give2 槽位），再取两者中更近的一个
-		IOIntent input = findNearestIO(mc, pairs, slotCounts, true);
-		IOIntent output = findNearestIO(mc, pairs, slotCounts, false);
-		double inputDist = input != null
-				? containerDistance(mc, input.pair(), input.isInput(), input.inputSlot())
-				: Double.MAX_VALUE;
-		double outputDist = output != null
-				? containerDistance(mc, output.pair(), output.isInput(), output.inputSlot())
-				: Double.MAX_VALUE;
-		boolean useInput = inputDist <= outputDist;
-		IOIntent best = useInput ? input : output;
-
-		if (best != null) {
-			starter.accept(new ContainerIOOperation(best));
-			logIOStart(best);
-			return true;
+		List<ContainerCandidate> result = new ArrayList<>();
+		for (TradePair p : pairs) {
+			if (!p.isEnabled())
+				continue;
+			// 输出候选：get 物品槽位数达到输出阈值，槽位恒为 0
+			if (p.isOutputEnabled() && needsContainerIO(mc, p, false, slotCounts, 0)) {
+				result.add(new ContainerCandidate(p, false, 0, containerDistance(mc, p, false, 0)));
+			}
+			// give1 输入候选：槽位 0
+			if (p.isInputEnabled() && needsContainerIO(mc, p, true, slotCounts, 0)) {
+				result.add(new ContainerCandidate(p, true, 0, containerDistance(mc, p, true, 0)));
+			}
+			// give2 输入候选：槽位 1，使用 give2 自有输入容器坐标
+			if (p.isGive2InputEnabled() && needsContainerIO(mc, p, true, slotCounts, 1)) {
+				result.add(new ContainerCandidate(p, true, 1, containerDistance(mc, p, true, 1)));
+			}
 		}
-		return false;
+		return result;
 	}
 
 	/**
 	 * 输出优先的容器 IO 启动：背包满（交易被阻塞）时优先把产出物品运往输出容器以释放空间； 无输出需求时再退回输入容器。逻辑与
 	 * {@link #startContainerIO} 相同，仅候选优先级不同。
 	 */
-	public static boolean startOutputFirstContainerIO(MinecraftClient mc, Consumer<ContainerIOOperation> starter) {
+	public static boolean startOutputFirstContainerIO(MinecraftClient mc, Consumer<ContainerIOTask> starter) {
 		if (mc.player == null || mc.world == null) {
 			return false;
 		}
 
-		List<TradePair> pairs = TradePair.loadAllPairs();
-		Map<String, Integer> slotCounts = buildInventorySlotCounts(mc.player, pairs);
-
-		// 第一轮：仅输出容器；第二轮：仅输入容器（含 give1/give2 两个槽位候选）
-		IOIntent best = findNearestIO(mc, pairs, slotCounts, false);
+		// 第一轮：仅输出候选；第二轮：仅输入候选（含 give1/give2 两个槽位候选）
+		List<ContainerCandidate> candidates = findPendingContainers(mc);
+		ContainerCandidate best = candidates.stream().filter(c -> !c.isInput())
+				.min(Comparator.comparingDouble(ContainerCandidate::distance)).orElse(null);
 		if (best == null) {
-			best = findNearestIO(mc, pairs, slotCounts, true);
+			best = candidates.stream().filter(ContainerCandidate::isInput)
+					.min(Comparator.comparingDouble(ContainerCandidate::distance)).orElse(null);
 		}
-
-		if (best != null) {
-			starter.accept(new ContainerIOOperation(best));
-			logIOStart(best);
-			return true;
-		}
-		return false;
-	}
-
-	// 在指定容器类型（输入/输出）中找出距离玩家最近且需要 IO 的意图；输入侧同时考虑 give1（槽位 0）与 give2（槽位 1）两个候选，
-	// 距离最近者胜出且需 <= 4 格，无则返回 null
-	private static IOIntent findNearestIO(MinecraftClient mc, List<TradePair> pairs, Map<String, Integer> slotCounts,
-			boolean isInput) {
-		double bestDist = Double.MAX_VALUE;
-		IOIntent bestIntent = null;
-		for (TradePair p : pairs) {
-			if (!p.isEnabled())
-				continue;
-			if (!isInput) {
-				// 输出候选：get 物品槽位数达到输出阈值，槽位恒为 0
-				if (p.isOutputEnabled() && needsContainerIO(mc, p, false, slotCounts, 0)) {
-					double d = containerDistance(mc, p, false, 0);
-					if (d < bestDist) {
-						bestDist = d;
-						bestIntent = new IOIntent(p, false, 0);
-					}
-				}
-			} else {
-				// give1 输入候选：槽位 0
-				if (p.isInputEnabled() && needsContainerIO(mc, p, true, slotCounts, 0)) {
-					double d = containerDistance(mc, p, true, 0);
-					if (d < bestDist) {
-						bestDist = d;
-						bestIntent = new IOIntent(p, true, 0);
-					}
-				}
-				// give2 输入候选：槽位 1，使用 give2 自有输入容器坐标
-				if (p.isGive2InputEnabled() && needsContainerIO(mc, p, true, slotCounts, 1)) {
-					double d = containerDistance(mc, p, true, 1);
-					if (d < bestDist) {
-						bestDist = d;
-						bestIntent = new IOIntent(p, true, 1);
-					}
-				}
-			}
-		}
-		return (bestIntent != null && bestDist <= 4) ? bestIntent : null;
+		return startContainerIO(best, starter);
 	}
 
 	public static double nearestContainerDistance(MinecraftClient mc) {
@@ -227,12 +230,13 @@ public final class ContainerIOHelper {
 		return counts;
 	}
 
-	private static void logIOStart(IOIntent intent) {
-		TradePair p = intent.pair();
+	private static void logIOStart(ContainerCandidate candidate) {
+		TradePair p = candidate.pair();
 		// 按 give 槽位记录具体物品：输入槽位 1 用 give2，其余用 give1
-		String giveItem = intent.isInput() && intent.inputSlot() == 1 ? p.getGiveItem2() : p.getGiveItem();
-		AutoTrade.logger.info("[ContainerIO] IDLE → {} for pair(give={} get={})", intent.isInput() ? "INPUT" : "OUTPUT",
-				ItemStringHelper.getItemId(giveItem), ItemStringHelper.getItemId(p.getGetItem()));
+		String giveItem = candidate.isInput() && candidate.inputSlot() == 1 ? p.getGiveItem2() : p.getGiveItem();
+		AutoTrade.logger.info("[ContainerIO] IDLE → {} for pair(give={} get={})",
+				candidate.isInput() ? "INPUT" : "OUTPUT", ItemStringHelper.getItemId(giveItem),
+				ItemStringHelper.getItemId(p.getGetItem()));
 	}
 
 	private ContainerIOHelper() {

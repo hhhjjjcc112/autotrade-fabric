@@ -1,7 +1,7 @@
 package com.github.sebseb7.autotrade.gui;
 
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.TradePairList;
+import com.github.sebseb7.autotrade.trade.data.TradePairList;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
@@ -34,7 +34,10 @@ public final class MerchantScreenPairInjector {
 		ItemStack secondCost = offer.getSecondBuyItem();
 		String giveEncoded = ItemStringHelper.encode(costItem);
 		String getEncoded = ItemStringHelper.encode(resultItem);
-		int limit = Math.max(costItem.getCount(), 1);
+		// 上限用「原始（未调价）第一成本」数量：demand/specialPrice 波动会改变 getAdjustedFirstBuyItem 的
+		// 数量（图书管理员附魔书交易 demand≥1 即涨价），捕获调整后价格会导致后续 limit 检查静默失败
+		// （执行层 isOfferExecutableForPair 按基础价格对比，见 TradeExecutor.java）；基础价格稳定可长期匹配。
+		int limit = Math.max(offer.getOriginalFirstBuyItem().getCount(), 1);
 		// 产出物品每笔交易的数量（用于列表展示 x{getCount}）
 		int getCount = resultItem.getCount();
 

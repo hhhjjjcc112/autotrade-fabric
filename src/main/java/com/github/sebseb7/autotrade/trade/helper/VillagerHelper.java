@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.helper;
 
 import java.util.ArrayList;
 import java.util.List;

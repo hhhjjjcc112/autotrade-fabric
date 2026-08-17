@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.config;
+package com.github.sebseb7.autotrade.config.options;
 
 import fi.dy.masa.malilib.config.IConfigOptionListEntry;
 import fi.dy.masa.malilib.config.IConfigValue;

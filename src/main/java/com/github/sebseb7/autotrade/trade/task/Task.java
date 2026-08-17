@@ -1,11 +1,11 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.task;
 
 import net.minecraft.client.MinecraftClient;
 
 /**
  * 单个自动化操作（交易会话或容器 IO）的抽象基类。 内置基于 tick 的等待机制，用于实现 tick 级延时。
  */
-public abstract class Operation {
+public abstract class Task {
 	protected int waitTicks = 0;
 	protected boolean done = false;
 

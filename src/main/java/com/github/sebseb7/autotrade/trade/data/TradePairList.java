@@ -1,7 +1,6 @@
-package com.github.sebseb7.autotrade.config;
+package com.github.sebseb7.autotrade.trade.data;
 
 import com.github.sebseb7.autotrade.AutoTrade;
-import com.github.sebseb7.autotrade.trade.TradePair;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;

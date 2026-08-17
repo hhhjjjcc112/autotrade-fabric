@@ -1,6 +1,7 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.task;
 
 import com.github.sebseb7.autotrade.AutoTrade;
+import com.github.sebseb7.autotrade.trade.data.TradePair;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -20,9 +21,9 @@ import net.minecraft.village.TradeOffer;
 import net.minecraft.village.TradeOfferList;
 
 /**
- * 交易画面处理逻辑：将村民的 TradeOffer 与配置的交易对匹配，执行交易并收集结果。 由 TradeSession 在每个 tick 调用。
+ * 交易画面处理逻辑：将村民的 TradeOffer 与配置的交易对匹配，执行交易并收集结果。 由 TradeTask 在每个 tick 调用。
  */
-public class MerchantTradeExecutor {
+public class TradeExecutor {
 	/** 本次会话是否因背包空间不足/结果滞留而阻塞（供会话层决定提前结束并触发容器 IO） */
 	private boolean inventoryBlocked = false;
 	/**
@@ -32,7 +33,7 @@ public class MerchantTradeExecutor {
 	 */
 	private static final int EXACT_N_MAX_RIGHT_CLICKS = 8;
 
-	public MerchantTradeExecutor() {
+	public TradeExecutor() {
 	}
 
 	/**
@@ -45,7 +46,6 @@ public class MerchantTradeExecutor {
 	public boolean handleMerchantScreenTick(MinecraftClient mc, MerchantScreen screen) {
 		// 重置会话状态（executor 跨会话复用，避免上一会话的 blocked 泄漏）
 		inventoryBlocked = false;
-
 		// 玩家或世界为空（如退出世界/传送中）时无法继续交易，等待下个 tick
 		if (mc.player == null || mc.world == null) {
 			return true;
@@ -79,7 +79,6 @@ public class MerchantTradeExecutor {
 		if (active.isEmpty()) {
 			// 无任何可执行交易项：移出输入成本后结束会话（下轮会话重试）
 			moveOutInputCosts(mc, handler);
-			clearDefer();
 			return false;
 		}
 
@@ -112,7 +111,6 @@ public class MerchantTradeExecutor {
 		}
 		AutoTrade.logger.info("[AutoTrade] 会话收尾: tradesTotal={} capacitySkips={} blocked={}", tradesTotal,
 				capacitySkips, blocked);
-		clearDefer();
 		return false;
 	}
 
@@ -420,26 +418,46 @@ public class MerchantTradeExecutor {
 
 	// 判定候选 offer 是否可由该交易对执行：匹配（doesOfferMatchPair，失败且 offer 实际有第二成本但交易对
 	// 未配置 give2 时打降级警告日志）+ 单笔成本不超 limit + 背包有全部成本。
+	// 所有拒绝路径均打诊断日志（不再静默——give2 严格匹配/limit/成本不足的失败此前对用户不可见）。
 	// @return true = 可执行（调用方记入快照并结束内层交易对循环）
 	private static boolean isOfferExecutableForPair(TradeOffer candidate, TradePair pair, int pairIndex,
 			PlayerEntity player) {
-		// 成本/产出物品与交易对不一致 → 不可执行
+		// 成本/产出物品与交易对不一致 → 不可执行（按原因细分日志：双成本 offer 未配 give2 / 双成本配置仍不匹配）
 		if (!doesOfferMatchPair(candidate, pair)) {
-			// 交易项有第二成本但交易对未配置 give2 时，严格匹配会拒绝该交易项并记录提示。
-			if (!candidate.getSecondBuyItem().isEmpty()
-					&& (pair.getGiveItem2() == null || pair.getGiveItem2().isBlank())) {
+			boolean offerHasSecondCost = !candidate.getSecondBuyItem().isEmpty();
+			boolean pairHasGive2 = pair.getGiveItem2() != null && !pair.getGiveItem2().isBlank();
+			if (offerHasSecondCost && !pairHasGive2) {
+				// 交易项有第二成本但交易对未配置 give2 时，严格匹配会拒绝该交易项并记录提示。
 				AutoTrade.logger.info(
 						"[AutoTrade] pair #{} no longer matches (offer has 2nd cost), configure give2 to match",
 						pairIndex);
+			} else if (offerHasSecondCost && pairHasGive2) {
+				// 双成本交易对仍不匹配：give/give2/get 物品不一致，或产出 NBT 已变化
+				// （如附魔书交易在村民补货后随机生成新附魔 → 需重新捕获该交易）
+				AutoTrade.logger.info(
+						"[AutoTrade] pair #{} no longer matches (give/give2/get mismatch or NBT changed), re-capture the trade",
+						pairIndex);
+			} else {
+				AutoTrade.logger.info("[AutoTrade] pair #{} no longer matches offer (give/get mismatch)", pairIndex);
 			}
 			return false;
 		}
-		// 单笔成本超过交易对上限（防止大额成本交易被无限执行）→ 不可执行；
-		// 仅第一成本被 getAdjustedFirstBuyItem 调价，故只检查第一成本）
-		if (candidate.getAdjustedFirstBuyItem().getCount() > pair.getLimit())
+		// 单笔成本超过交易对上限（防止大额成本交易被无限执行）→ 不可执行。
+		// 用原始（未调价）第一成本对比——demand/specialPrice 波动造成的涨价不会让已捕获的交易对失效；
+		// 只有「匹配到基础价格更高的其他交易」才被拒绝（修复：价格随 demand 上涨后交易对静默失效的 bug，
+		// 图书管理员附魔书交易 priceMultiplier=0.2，demand≥1 即涨价 6+，超过捕获时的 limit 32）
+		int baseCost = candidate.getOriginalFirstBuyItem().getCount();
+		if (baseCost > pair.getLimit()) {
+			AutoTrade.logger.info("[AutoTrade] pair #{} offer skipped: base cost {} > limit {}", pairIndex, baseCost,
+					pair.getLimit());
 			return false;
-		// 背包成本不足 → 不可执行
-		return playerHasMerchantCosts(player, candidate);
+		}
+		// 背包成本不足 → 不可执行（adjusted 价格随 demand 上涨时，此处按调整后价格检查实际支付能力）
+		if (!playerHasMerchantCosts(player, candidate)) {
+			AutoTrade.logger.info("[AutoTrade] pair #{} offer skipped: insufficient costs in inventory", pairIndex);
+			return false;
+		}
+		return true;
 	}
 
 	// 单 offer 单轮结果枚举：TRADED = 点击已发生且无滞留（保留在 active 下 pass 继续；exhausted=true 时移出）；
@@ -1074,9 +1092,5 @@ public class MerchantTradeExecutor {
 			return false;
 		}
 		return tagA.equals(tagB);
-	}
-
-	/** 清理交易延迟状态；当前没有需要清理的延迟状态。 */
-	void clearDefer() {
 	}
 }

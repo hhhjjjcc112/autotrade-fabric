@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.config;
+package com.github.sebseb7.autotrade.config.options;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonPrimitive;

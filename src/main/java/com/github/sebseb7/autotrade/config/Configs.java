@@ -1,6 +1,8 @@
 package com.github.sebseb7.autotrade.config;
 
 import com.github.sebseb7.autotrade.Reference;
+import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
+import com.github.sebseb7.autotrade.config.options.ConfigOptionListValue;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -10,57 +12,66 @@ import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
 import fi.dy.masa.malilib.config.options.ConfigInteger;
 import fi.dy.masa.malilib.config.options.ConfigString;
-import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.FileUtils;
-import fi.dy.masa.malilib.util.InfoUtils;
 import fi.dy.masa.malilib.util.JsonUtils;
 import java.io.File;
 
 public class Configs implements IConfigHandler {
 	private static final String CONFIG_FILE_NAME = Reference.MOD_ID + ".json";
 
+	/** 通用设置页：与具体交易模式无关的选项 */
 	public static class Generic {
-		static boolean isLoading = false;
-
 		public static final ConfigBoolean ENABLED = new ConfigBoolean("enabled", false,
-				"Do auto trading with villagers in range");
-		public static final ConfigInteger VOID_TRADING_DELAY = new ConfigInteger("voidTradingDelay", 0, 0, 30000000,
-				"Delay in ticks for void trading");
-		public static final ConfigBoolean VOID_TRADING_DELAY_AFTER_TELEPORT = new ConfigBoolean("delayAfterTeleport",
-				false,
-				"true: Start the delay after the villager was unloaded; false: Start the delay after the trade has been initiated");
-		public static final ConfigInteger CONTAINER_TIMEOUT = new ConfigInteger("containerTimeout", 10, 0, 200,
-				"Timeout ticks waiting for container screen to open");
+				"Trade with villagers in range when enabled");
+		public static final ConfigOptionListValue TRADE_MODE = new ConfigOptionListValue("tradeMode", TradeMode.STATIC,
+				"Trade mode: Static Trade, Moving Trade, Void Trade");
+		public static final ConfigInteger VILLAGER_SCAN_RANGE = new ConfigInteger("villagerScanRange", 4, 1, 10,
+				"Villager search radius (blocks)");
+		public static final ConfigInteger CONTAINER_IO_INTERVAL = new ConfigInteger("containerIOInterval", 10, 0, 200,
+				"Min ticks between container operations (0 = check every tick)");
+		public static final ConfigInteger CONTAINER_IO_IDLE_INTERVAL = new ConfigInteger("containerIOIdleInterval", 5,
+				0, 100, "Ticks to wait when no container operation is needed");
 		public static final ConfigInteger TRAP_CHEST_DELAY = new ConfigInteger("trapChestDelay", 5, 0, 100,
-				"Extra ticks after opening a trapped chest (signal stabilization)");
-		public static final ConfigInteger TRADE_INTERVAL = new ConfigInteger("tradeInterval", 100, 20, 1200,
-				"Minimum ticks between villager trade sessions (100 ticks = 5 seconds)");
-		public static final ConfigInteger CONTAINER_IO_INTERVAL = new SafeConfigInteger("containerIOInterval", 10, 0,
-				200, "Min ticks between container IO operations (0=check every tick)");
-		public static final ConfigInteger CONTAINER_IO_IDLE_INTERVAL = new SafeConfigInteger("containerIOIdleInterval",
-				5, 0, 100, "Ticks to wait when no container IO is needed");
-		public static final ConfigInteger INTERACT_TIMEOUT = new ConfigInteger("interactTimeout", 5, 0, 100,
-				"Timeout ticks waiting for trade screen to open");
-		public static final ConfigInteger SESSION_ZERO_PROGRESS_COOLDOWN = new SafeConfigInteger(
-				"sessionZeroProgressCooldown", 20, 0, 200,
-				"Cooldown ticks after a zero-progress session (MOVING/VOID) to prevent busy loops (0=restart immediately)");
-
-		public static final ConfigOptionListValue TRADE_MODE = new SafeConfigOptionListValue("tradeMode",
-				TradeMode.STATIC, "Trade mode: STATIC, MOVING, VOID");
-		public static final ConfigInteger VILLAGER_SCAN_RANGE = new SafeConfigInteger("villagerScanRange", 4, 1, 10,
-				"Villager scan radius (blocks)");
+				"Ticks to keep the trapped chest screen open after opening (stabilizes the redstone signal and leaves time for the mechanism to react); shared by container IO and the void return trigger");
+		public static final ConfigInteger OPEN_TIMEOUT = new ConfigInteger("openTimeout", 10, 0, 200,
+				"Timeout ticks waiting for a screen to open after interacting (trade screen, container screen, or return trigger block); shared by all screen-open waits");
+		public static final ConfigInteger TASK_TIMEOUT = new ConfigInteger("taskTimeout", 400, 0, 300000,
+				"Max ticks a single task may run before it is force-aborted and control returns to idle decisions (a failed void return trigger is retried next cycle). Prevents stuck states (e.g. trade offers never syncing). 0 = disabled. Raise if Void Teleport Timeout or Void Unload Delay is set above this value");
 
 		public static final ConfigString TRADE_PAIRS = new ConfigString("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
-
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
-				VILLAGER_SCAN_RANGE, CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL, VOID_TRADING_DELAY,
-				VOID_TRADING_DELAY_AFTER_TELEPORT, CONTAINER_TIMEOUT, TRAP_CHEST_DELAY, TRADE_INTERVAL,
-				INTERACT_TIMEOUT, SESSION_ZERO_PROGRESS_COOLDOWN);
+				VILLAGER_SCAN_RANGE, CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL, TRAP_CHEST_DELAY, OPEN_TIMEOUT,
+				TASK_TIMEOUT);
+	}
+
+	/** 静止交易设置页：仅静止模式生效的选项 */
+	public static class Static {
+		public static final ConfigInteger TRADE_INTERVAL = new ConfigInteger("tradeInterval", 100, 20, 1200,
+				"Min ticks between trade rounds in static mode (100 ticks = 5 seconds)");
+		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(TRADE_INTERVAL);
+	}
+
+	/** 虚空交易设置页：仅虚空模式生效的选项 */
+	public static class Void {
+		public static final ConfigInteger VOID_TELEPORT_TIMEOUT = new ConfigInteger("voidTeleportTimeout", 100, 0,
+				10000,
+				"Timeout ticks waiting for the villager to disappear (player teleport) after the trade screen opened (100 ticks = 5 seconds; 0 = wait indefinitely)");
+		public static final ConfigInteger VOID_UNLOAD_DELAY = new ConfigInteger("voidUnloadDelay", 20, 0, 600,
+				"Ticks to wait after the villager disappears (player teleport) before trading, letting the server unload the villager's chunk so trade counts are not persisted (20 ticks = 1 second; 0 = trade immediately)");
+		public static final ConfigOptionListValue VOID_RETURN_TYPE = new ConfigOptionListValue("voidReturnType",
+				ReturnTriggerType.NONE,
+				"Void-mode block type used to teleport the player back after a trade round: NONE (disabled), TRAPPED_CHEST, BUTTON, LEVER");
+		public static final ConfigCoordinate VOID_RETURN_POS = new ConfigCoordinate("voidReturnPos", "0 0 0",
+				"Position of the return trigger block as \"x y z\" (e.g. -13 60 -1)");
+		public static final ConfigBoolean VOID_RETURN_STRICT = new ConfigBoolean("voidReturnStrict", false,
+				"Strictly validate that the return trigger block type matches the configured type; mismatch is skipped with a warning (default off = only check block existence and distance)");
+
+		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(VOID_TELEPORT_TIMEOUT,
+				VOID_UNLOAD_DELAY, VOID_RETURN_TYPE, VOID_RETURN_POS, VOID_RETURN_STRICT);
 	}
 
 	public static void loadFromFile() {
-		Generic.isLoading = true;
 		File configFile = new File(FileUtils.getConfigDirectory(), CONFIG_FILE_NAME);
 
 		if (configFile.exists() && configFile.isFile() && configFile.canRead()) {
@@ -70,6 +81,8 @@ public class Configs implements IConfigHandler {
 				JsonObject root = element.getAsJsonObject();
 
 				ConfigUtils.readConfigBase(root, "Generic", Generic.OPTIONS);
+				ConfigUtils.readConfigBase(root, "Static", Static.OPTIONS);
+				ConfigUtils.readConfigBase(root, "Void", Void.OPTIONS);
 				ConfigUtils.readConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
 
 				// Read TRADE_PAIRS separately (not in OPTIONS to hide from GUI)
@@ -77,10 +90,21 @@ public class Configs implements IConfigHandler {
 					Generic.TRADE_PAIRS
 							.setValueFromString(root.getAsJsonObject("Generic").get("tradePairs").getAsString());
 				}
+
+				// 旧配置迁移：voidReturnX/Y/Z 三个整数合并为 voidReturnPos（"x y z" 字符串）；
+				// 仅当新格式缺失而旧格式存在时合成，避免覆盖用户已填写的新坐标
+				JsonObject voidGroup = root.has("Void") ? root.getAsJsonObject("Void") : null;
+				boolean hasNewPos = voidGroup != null && voidGroup.has("voidReturnPos");
+				if (!hasNewPos && root.has("Generic")) {
+					JsonObject generic = root.getAsJsonObject("Generic");
+					if (generic.has("voidReturnX") && generic.has("voidReturnY") && generic.has("voidReturnZ")) {
+						Void.VOID_RETURN_POS.setValueFromString(generic.get("voidReturnX").getAsInt() + " "
+								+ generic.get("voidReturnY").getAsInt() + " " + generic.get("voidReturnZ").getAsInt());
+					}
+				}
 			}
 		}
 
-		Generic.isLoading = false;
 		Generic.ENABLED.setBooleanValue(false);
 	}
 
@@ -91,6 +115,8 @@ public class Configs implements IConfigHandler {
 			JsonObject root = new JsonObject();
 
 			ConfigUtils.writeConfigBase(root, "Generic", Generic.OPTIONS);
+			ConfigUtils.writeConfigBase(root, "Static", Static.OPTIONS);
+			ConfigUtils.writeConfigBase(root, "Void", Void.OPTIONS);
 			ConfigUtils.writeConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
 
 			// Write TRADE_PAIRS separately
@@ -113,43 +139,5 @@ public class Configs implements IConfigHandler {
 	@Override
 	public void save() {
 		saveToFile();
-	}
-
-	/**
-	 * 在启用时拒绝修改值的 ConfigInteger。
-	 */
-	private static class SafeConfigInteger extends ConfigInteger {
-		SafeConfigInteger(String name, int defaultValue, int min, int max, String comment) {
-			super(name, defaultValue, min, max, comment);
-		}
-
-		@Override
-		public void setValueFromString(String value) {
-			if (!Generic.isLoading && Generic.ENABLED.getBooleanValue()) {
-				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
-						"autotrade.message.disable_before_change");
-				return;
-			}
-			super.setValueFromString(value);
-		}
-	}
-
-	/**
-	 * 在启用时拒绝修改值的 ConfigOptionListValue。
-	 */
-	private static class SafeConfigOptionListValue extends ConfigOptionListValue {
-		SafeConfigOptionListValue(String name, TradeMode defaultValue, String comment) {
-			super(name, defaultValue, comment);
-		}
-
-		@Override
-		public void setValueFromString(String value) {
-			if (!Generic.isLoading && Generic.ENABLED.getBooleanValue()) {
-				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
-						"autotrade.message.disable_before_change");
-				return;
-			}
-			super.setValueFromString(value);
-		}
 	}
 }

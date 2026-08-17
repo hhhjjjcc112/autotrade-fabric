@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.trade;
+package com.github.sebseb7.autotrade.trade.helper;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;

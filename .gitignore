@@ -2,3 +2,9 @@
 build/
 run/
 .idea/
+
+# Eclipse (Buildship) 生成文件
+.classpath
+.project
+.settings/
+bin/
