@@ -21,8 +21,7 @@ public class ConfigStringValidated extends ConfigString {
 	}
 
 	/**
-	 * 重写字符串设置路径（GUI 编辑等）：整串正则匹配，非法值保留原值并提示，且不触发 onValueChanged（避免 PairEditScreen
-	 * 自动保存链的无限递归）
+	 * 重写字符串设置路径（GUI 编辑等）：整串正则匹配，非法值保留原值并提示，且不触发 onValueChanged（避免旧独立编辑屏 自动保存链的无限递归）
 	 */
 	@Override
 	public void setValueFromString(String value) {

@@ -35,7 +35,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 
 	public StaticTradeMachine() {
 		super();
-		containerIOCooldown = Configs.Generic.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
+		containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
 	}
 
 	/**
@@ -76,7 +76,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 					ts.isInventoryBlocked());
 		} else {
 			// 容器 IO 结束 → 设置 IO 间隔冷却
-			containerIOCooldown = Configs.Generic.CONTAINER_IO_INTERVAL.getIntegerValue();
+			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
 		}
 	}
 
@@ -128,7 +128,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		if (containerIOCooldown == 0) {
 			if (ContainerIOHelper.startContainerIO(mc, this::setTaskIfEmpty))
 				return;
-			containerIOCooldown = Configs.Generic.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
+			containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
 		}
 	}
 
@@ -149,6 +149,6 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		scanned = false;
 		dispatchedVillagerId = 0;
 		tradeCooldown = 0;
-		containerIOCooldown = Configs.Generic.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
+		containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
 	}
 }

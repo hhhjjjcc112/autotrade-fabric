@@ -27,10 +27,6 @@ public class Configs implements IConfigHandler {
 				"Trade mode: Static Trade, Moving Trade, Void Trade");
 		public static final ConfigInteger VILLAGER_SCAN_RANGE = new ConfigInteger("villagerScanRange", 4, 1, 10,
 				"Villager search radius (blocks)");
-		public static final ConfigInteger CONTAINER_IO_INTERVAL = new ConfigInteger("containerIOInterval", 10, 0, 200,
-				"Min ticks between container operations (0 = check every tick)");
-		public static final ConfigInteger CONTAINER_IO_IDLE_INTERVAL = new ConfigInteger("containerIOIdleInterval", 5,
-				0, 100, "Ticks to wait when no container operation is needed");
 		public static final ConfigInteger TRAP_CHEST_DELAY = new ConfigInteger("trapChestDelay", 5, 0, 100,
 				"Ticks to keep the trapped chest screen open after opening (stabilizes the redstone signal and leaves time for the mechanism to react); shared by container IO and the void return trigger");
 		public static final ConfigInteger OPEN_TIMEOUT = new ConfigInteger("openTimeout", 10, 0, 200,
@@ -40,16 +36,22 @@ public class Configs implements IConfigHandler {
 
 		public static final ConfigString TRADE_PAIRS = new ConfigString("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
+		public static final ConfigString ITEM_IO = new ConfigString("itemIO", "[]",
+				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
-				VILLAGER_SCAN_RANGE, CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL, TRAP_CHEST_DELAY, OPEN_TIMEOUT,
-				TASK_TIMEOUT);
+				VILLAGER_SCAN_RANGE, TRAP_CHEST_DELAY, OPEN_TIMEOUT, TASK_TIMEOUT);
 	}
 
 	/** 静止交易设置页：仅静止模式生效的选项 */
 	public static class Static {
 		public static final ConfigInteger TRADE_INTERVAL = new ConfigInteger("tradeInterval", 100, 20, 1200,
 				"Min ticks between trade rounds in static mode (100 ticks = 5 seconds)");
-		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(TRADE_INTERVAL);
+		public static final ConfigInteger CONTAINER_IO_INTERVAL = new ConfigInteger("containerIOInterval", 10, 0, 200,
+				"Min ticks between container operations (0 = check every tick)");
+		public static final ConfigInteger CONTAINER_IO_IDLE_INTERVAL = new ConfigInteger("containerIOIdleInterval", 5,
+				0, 100, "Ticks to wait when no container operation is needed");
+		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(TRADE_INTERVAL,
+				CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL);
 	}
 
 	/** 虚空交易设置页：仅虚空模式生效的选项 */
@@ -91,6 +93,11 @@ public class Configs implements IConfigHandler {
 							.setValueFromString(root.getAsJsonObject("Generic").get("tradePairs").getAsString());
 				}
 
+				// Read ITEM_IO separately (not in OPTIONS to hide from GUI)
+				if (root.has("Generic") && root.getAsJsonObject("Generic").has("itemIO")) {
+					Generic.ITEM_IO.setValueFromString(root.getAsJsonObject("Generic").get("itemIO").getAsString());
+				}
+
 				// 旧配置迁移：voidReturnX/Y/Z 三个整数合并为 voidReturnPos（"x y z" 字符串）；
 				// 仅当新格式缺失而旧格式存在时合成，避免覆盖用户已填写的新坐标
 				JsonObject voidGroup = root.has("Void") ? root.getAsJsonObject("Void") : null;
@@ -100,6 +107,20 @@ public class Configs implements IConfigHandler {
 					if (generic.has("voidReturnX") && generic.has("voidReturnY") && generic.has("voidReturnZ")) {
 						Void.VOID_RETURN_POS.setValueFromString(generic.get("voidReturnX").getAsInt() + " "
 								+ generic.get("voidReturnY").getAsInt() + " " + generic.get("voidReturnZ").getAsInt());
+					}
+				}
+
+				// 旧配置迁移（容器 IO 间隔设置项从 Generic 归位到 Static）：仅当 Static 组缺失而 Generic 组存在时读取，避免覆盖新配置
+				JsonObject staticGroup = root.has("Static") ? root.getAsJsonObject("Static") : null;
+				JsonObject genericGroup = root.has("Generic") ? root.getAsJsonObject("Generic") : null;
+				if (staticGroup != null && genericGroup != null) {
+					if (!staticGroup.has("containerIOInterval") && genericGroup.has("containerIOInterval")) {
+						Static.CONTAINER_IO_INTERVAL
+								.setValueFromString(genericGroup.get("containerIOInterval").getAsString());
+					}
+					if (!staticGroup.has("containerIOIdleInterval") && genericGroup.has("containerIOIdleInterval")) {
+						Static.CONTAINER_IO_IDLE_INTERVAL
+								.setValueFromString(genericGroup.get("containerIOIdleInterval").getAsString());
 					}
 				}
 			}
@@ -126,6 +147,9 @@ public class Configs implements IConfigHandler {
 				root.add("Generic", generic);
 			}
 			generic.addProperty("tradePairs", Generic.TRADE_PAIRS.getStringValue());
+
+			// Write ITEM_IO separately
+			generic.addProperty("itemIO", Generic.ITEM_IO.getStringValue());
 
 			JsonUtils.writeJsonToFile(root, new File(dir, CONFIG_FILE_NAME));
 		}

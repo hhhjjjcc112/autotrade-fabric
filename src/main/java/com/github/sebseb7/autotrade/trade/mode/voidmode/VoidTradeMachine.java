@@ -3,11 +3,14 @@ package com.github.sebseb7.autotrade.trade.mode.voidmode;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.ReturnTriggerType;
-import com.github.sebseb7.autotrade.trade.data.TradePair;
+import com.github.sebseb7.autotrade.trade.data.ItemIO;
+import com.github.sebseb7.autotrade.trade.data.ItemIOList;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
+import fi.dy.masa.malilib.gui.Message;
+import fi.dy.masa.malilib.util.InfoUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.math.BlockPos;
@@ -22,7 +25,7 @@ import net.minecraft.util.math.BlockPos;
  */
 public class VoidTradeMachine extends AbstractTradeMachine {
 
-	/** 返回触发坐标与 IO 容器坐标互斥校验结果缓存（null = 尚未校验；校验一次后避免每 tick 重复解析，决策 4） */
+	/** 返回触发坐标与 IO 容器坐标互斥校验结果缓存（null = 尚未校验；校验一次后避免每 tick 重复解析 ItemIOList，决策 4） */
 	private Boolean returnTriggerConflict = null;
 
 	public VoidTradeMachine() {
@@ -82,12 +85,14 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		return Configs.Void.VOID_RETURN_POS.toBlockPos();
 	}
 
-	/** 返回触发是否可用（决策 4 互斥校验，结果缓存避免每 tick 重复解析交易对） */
+	/** 返回触发是否可用（决策 4 互斥校验，结果缓存避免每 tick 重复解析 ItemIOList） */
 	private boolean isReturnTriggerUsable() {
 		if (returnTriggerConflict == null) {
 			returnTriggerConflict = hasTriggerPosConflict();
 			if (returnTriggerConflict) {
 				AutoTrade.logger.warn("[VoidMode] VOID_RETURN 触发坐标与 IO 容器坐标重叠，返回触发未启用（请更换触发方块或容器坐标）");
+				// 弹窗提示用户返回触发坐标与容器坐标冲突
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.void.return_overlap");
 			}
 		}
 		return !returnTriggerConflict;
@@ -108,19 +113,14 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		return pos.toCenterPos().squaredDistanceTo(mc.player.getPos()) <= 4.5 * 4.5;
 	}
 
-	// 遍历全部交易对，检查触发坐标是否与任一 pair 的 input/give2Input/output 容器坐标重叠（决策 4）
+	// 遍历全部 ItemIO 条目，检查触发坐标是否与任一条目容器坐标重叠（决策 4；空列表 = 无冲突）
 	private boolean hasTriggerPosConflict() {
 		BlockPos pos = parseReturnPos();
 		// 坐标非法时视为不可用（true），避免以 (0,0,0) 参与冲突判断
 		if (pos == null)
 			return true;
-		for (TradePair p : TradePair.loadAllPairs()) {
-			if (p.getInputX() == pos.getX() && p.getInputY() == pos.getY() && p.getInputZ() == pos.getZ())
-				return true;
-			if (p.getGive2InputX() == pos.getX() && p.getGive2InputY() == pos.getY()
-					&& p.getGive2InputZ() == pos.getZ())
-				return true;
-			if (p.getOutputX() == pos.getX() && p.getOutputY() == pos.getY() && p.getOutputZ() == pos.getZ())
+		for (ItemIO io : ItemIOList.fromJson(Configs.Generic.ITEM_IO.getStringValue())) {
+			if (io.getX() == pos.getX() && io.getY() == pos.getY() && io.getZ() == pos.getZ())
 				return true;
 		}
 		return false;

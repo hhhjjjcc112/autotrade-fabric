@@ -17,9 +17,8 @@ public class ConfigCoordinate extends ConfigStringValidated {
 
 	/**
 	 * 静态解析「x y z」坐标字符串为 BlockPos；段数不符或数字非法返回 null。 用 Long.parseLong + 钳制 ±30000000
-	 * 统一了两处旧解析语义：PairEditScreen.parsePos（Long 解析 + 钳制） 与
-	 * VoidTradeMachine.parseReturnPos（按 int 直接解析，越界抛异常转 null）。钳制范围与 MC 世界边界一致， 数值超出
-	 * int 范围时按钳制处理而非拒绝。
+	 * 统一了两处旧解析语义：旧独立编辑屏的 parsePos（Long 解析 + 钳制） 与 VoidTradeMachine.parseReturnPos（按
+	 * int 直接解析，越界抛异常转 null）。钳制范围与 MC 世界边界一致， 数值超出 int 范围时按钳制处理而非拒绝。
 	 */
 	public static BlockPos parse(String text) {
 		try {
@@ -31,7 +30,7 @@ public class ConfigCoordinate extends ConfigStringValidated {
 			for (int i = 0; i < 3; i++) {
 				v[i] = Long.parseLong(parts[i]);
 			}
-			// 钳制到 MC 世界边界 ±30000000（旧 PairEditScreen 语义），超出 int 范围的值同样被钳制而非拒绝
+			// 钳制到 MC 世界边界 ±30000000（旧独立编辑屏语义），超出 int 范围的值同样被钳制而非拒绝
 			int x = (int) Math.max(-30000000, Math.min(30000000, v[0]));
 			int y = (int) Math.max(-30000000, Math.min(30000000, v[1]));
 			int z = (int) Math.max(-30000000, Math.min(30000000, v[2]));

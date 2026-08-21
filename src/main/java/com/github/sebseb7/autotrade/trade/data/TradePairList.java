@@ -3,6 +3,10 @@ package com.github.sebseb7.autotrade.trade.data;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.reflect.TypeToken;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -13,6 +17,9 @@ public final class TradePairList {
 	private static final Type PAIR_LIST_TYPE = new TypeToken<List<TradePairData>>() {
 	}.getType();
 
+	/** 旧版容器 IO 配置的 warn 已发送标志（进程内只提示一次，防止 fromJson 每 tick 调用时刷屏） */
+	private static boolean legacyIoWarned = false;
+
 	private TradePairList() {
 	}
 
@@ -21,18 +28,7 @@ public final class TradePairList {
 		public String get;
 		public int limit;
 		public boolean enabled;
-		public boolean inputEnabled;
-		public boolean outputEnabled;
-		public int inputX, inputY, inputZ;
-		public int outputX, outputY, outputZ;
-		public int inputThreshold;
-		public int inputTakeAmount;
-		public int outputThreshold;
-		/** 第二给出物品补货阈值（占用槽位数） */
-		public int give2InputThreshold;
 		public String give2;
-		public boolean give2InputEnabled;
-		public int give2InputX, give2InputY, give2InputZ;
 		public int give2Count;
 		public int getCount;
 		public String note;
@@ -41,89 +37,32 @@ public final class TradePairList {
 			this.get = "";
 			this.limit = 64;
 			this.enabled = true;
-			this.inputEnabled = false;
-			this.outputEnabled = false;
-			this.inputThreshold = 1;
-			this.inputTakeAmount = 6;
-			this.outputThreshold = 1;
-			this.give2InputThreshold = 1;
 			this.give2 = "";
-			this.give2InputEnabled = false;
-			this.give2InputX = 0;
-			this.give2InputY = 0;
-			this.give2InputZ = 0;
 			this.give2Count = 0;
 			this.getCount = 0;
+			this.note = "";
 		}
 		public TradePairData(String give, String get, int limit, boolean enabled) {
 			this.give = give;
 			this.get = get;
 			this.limit = limit;
 			this.enabled = enabled;
-			this.inputEnabled = false;
-			this.outputEnabled = false;
-			this.inputThreshold = 1;
-			this.inputTakeAmount = 6;
-			this.outputThreshold = 1;
-			this.give2InputThreshold = 1;
 			this.give2 = "";
-			this.give2InputEnabled = false;
-			this.give2InputX = 0;
-			this.give2InputY = 0;
-			this.give2InputZ = 0;
 			this.give2Count = 0;
 			this.getCount = 0;
+			this.note = "";
 		}
-		public TradePairData(String give, String get, int limit, boolean enabled, boolean inputEnabled, int inputX,
-				int inputY, int inputZ, boolean outputEnabled, int outputX, int outputY, int outputZ,
-				int inputThreshold, int inputTakeAmount, int outputThreshold) {
+		/** 与 TradePair 构造一一对应的完整构造 */
+		public TradePairData(String give, String get, int limit, boolean enabled, String give2, int give2Count,
+				int getCount, String note) {
 			this.give = give;
 			this.get = get;
 			this.limit = limit;
 			this.enabled = enabled;
-			this.inputEnabled = inputEnabled;
-			this.inputX = inputX;
-			this.inputY = inputY;
-			this.inputZ = inputZ;
-			this.outputEnabled = outputEnabled;
-			this.outputX = outputX;
-			this.outputY = outputY;
-			this.outputZ = outputZ;
-			this.inputThreshold = inputThreshold;
-			this.inputTakeAmount = inputTakeAmount;
-			this.outputThreshold = outputThreshold;
-			this.give2InputThreshold = 1;
-			this.give2 = "";
-			this.give2InputEnabled = false;
-			this.give2InputX = 0;
-			this.give2InputY = 0;
-			this.give2InputZ = 0;
-			this.give2Count = 0;
-			this.getCount = 0;
-		}
-		/** 含可选第二给出物品的完整构造，与 TradePair 的 20 参构造一一对应 */
-		public TradePairData(String give, String get, int limit, boolean enabled, boolean inputEnabled, int inputX,
-				int inputY, int inputZ, boolean outputEnabled, int outputX, int outputY, int outputZ,
-				int inputThreshold, int inputTakeAmount, int outputThreshold, String give2, boolean give2InputEnabled,
-				int give2InputX, int give2InputY, int give2InputZ) {
-			this(give, get, limit, enabled, inputEnabled, inputX, inputY, inputZ, outputEnabled, outputX, outputY,
-					outputZ, inputThreshold, inputTakeAmount, outputThreshold);
 			this.give2 = give2;
-			this.give2InputEnabled = give2InputEnabled;
-			this.give2InputX = give2InputX;
-			this.give2InputY = give2InputY;
-			this.give2InputZ = give2InputZ;
-		}
-		/** 含每笔交易数量（give2/get）的完整构造，与 TradePair 的 22 参构造一一对应 */
-		public TradePairData(String give, String get, int limit, boolean enabled, boolean inputEnabled, int inputX,
-				int inputY, int inputZ, boolean outputEnabled, int outputX, int outputY, int outputZ,
-				int inputThreshold, int inputTakeAmount, int outputThreshold, String give2, boolean give2InputEnabled,
-				int give2InputX, int give2InputY, int give2InputZ, int give2Count, int getCount) {
-			this(give, get, limit, enabled, inputEnabled, inputX, inputY, inputZ, outputEnabled, outputX, outputY,
-					outputZ, inputThreshold, inputTakeAmount, outputThreshold, give2, give2InputEnabled, give2InputX,
-					give2InputY, give2InputZ);
 			this.give2Count = give2Count;
 			this.getCount = getCount;
+			this.note = note;
 		}
 	}
 
@@ -132,12 +71,7 @@ public final class TradePairList {
 		List<TradePairData> dataList = new ArrayList<>();
 		for (TradePair p : pairs) {
 			TradePairData d = new TradePairData(p.getGiveItem(), p.getGetItem(), p.getLimit(), p.isEnabled(),
-					p.isInputEnabled(), p.getInputX(), p.getInputY(), p.getInputZ(), p.isOutputEnabled(),
-					p.getOutputX(), p.getOutputY(), p.getOutputZ(), p.getInputThreshold(), p.getInputTakeAmount(),
-					p.getOutputThreshold(), p.getGiveItem2(), p.isGive2InputEnabled(), p.getGive2InputX(),
-					p.getGive2InputY(), p.getGive2InputZ(), p.getGive2Count(), p.getGetCount());
-			d.note = p.getNote();
-			d.give2InputThreshold = p.getGive2InputThreshold();
+					p.getGiveItem2(), p.getGive2Count(), p.getGetCount(), p.getNote());
 			dataList.add(d);
 		}
 		return GSON.toJson(dataList);
@@ -148,32 +82,18 @@ public final class TradePairList {
 		if (json == null || json.isBlank())
 			return new ArrayList<>();
 		try {
+			checkLegacyIoConfig(json);
 			List<TradePairData> dataList = GSON.fromJson(json, PAIR_LIST_TYPE);
 			if (dataList == null)
 				return new ArrayList<>();
 			List<TradePair> result = new ArrayList<>();
 			for (TradePairData d : dataList) {
 				if (d.give != null && !d.give.isBlank()) {
-					if (d.inputThreshold <= 0)
-						d.inputThreshold = 1;
-					if (d.inputTakeAmount <= 0)
-						d.inputTakeAmount = 6;
-					if (d.outputThreshold <= 0)
-						d.outputThreshold = 1;
-					if (d.give2InputThreshold <= 0)
-						d.give2InputThreshold = 1;
 					// 兼容旧配置：give2 缺失时以空串兜底，避免后续 NPE
 					String give2 = d.give2 != null ? d.give2 : "";
-					// 防止空物品的补货循环：give2 为空却开启了输入容器时强制关闭
-					if (give2.isBlank() && d.give2InputEnabled)
-						d.give2InputEnabled = false;
-					TradePair pair = new TradePair(d.give, d.get != null ? d.get : "", d.limit, d.enabled,
-							d.inputEnabled, d.inputX, d.inputY, d.inputZ, d.outputEnabled, d.outputX, d.outputY,
-							d.outputZ, d.inputThreshold, d.inputTakeAmount, d.outputThreshold, give2,
-							d.give2InputEnabled, d.give2InputX, d.give2InputY, d.give2InputZ, d.give2Count, d.getCount);
-					if (d.note != null)
-						pair.setNote(d.note);
-					pair.setGive2InputThreshold(d.give2InputThreshold);
+					String note = d.note != null ? d.note : "";
+					TradePair pair = new TradePair(d.give, d.get != null ? d.get : "", d.limit, d.enabled, give2,
+							d.give2Count, d.getCount, note);
 					result.add(pair);
 				}
 			}
@@ -184,10 +104,52 @@ public final class TradePairList {
 		}
 	}
 
+	/** 检测旧版容器 IO 配置（内嵌于交易对的 input/output/give2Input 字段），命中时进程内只 warn 一次 */
+	private static void checkLegacyIoConfig(String json) {
+		if (legacyIoWarned)
+			return;
+		try {
+			JsonArray array = JsonParser.parseString(json).getAsJsonArray();
+			int legacyCount = 0;
+			for (JsonElement el : array) {
+				if (el.isJsonObject() && hasLegacyIoConfig(el.getAsJsonObject()))
+					legacyCount++;
+			}
+			if (legacyCount > 0) {
+				legacyIoWarned = true;
+				AutoTrade.logger.warn("[AutoTrade] 检测到旧版容器 IO 配置（" + legacyCount + " 个交易对），请打开 Item IO 界面重新配置");
+			}
+		} catch (Exception ignored) {
+			// 解析失败时静默忽略，后续 GSON.fromJson 会处理并告警
+		}
+	}
+
+	/** 判断单个交易对 JSON 对象是否含非默认值的旧版容器 IO 字段 */
+	private static boolean hasLegacyIoConfig(JsonObject obj) {
+		if (getBoolean(obj, "inputEnabled") || getBoolean(obj, "outputEnabled") || getBoolean(obj, "give2InputEnabled"))
+			return true;
+		return hasNonZeroCoord(obj, "inputX") || hasNonZeroCoord(obj, "inputY") || hasNonZeroCoord(obj, "inputZ")
+				|| hasNonZeroCoord(obj, "outputX") || hasNonZeroCoord(obj, "outputY") || hasNonZeroCoord(obj, "outputZ")
+				|| hasNonZeroCoord(obj, "give2InputX") || hasNonZeroCoord(obj, "give2InputY")
+				|| hasNonZeroCoord(obj, "give2InputZ");
+	}
+
+	/** 读取布尔字段；缺失或非布尔时返回 false */
+	private static boolean getBoolean(JsonObject obj, String key) {
+		JsonElement el = obj.get(key);
+		return el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isBoolean() && el.getAsBoolean();
+	}
+
+	/** 读取整数坐标字段；缺失或非数字时视为 0 */
+	private static boolean hasNonZeroCoord(JsonObject obj, String key) {
+		JsonElement el = obj.get(key);
+		return el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber() && el.getAsInt() != 0;
+	}
+
 	/** 在列表末尾新增一个默认启用的交易对，返回新的 JSON 字符串 */
 	public static String addPair(String json, String give, String get, int limit) {
 		List<TradePair> pairs = fromJson(json);
-		pairs.add(new TradePair(give, get, limit, true, false, 0, 0, 0, false, 0, 0, 0, 1, 6, 1));
+		pairs.add(new TradePair(give, get, limit, true, "", 0, 0, ""));
 		return toJson(pairs);
 	}
 
@@ -195,8 +157,7 @@ public final class TradePairList {
 	public static String addPair(String json, String give, String give2, String get, int limit, int give2Count,
 			int getCount) {
 		List<TradePair> pairs = fromJson(json);
-		pairs.add(new TradePair(give, get, limit, true, false, 0, 0, 0, false, 0, 0, 0, 1, 6, 1, give2, false, 0, 0, 0,
-				give2Count, getCount));
+		pairs.add(new TradePair(give, get, limit, true, give2, give2Count, getCount, ""));
 		return toJson(pairs);
 	}
 

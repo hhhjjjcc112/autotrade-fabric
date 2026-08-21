@@ -40,13 +40,13 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	/** 当前派发给会话的目标村民 id（任务结束钩子标记已处理用，完成与强杀统一） */
 	private int dispatchedVillagerId = 0;
 
-	/** 饥饿记账统一键：村民 = 实体 id，容器 = ioKey（坐标+方向+槽位） */
+	/** 饥饿记账统一键：村民 = 实体 id，容器 = ioKey（坐标+方向） */
 	private sealed interface StarvationKey permits VillagerKey, ContainerKey {
 	}
 	/** 村民饥饿键：实体 id */
 	private record VillagerKey(int entityId) implements StarvationKey {
 	}
-	/** 容器饥饿键：ContainerIOHelper.ContainerCandidate.ioKey()（跨 TradePair 实例稳定） */
+	/** 容器饥饿键：ContainerIOHelper.ContainerCandidate.ioKey()（跨 ItemIO 条目稳定） */
 	private record ContainerKey(String ioKey) implements StarvationKey {
 	}
 
