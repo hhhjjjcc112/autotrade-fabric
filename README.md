@@ -131,6 +131,28 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 
 代码对 1.20 – 1.20.4 零改动；各版本参数矩阵见 `build-versions.ps1`。
 
+## 持续集成（GitHub Actions）
+
+仓库内置两个 CI 工作流（`.github/workflows/`）：
+
+### Build（自动构建）
+
+- **触发**：push / PR 到 `master` 分支
+- **行为**：并行构建 3 个 MC 版本（1.20.1 / 1.20.2 / 1.20.4，参数与 `build-versions.ps1` 一致），将 jar 与 md5 校验文件上传为 Actions artifacts，可在工作流运行页面的 Summary 中下载
+- 构建失败会在 PR 上直接显示状态标记（`spotlessCheck` 已接入 `build`，格式问题会导致失败）
+
+### Release (Manual)（手动发布）
+
+无需打 tag、无需命令行，在网页上点击即可发布：
+
+1. 仓库页面 → **Actions** → 左侧 **Release (Manual)** → 右侧 **Run workflow**
+2. 选择分支（默认 master）→ 点击绿色 **Run workflow** 按钮
+3. 等待 3 个版本构建完成（并行，约 10-15 分钟）
+4. 工作流自动创建 **Draft Release**（草稿）：版本号自动读取 `gradle.properties` 的 `mod_version`，release 命名为 `v<版本号>`，附件为 3 个 jar + md5 汇总文件
+5. 前往 **Releases** 页面 → 编辑草稿补充发布说明 → 点击 **Publish release** 正式发布（GitHub 会随发布自动创建同名 tag，无需手动打 tag / push tag）
+
+> 若重复发布同一版本号，工作流会先删除旧的同名 draft 再重建，无需手动清理。
+
 ## 已知问题
 
 - ItemScroller 的交易收藏功能会破坏交易，请勿与 ItemScroller 的交易收藏同时使用

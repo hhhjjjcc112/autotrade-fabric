@@ -1,33 +1,86 @@
 name: Build
 on:
   push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+# 同一分支/PR 的并发构建互相取消，只保留最新一次，避免 Actions 队列堆积
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # MC 1.20 + 1.20.1
+          - minecraft: "1.20.1"
+            minecraft_version: "1.20.1"
+            mappings_version: "1.20.1+build.10"
+            minecraft_version_out: "1.20.1"
+            malilib_version: "0.16.1"
+            fabric_api_version: "0.92.6+1.20.1"
+            fabric_api_version_min: "0.83.0"
+            mod_menu_version: "7.2.2"
+            minecraft_version_range: ">=1.20 <1.20.2"
+          # MC 1.20.2
+          - minecraft: "1.20.2"
+            minecraft_version: "1.20.2"
+            mappings_version: "1.20.2+build.4"
+            minecraft_version_out: "1.20.2"
+            malilib_version: "0.17.0"
+            fabric_api_version: "0.91.6+1.20.2"
+            fabric_api_version_min: "0.86.1"
+            mod_menu_version: "8.0.1"
+            minecraft_version_range: ">=1.20.2 <1.20.3"
+          # MC 1.20.3 + 1.20.4
+          - minecraft: "1.20.4"
+            minecraft_version: "1.20.4"
+            mappings_version: "1.20.4+build.3"
+            minecraft_version_out: "1.20.4"
+            malilib_version: "0.18.0"
+            fabric_api_version: "0.92.1+1.20.4"
+            fabric_api_version_min: "0.91.1"
+            mod_menu_version: "9.0.0"
+            minecraft_version_range: ">=1.20.3 <1.20.5"
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-    - name: Setup Gradle
-      uses: gradle/gradle-build-action@v2
-    - name: Execute Gradle build
-      run: ./gradlew build
-    - run: mkdir staging && cp build/libs/*.jar staging
-    - run: cd build/libs && md5sum *.jar > ../../md5sum.txt
-    - run: echo "filename=`ls build/libs/*.jar |xargs basename`" >> $GITHUB_ENV
-    - uses: actions/upload-artifact@v3
-      with:
-        name: ${{ env.filename }}
-        path: staging
-    - uses: actions/upload-artifact@v3
-      with:
-        name: md5sum.txt
-        path: md5sum.txt
-    - name: Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: build/libs/*.jar
+      - uses: actions/checkout@v7
+      # Loom 1.14.x 插件类路径要求 JVM 21+（本机默认 JDK 亦为 21）；mod 仍以 release 17 编译
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Execute Gradle build
+        run: |
+          ./gradlew --no-daemon build \
+            -Pminecraft_version=${{ matrix.minecraft_version }} \
+            -Pmappings_version=${{ matrix.mappings_version }} \
+            -Pminecraft_version_out=${{ matrix.minecraft_version_out }} \
+            -Pmalilib_version=${{ matrix.malilib_version }} \
+            -Pfabric_api_version=${{ matrix.fabric_api_version }} \
+            -Pfabric_api_version_min=${{ matrix.fabric_api_version_min }} \
+            -Pmod_menu_version=${{ matrix.mod_menu_version }} \
+            "-Pminecraft_version_range=${{ matrix.minecraft_version_range }}"
+      - name: Stage artifacts
+        run: |
+          mkdir staging
+          cp build/libs/*.jar staging
+          # 生成 md5 校验文件（格式: "MD5 (文件名) = 哈希"，便于 Modrinth 等平台读取）
+          md5sum -t build/libs/*.jar > md5sum-${{ matrix.minecraft }}.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: autotrade-fabric-${{ matrix.minecraft }}-${{ github.sha }}
+          path: staging
+      - uses: actions/upload-artifact@v7
+        with:
+          name: md5sum-${{ matrix.minecraft }}
+          path: md5sum-${{ matrix.minecraft }}.txt
