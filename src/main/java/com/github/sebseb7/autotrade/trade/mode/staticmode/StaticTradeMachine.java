@@ -6,6 +6,7 @@ import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.Task;
+import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,41 +40,51 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 任务正常完成回调：先经 handleTaskEnded 统一标记已处理/设置冷却，再交基类同步背包满暂停 （会话 blocked → 暂停交易；输出 IO
+	 * 任务正常结束回调：先经 handleTaskEnded 统一标记已处理/设置冷却，再交基类同步背包满暂停 （会话 blocked → 暂停交易；输出 IO
 	 * 完成 → 解除暂停）。
 	 */
 	@Override
-	protected void onTaskDone(Task task) {
-		// 完成与强杀共用收尾：统一标记已处理/设置冷却
-		handleTaskEnded(task);
+	protected void onTaskEnded(Task task, TaskResult result) {
+		// 正常结束收尾：统一标记已处理/设置冷却
+		handleTaskEnded(task, result);
 		// 基类同步背包满暂停状态（会话 blocked → 暂停交易；输出 IO 完成 → 解除暂停）
-		super.onTaskDone(task);
+		super.onTaskEnded(task, result);
 	}
 
 	/**
-	 * 任务被看门狗强杀（forceAbortTask）时的回调：与正常完成统一标记已处理—— 防止卡死村民反复重派的活锁
+	 * 任务被看门狗强杀（forceAbortTask）时的回调：与正常结束统一标记已处理—— 防止卡死村民反复重派的活锁
 	 * （强杀后不清除处理记录，则下一轮扫描会跳过该村民，不会无限重派同一卡死村民）。
 	 */
 	@Override
 	protected void onTaskInterrupted(Task task) {
-		handleTaskEnded(task);
-		super.onTaskInterrupted(task);
-	}
-
-	/**
-	 * 任务结束统一收尾（正常完成 onTaskDone 与看门狗强杀 onTaskInterrupted 共用）： 标记已处理/设置冷却，
-	 * 两个结束路径语义一致。
-	 */
-	private void handleTaskEnded(Task task) {
 		if (task instanceof TradeTask ts) {
-			// 背包满不标记（保留现状 inventoryBlocked 时不 add 的短路语义：保留记录，背包清空后下轮重试该村民）；
-			// 否则标记已处理（完成与超时路径均在此统一标记）。
-			// 交易冷却由 tickIdle 在「本轮名单耗尽」时统一设置（单村民派发制，会话间无冷却）
+			// 强杀无结果，用保留的 isInventoryBlocked 访问器判断（与正常结束的 result 判断等价）
 			if (!ts.isInventoryBlocked()) {
 				processedVillagers.add(dispatchedVillagerId);
 			}
 			AutoTrade.logger.info("[StaticMode] Trade session done (villager={}, blocked={})", dispatchedVillagerId,
 					ts.isInventoryBlocked());
+		} else {
+			// 容器 IO 结束 → 设置 IO 间隔冷却
+			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
+		}
+		super.onTaskInterrupted(task);
+	}
+
+	/**
+	 * 任务正常结束统一收尾（onTaskEnded 使用）：标记已处理/设置冷却。
+	 */
+	private void handleTaskEnded(Task task, TaskResult result) {
+		if (task instanceof TradeTask) {
+			// 背包满不标记（保留现状 inventoryBlocked 时不 add 的短路语义：保留记录，背包清空后下轮重试该村民）；
+			// 否则标记已处理（完成与超时路径均在此统一标记）。
+			// 交易冷却由 tickIdle 在「本轮名单耗尽」时统一设置（单村民派发制，会话间无冷却）
+			boolean blocked = result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED;
+			if (!blocked) {
+				processedVillagers.add(dispatchedVillagerId);
+			}
+			AutoTrade.logger.info("[StaticMode] Trade session done (villager={}, blocked={})", dispatchedVillagerId,
+					blocked);
 		} else {
 			// 容器 IO 结束 → 设置 IO 间隔冷却
 			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();

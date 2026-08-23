@@ -20,6 +20,7 @@
     "autotrade.message.io.not_container": "§cContainer operation failed: target position %s is not a container (%s), aborted. Check the container coordinates in IO Input/IO Output",
     "autotrade.message.io.open_failed": "§cContainer operation failed: failed to open the container screen %s times in a row, aborted",
     "autotrade.message.void.return_overlap": "§eVoid return trigger position overlaps an IO container coordinate - return trigger disabled (move the trigger block or the container coordinates)",
+    "autotrade.message.void.teleport_timeout": "Villager never teleported, skipping",
 
     "autotrade.gui.title.pair_edit": "Edit Trade Pair",
     "autotrade.gui.pair_edit.back": "Back",

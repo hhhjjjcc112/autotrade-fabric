@@ -5,6 +5,7 @@ import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.task.Task;
+import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
@@ -16,8 +17,9 @@ import net.minecraft.client.gui.screen.ingame.ShulkerBoxScreen;
 /**
  * 交易模式机器的公共基类：封装「当前任务（交易会话/容器 IO）的生命周期管理」。 三种模式（STATIC/MOVING/VOID）只需实现
  * {@link #tickIdle(MinecraftClient)}，即可复用任务切换、状态命名与重置逻辑。 任务统一经
- * {@link #setTaskIfEmpty(Task)} 启动（守卫保证同一时刻最多一个运行中任务）；任务结束经双钩子分发——正常完成走
- * {@link #onTaskDone(Task)}， 看门狗强杀走 {@link #onTaskInterrupted(Task)}。
+ * {@link #setTaskIfEmpty(Task)} 启动（守卫保证同一时刻最多一个运行中任务）；任务结束经双钩子分发——正常结束走
+ * {@link #onTaskEnded(Task, TaskResult)}， 看门狗强杀走
+ * {@link #onTaskInterrupted(Task)}。
  */
 public abstract class AbstractTradeMachine implements TradingMachine {
 
@@ -59,27 +61,24 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 			return;
 		}
 
-		// 当前任务完成 → 回调并清空，准备选择下一个任务
+		// 当前任务推进：每 tick 执行一步，返回非 RUNNING 结果即任务结束
 		if (currentTask != null) {
 			taskTicks++;
-			if (currentTask.isDone()) {
-				onTaskDone(currentTask);
+			TaskResult result = currentTask.tick(mc);
+			if (!result.isRunning()) {
+				// 任务结束（成功或失败）→ 回调并清空，落入下方 tickIdle（同 tick，等价现状 fall-through）
+				onTaskEnded(currentTask, result);
 				currentTask = null;
 				taskTicks = 0;
 			} else {
-				// 看门狗：任务运行超过 TASK_TIMEOUT 仍未完成 → 强杀清空，放行 tickIdle
+				// 看门狗：任务运行超过 TASK_TIMEOUT 仍未结束 → 强杀清空，放行 tickIdle
 				// （防卡死兜底：避免失败/卡死任务永久占用运行位，如交易 offers 永不同步、返回触发永久失败）
 				int timeout = Configs.Generic.TASK_TIMEOUT.getIntegerValue();
 				if (timeout > 0 && taskTicks >= timeout) {
 					forceAbortTask(mc);
 				}
+				return;
 			}
-		}
-
-		if (currentTask != null) {
-			// 继续推进当前任务（TradeTask 与 ContainerIOTask 均为 Task 子类）
-			currentTask.tick(mc);
-			return;
 		}
 
 		// 空闲：由子类决定下一个任务
@@ -105,31 +104,39 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	}
 
 	/**
-	 * 任务正常完成后的回调（由 tick 检测到任务完成时调用，非强杀）。 STATIC 模式覆写为设置交易/容器 IO 冷却。
-	 * 基类统一在此同步「背包满暂停」状态：会话因背包满提前结束 → 暂停交易 + 游戏内提示； 输出容器 IO 完成（背包空间释放）→ 解除暂停。
+	 * 任务结束后的回调（由 tick 检测到任务返回非 RUNNING 结果时调用，非强杀）。 STATIC 模式覆写为设置交易/容器 IO 冷却。
+	 * 基类统一在此同步「背包满暂停」状态：会话因背包满失败结束 → 暂停交易 + 游戏内提示； 输出容器 IO 结束（背包空间释放）→ 解除暂停。
 	 *
 	 * @param task
-	 *            已完成的任务
+	 *            已结束的任务
+	 * @param result
+	 *            任务最后一次 tick 返回的结果（成功或失败）
 	 */
-	protected void onTaskDone(Task task) {
-		if (task instanceof TradeTask ts) {
-			if (ts.isInventoryBlocked()) {
-				inventoryPauseCooldown = INVENTORY_PAUSE_TICKS;
-				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.inventory.full");
-			}
-		} else if (task instanceof ContainerIOTask op && !op.isInputOp() && inventoryPauseCooldown > 0) {
+	protected void onTaskEnded(Task task, TaskResult result) {
+		if (result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED) {
+			// 会话因背包空间不足失败结束 → 暂停交易并提示
+			inventoryPauseCooldown = INVENTORY_PAUSE_TICKS;
+			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.inventory.full");
+		} else if (result.reason() == TaskResult.FailReason.TELEPORT_TIMEOUT) {
+			// VOID 模式传送超时（村民一直未消失）→ 游戏内告警，提示检查装置
+			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.void.teleport_timeout");
+		}
+		if (task instanceof ContainerIOTask op && !op.isInputOp() && inventoryPauseCooldown > 0) {
 			// 输出 IO 把产出物品运走后背包应有空间 → 立即恢复交易探测
 			AutoTrade.logger.info("[ModeMachine] Output container IO done, inventory pause released");
 			inventoryPauseCooldown = 0;
 		}
+		AutoTrade.logger.info("[ModeMachine] Task ended (class={}, result={})", task.getClass().getSimpleName(),
+				result);
 	}
 
 	/**
-	 * 任务被看门狗强杀（forceAbortTask）时的回调。 强杀时任务处于中途状态、isInventoryBlocked 等标志不可信，
-	 * 基类不设置/解除背包满暂停（与正常完成的 onTaskDone 语义不同）。 子类可按需覆写以处理中断收尾。
+	 * 任务被看门狗强杀（forceAbortTask）时的回调。 强杀时任务处于中途状态、无结果可言（任务未返回终态结果），
+	 * 基类不设置/解除背包满暂停（与正常结束的 onTaskEnded 语义不同）。 子类可按需覆写以处理中断收尾； 需要查询任务状态时使用任务访问器（如
+	 * TradeTask#isInventoryBlocked）。
 	 *
 	 * @param task
-	 *            被强杀的任务（未正常完成）
+	 *            被强杀的任务（未正常结束）
 	 */
 	protected void onTaskInterrupted(Task task) {
 		// 默认无操作：中断时任务状态不可信，基类不触碰背包满暂停

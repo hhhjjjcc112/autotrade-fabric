@@ -8,6 +8,7 @@ import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper.ContainerCandidat
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.Task;
+import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -63,12 +64,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 任务正常完成回调：先经 handleTaskEnded 统一标记村民已处理/容器清饥饿，再交基类同步背包满暂停。
+	 * 任务正常结束回调：先经 handleTaskEnded 统一标记村民已处理/容器清饥饿，再交基类同步背包满暂停/传送超时告警/输出 IO 解除暂停。
 	 */
 	@Override
-	protected void onTaskDone(Task task) {
-		handleTaskEnded(task);
-		super.onTaskDone(task);
+	protected void onTaskEnded(Task task, TaskResult result) {
+		handleTaskEnded(task, result);
+		super.onTaskEnded(task, result);
 	}
 
 	/**
@@ -77,24 +78,35 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	 */
 	@Override
 	protected void onTaskInterrupted(Task task) {
-		handleTaskEnded(task);
-		super.onTaskInterrupted(task);
-	}
-
-	/**
-	 * 任务结束统一收尾（完成与强杀共用）：村民标记已处理并清饥饿 / 容器清饥饿。 容器 IO
-	 * 强杀也清饥饿——保持现状（无论完成还是强杀均视为该目标已执行一次，饥饿记录才不会永不清理）
-	 */
-	private void handleTaskEnded(Task task) {
+		// 强杀路径无结果可用：用任务访问器判断（与现状 handleTaskEnded 强杀路径一致）
 		if (task instanceof TradeTask ts) {
-			// 标记该村民已处理并清除饥饿（完成与超时路径均在此统一标记）；
+			// 标记该村民已处理并清除饥饿（强杀不标记则村民永远"未处理"，看门狗每轮重派 → 无限循环）；
 			// 背包满不标记（保留现状 inventoryBlocked 短路语义：保留记录，背包清空后由失效清理重试）
 			if (!ts.isInventoryBlocked()) {
 				processedVillagers.add(dispatchedVillagerId);
 				starvation.remove(new VillagerKey(dispatchedVillagerId));
 			}
 		} else if (task instanceof ContainerIOTask op) {
-			// 容器 IO 完成 → 清饥饿记录（完成与强杀统一；村民选中执行后进 processedVillagers 并显式移除，语义等价）
+			// 容器 IO 强杀也清饥饿——保持现状（防饿死回归：无论完成还是强杀均视为该目标已执行一次，饥饿记录才不会永不清理）
+			starvation.remove(new ContainerKey(op.getIntent().ioKey()));
+		}
+		super.onTaskInterrupted(task);
+	}
+
+	/**
+	 * 任务正常结束统一收尾：村民标记已处理并清饥饿 / 容器清饥饿。 容器 IO 任何结果（含失败）均清饥饿——保持现状
+	 * （无论完成还是失败均视为该目标已执行一次，饥饿记录才不会永不清理，防饿死回归）
+	 */
+	private void handleTaskEnded(Task task, TaskResult result) {
+		if (task instanceof TradeTask ts) {
+			// 标记该村民已处理并清除饥饿（完成与超时路径均在此统一标记）；
+			// 背包满失败不标记（等价现状 inventoryBlocked 短路语义：保留记录，背包清空后由失效清理重试）
+			if (!(result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED)) {
+				processedVillagers.add(dispatchedVillagerId);
+				starvation.remove(new VillagerKey(dispatchedVillagerId));
+			}
+		} else if (task instanceof ContainerIOTask op) {
+			// 容器 IO 完成 → 清饥饿记录（任何结果均清；村民选中执行后进 processedVillagers 并显式移除，语义等价）
 			starvation.remove(new ContainerKey(op.getIntent().ioKey()));
 		}
 	}

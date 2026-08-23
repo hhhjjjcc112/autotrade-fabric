@@ -17,13 +17,14 @@ import net.minecraft.village.TradeOfferList;
 /**
  * 交易会话抽象基类：单村民直链有限状态机（FSM）。 目标村民由机器层选中后通过构造器注入（{@link #TradeTask(int)}）， 会话随后沿
  * INTERACTING（右键交互）→ WAITING_FOR_SCREEN（等待界面出现）→ TRADING（执行匹配交易）→
- * CLOSING_SCREEN（关闭界面）→ 完成 的直链推进，处理完单个村民即结束（done），由机器层决定下一目标或进入冷却。 各模式的差异（void
- * 延迟策略）由子类覆写的抽象策略方法提供；标记/冷却节奏由机器层 onTaskDone 统一处理。
+ * CLOSING_SCREEN（关闭界面）→ 结束 的直链推进，处理完单个村民即结束（返回 {@link TaskResult#SUCCEEDED}
+ * 或失败结果）， 由机器层决定下一目标或进入冷却。 各模式的差异（void 延迟策略）由子类覆写的抽象策略方法提供；标记/冷却节奏由机器层
+ * onTaskEnded 统一处理。
  */
 public abstract class TradeTask extends Task {
 
 	public enum State {
-		INTERACTING, WAITING_FOR_SCREEN, TRADING, CLOSING_SCREEN, COMPLETED
+		INTERACTING, WAITING_FOR_SCREEN, TRADING, CLOSING_SCREEN
 	}
 
 	/** 当前目标村民实体 id（由机器层选中后通过构造器锁定传入，本会话不再自行扫描重选） */
@@ -46,21 +47,14 @@ public abstract class TradeTask extends Task {
 	}
 
 	@Override
-	public void tick(MinecraftClient mc) {
-		if (done)
-			return;
-
-		tickWait();
-		if (isWaiting())
-			return;
-
-		switch (state) {
+	public TaskResult tick(MinecraftClient mc) {
+		// 每个 tick 由当前状态推进一步；各分支方法内部返回 RUNNING 或终态结果（SUCCEEDED / FAILED），switch 表达式无贯穿
+		return switch (state) {
 			case INTERACTING -> tickInteracting(mc);
 			case WAITING_FOR_SCREEN -> tickWaitingForScreen(mc);
 			case TRADING -> tickTrading(mc);
 			case CLOSING_SCREEN -> tickClosingScreen(mc);
-			case COMPLETED -> tickCompleted(mc);
-		}
+		};
 	}
 
 	// ---- 抽象策略方法（各模式子类覆写，差异注入点） ----
@@ -68,10 +62,10 @@ public abstract class TradeTask extends Task {
 	/** 是否启用 VOID 专属等待（窗口已开后须等村民消失再交易；仅 VOID 模式返回 true） */
 	protected abstract boolean useVoidDelay();
 
-	private void tickInteracting(MinecraftClient mc) {
+	private TaskResult tickInteracting(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
-			done = true;
-			return;
+			// 玩家/世界意外缺失（如断线）：瞬态失败结束
+			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
 		Entity entity = mc.world.getEntityById(villagerActive);
@@ -87,6 +81,7 @@ public abstract class TradeTask extends Task {
 		startWaitingForScreen();
 		AutoTrade.logger.info("[TradeTask] INTERACTING → WAITING_FOR_SCREEN (villager={}, interactTimeout={})",
 				tradable ? villagerActive : "gone", interactTimeout);
+		return TaskResult.RUNNING;
 	}
 
 	// 统一进入等待交易界面状态：重置交互超时、void 延迟与传送超时
@@ -99,10 +94,10 @@ public abstract class TradeTask extends Task {
 		state = State.WAITING_FOR_SCREEN;
 	}
 
-	private void tickWaitingForScreen(MinecraftClient mc) {
+	private TaskResult tickWaitingForScreen(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
-			done = true;
-			return;
+			// 玩家/世界意外缺失（如断线）：瞬态失败结束
+			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
 		if (mc.currentScreen instanceof MerchantScreen screen) {
@@ -110,7 +105,7 @@ public abstract class TradeTask extends Task {
 				// 非 VOID（STATIC/MOVING）：窗口出现即交易
 				state = State.TRADING;
 				AutoTrade.logger.info("[TradeTask] WAITING_FOR_SCREEN → TRADING");
-				return;
+				return TaskResult.RUNNING;
 			}
 
 			// VOID：窗口已开但须等玩家传送完成（村民实体消失 = 服务端已处理传送）再交易；
@@ -121,7 +116,7 @@ public abstract class TradeTask extends Task {
 				// 缓冲为 0 时立即交易（行为见 TRADE_MODES.md §二）
 				if (unloadDelay > 0) {
 					unloadDelay--;
-					return;
+					return TaskResult.RUNNING;
 				}
 				// 耗尽检测告警：此时 offers 仍是开窗时服务端同步真值（尚未被本地点击模拟污染）——
 				// 健康虚空装置中村民每次重载 uses 应为 0，任何 uses > 0 都是交易被持久化到村民的痕迹
@@ -132,26 +127,26 @@ public abstract class TradeTask extends Task {
 				state = State.TRADING;
 				AutoTrade.logger.info("[TradeTask] WAITING_FOR_SCREEN → TRADING (villager unloaded)");
 			} else {
-				// 村民一直未消失（装置断供/传送故障）→ 超时兜底：关窗跳过该村民，结束会话
+				// 村民一直未消失（装置断供/传送故障）→ 超时兜底：关窗跳过该村民，结束会话（传送超时失败）
 				if (teleportTimeout > 0) {
 					teleportTimeout--;
-					return;
+					return TaskResult.RUNNING;
 				}
 				screen.close();
 				AutoTrade.logger.warn("[TradeTask] Villager never teleported for {}, skipping", villagerActive);
-				state = State.COMPLETED;
+				return TaskResult.failed(TaskResult.FailReason.TELEPORT_TIMEOUT);
 			}
-			return;
+			return TaskResult.RUNNING;
 		}
 
-		// 窗口未开：交互超时后跳过该村民，结束会话
+		// 窗口未开：交互超时后跳过该村民，结束会话（瞬态失败）
 		if (interactTimeout > 0) {
 			interactTimeout--;
-			return;
+			return TaskResult.RUNNING;
 		}
 
 		AutoTrade.logger.warn("[TradeTask] Screen never appeared for villager {}, skipping", villagerActive);
-		state = State.COMPLETED;
+		return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 	}
 
 	// VOID 耗尽证据：开窗 offers 快照（服务端同步真值）中任一 offer uses > 0。
@@ -167,16 +162,16 @@ public abstract class TradeTask extends Task {
 		return false;
 	}
 
-	private void tickTrading(MinecraftClient mc) {
+	private TaskResult tickTrading(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
-			done = true;
-			return;
+			// 玩家/世界意外缺失（如断线）：瞬态失败结束
+			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
 		if (!(mc.currentScreen instanceof MerchantScreen screen)) {
+			// 交易窗口意外关闭：瞬态失败结束
 			AutoTrade.logger.warn("[TradeTask] 交易窗口意外关闭");
-			state = State.COMPLETED;
-			return;
+			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
 		boolean hasMoreWork = executor.handleMerchantScreenTick(mc, screen);
@@ -187,22 +182,19 @@ public abstract class TradeTask extends Task {
 			AutoTrade.logger.info("[TradeTask] TRADING → CLOSING_SCREEN{}",
 					inventoryBlocked ? " (inventory full)" : "");
 		}
+		return TaskResult.RUNNING;
 	}
 
-	private void tickClosingScreen(MinecraftClient mc) {
+	private TaskResult tickClosingScreen(MinecraftClient mc) {
 		if (mc.currentScreen instanceof MerchantScreen screen) {
 			screen.close();
 		}
-		// 单村民直链下完成后无条件结束会话，机器层 onTaskDone 负责标记/冷却决策（背包满时不标记，下轮重试该村民）
-		state = State.COMPLETED;
-		AutoTrade.logger.info("[TradeTask] CLOSING_SCREEN → COMPLETED");
+		// 单村民直链下完成后无条件结束会话，机器层 onTaskEnded 负责标记/冷却决策（背包满时不标记，下轮重试该村民）
+		AutoTrade.logger.info("[TradeTask] CLOSING_SCREEN → SUCCEEDED");
+		return TaskResult.SUCCEEDED;
 	}
 
-	private void tickCompleted(MinecraftClient mc) {
-		done = true;
-	}
-
-	/** 本次会话是否因背包空间不足提前结束（机器层据此暂停交易并优先容器 IO） */
+	/** 本次会话是否因背包空间不足提前结束（正常路径机器层用结果判断；强杀路径无结果故保留本访问器供机器层查询） */
 	public boolean isInventoryBlocked() {
 		return inventoryBlocked;
 	}

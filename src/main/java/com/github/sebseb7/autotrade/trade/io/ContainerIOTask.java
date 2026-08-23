@@ -4,6 +4,8 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper.IOIntent;
 import com.github.sebseb7.autotrade.trade.task.Task;
+import com.github.sebseb7.autotrade.trade.task.TaskResult;
+import com.github.sebseb7.autotrade.trade.task.TaskResult.FailReason;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
@@ -29,7 +31,7 @@ import net.minecraft.world.World;
 public class ContainerIOTask extends Task {
 
 	private enum State {
-		OPENING, TRANSFERRING, CLOSING, DONE
+		OPENING, TRANSFERRING, CLOSING
 	}
 
 	private State state = State.OPENING;
@@ -38,8 +40,6 @@ public class ContainerIOTask extends Task {
 	private int trapChestDelay = 0;
 	private int transferLimit = 0;
 	private int transferred = 0;
-	private int failCount = 0;
-	private static final int MAX_FAILURES = 3;
 
 	public ContainerIOTask(IOIntent intent) {
 		this.intent = intent;
@@ -58,33 +58,24 @@ public class ContainerIOTask extends Task {
 	}
 
 	@Override
-	public void tick(MinecraftClient mc) {
-		if (done)
-			return;
-
-		tickWait();
-		if (isWaiting())
-			return;
-
-		switch (state) {
+	public TaskResult tick(MinecraftClient mc) {
+		return switch (state) {
 			case OPENING -> tickOpening(mc);
 			case TRANSFERRING -> tickTransferring(mc);
 			case CLOSING -> tickClosing(mc);
-			case DONE -> done = true;
-		}
+		};
 	}
 
-	private void tickOpening(MinecraftClient mc) {
+	private TaskResult tickOpening(MinecraftClient mc) {
 		// 目标容器坐标直接取自条目自身（输入/输出共用条目坐标）
 		BlockPos pos = new BlockPos(intent.io().getX(), intent.io().getY(), intent.io().getZ());
 
 		if (mc.world != null) {
 			// 目标方块所在区块可能尚未加载（VOID 模式传送回岛后异步加载窗口）：未加载时 getBlockState 会返回空气，
-			// 若据此判定「不是容器」会误报。这里先确认区块已加载；未加载则直接结束任务（不交互、不报错），
+			// 若据此判定「不是容器」会误报。这里先确认区块已加载；未加载则返回瞬态失败（不交互、不报错），
 			// 由上层状态机下一 tick 重新派发容器 IO，实现自动重试
 			if (!isChunkLoaded(mc.world, pos)) {
-				done = true;
-				return;
+				return TaskResult.failed(FailReason.TRANSIENT);
 			}
 			BlockState blockState = mc.world.getBlockState(pos);
 			// 区块已加载但目标位置仍非容器方块 → 真实配置错误，直接放弃
@@ -94,9 +85,7 @@ public class ContainerIOTask extends Task {
 				// 弹窗提示用户容器坐标配置错误
 				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.io.not_container",
 						pos.toShortString(), blockState.getBlock().getName().getString());
-				failCount = MAX_FAILURES;
-				state = State.CLOSING;
-				return;
+				return TaskResult.failed(FailReason.CONFIG);
 			}
 			// 陷阱箱需要额外延迟等待红石信号稳定
 			if (blockState.getBlock() instanceof TrappedChestBlock) {
@@ -113,6 +102,7 @@ public class ContainerIOTask extends Task {
 
 		containerTimeout = Configs.Generic.OPEN_TIMEOUT.getIntegerValue();
 		state = State.TRANSFERRING;
+		return TaskResult.RUNNING;
 	}
 
 	public static boolean isContainerBlock(BlockState state) {
@@ -146,41 +136,32 @@ public class ContainerIOTask extends Task {
 		}
 	}
 
-	private void tickTransferring(MinecraftClient mc) {
+	private TaskResult tickTransferring(MinecraftClient mc) {
 		if (!isContainerScreen(mc.currentScreen)) {
 			if (containerTimeout > 0) {
+				// 窗口尚未打开：递减超时计数作为必要等待
 				containerTimeout--;
-				wait(1);
-				return;
+				return TaskResult.RUNNING;
 			}
-			failCount++;
-			if (failCount < MAX_FAILURES) {
-				AutoTrade.logger.warn("[ContainerIO] 容器窗口未打开 (第 {}/{} 次)，重试", failCount, MAX_FAILURES);
-				state = State.OPENING;
-			} else {
-				AutoTrade.logger.warn("[ContainerIO] 容器窗口打开失败已达上限 ({} 次)，放弃", MAX_FAILURES);
-				// 弹窗提示用户容器窗口打开失败已达上限
-				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.io.open_failed",
-						MAX_FAILURES);
-				state = State.CLOSING;
-			}
-			return;
+			// 超时仍未打开窗口：单次失败，弹窗提示后直接以瞬态失败结束（不再重试），由上层状态机重新派发
+			AutoTrade.logger.warn("[ContainerIO] 容器窗口打开失败（超时 {} tick），放弃本次操作",
+					Configs.Generic.OPEN_TIMEOUT.getIntegerValue());
+			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.io.open_failed", 1);
+			return TaskResult.failed(FailReason.TRANSIENT);
 		}
-		failCount = 0;
 		containerTimeout = 0;
 
 		// 陷阱箱延迟：等待红石信号稳定后再操作
 		if (trapChestDelay > 0) {
 			trapChestDelay--;
-			wait(1);
-			return;
+			return TaskResult.RUNNING;
 		}
 
 		ScreenHandler handler = screenHandlerOf(mc.currentScreen);
 
 		if (transferred >= transferLimit) {
 			state = State.CLOSING;
-			return;
+			return TaskResult.RUNNING;
 		}
 
 		boolean clicked = intent.isInput() ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
@@ -190,6 +171,7 @@ public class ContainerIOTask extends Task {
 		} else {
 			state = State.CLOSING;
 		}
+		return TaskResult.RUNNING;
 	}
 
 	// 移动单个匹配物品：
@@ -228,8 +210,8 @@ public class ContainerIOTask extends Task {
 		return false;
 	}
 
-	private void tickClosing(MinecraftClient mc) {
+	private TaskResult tickClosing(MinecraftClient mc) {
 		closeScreenIfOpen(mc.currentScreen);
-		state = State.DONE;
+		return TaskResult.SUCCEEDED;
 	}
 }

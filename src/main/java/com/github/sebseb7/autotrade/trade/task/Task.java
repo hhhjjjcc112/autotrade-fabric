@@ -3,36 +3,16 @@ package com.github.sebseb7.autotrade.trade.task;
 import net.minecraft.client.MinecraftClient;
 
 /**
- * 单个自动化操作（交易会话或容器 IO）的抽象基类。 内置基于 tick 的等待机制，用于实现 tick 级延时。
+ * 单个自动化操作（交易会话或容器 IO）的抽象基类。 新约定：每个 tick 调用 {@link #tick(MinecraftClient)}，返回
+ * {@link TaskResult#RUNNING} 表示继续执行，返回 {@link TaskResult#SUCCEEDED} 或
+ * {@link TaskResult#FAILED} 表示任务结束——结果本身就是完成信号，任务不得自行记录完成标志（不再有完成标志字段）。
  */
 public abstract class Task {
-	protected int waitTicks = 0;
-	protected boolean done = false;
 
 	/**
-	 * 每个游戏 tick 调用一次。实现约定： 1. 先调用 tickWait()； 2. 若 isWaiting() 为 true 则直接返回； 3.
-	 * 执行一步操作； 4. 若后续仍需多个 tick 才能完成，调用 wait(N)； 5. 若完全完成，设置 done = true。
+	 * 每个游戏 tick 调用一次。实现约定： 1. 执行一步操作； 2. 若后续仍需多个 tick 才能完成，返回
+	 * {@link TaskResult#RUNNING}； 3. 若完全完成，返回 {@link TaskResult#SUCCEEDED}； 4.
+	 * 若失败结束，返回 {@link TaskResult#failed(FailReason)}。
 	 */
-	public abstract void tick(MinecraftClient mc);
-
-	/** 操作是否已完成 */
-	public boolean isDone() {
-		return done;
-	}
-
-	/** 等待 N 个 tick 后再执行下一步 */
-	protected void wait(int ticks) {
-		waitTicks = Math.max(waitTicks, ticks);
-	}
-
-	/** 当前是否处于等待状态 */
-	protected boolean isWaiting() {
-		return waitTicks > 0;
-	}
-
-	/** 每个 tick 递减等待计数 */
-	protected void tickWait() {
-		if (waitTicks > 0)
-			waitTicks--;
-	}
+	public abstract TaskResult tick(MinecraftClient mc);
 }

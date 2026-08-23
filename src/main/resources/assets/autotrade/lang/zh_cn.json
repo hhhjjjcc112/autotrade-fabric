@@ -20,6 +20,7 @@
     "autotrade.message.io.not_container": "§c容器操作失败：目标位置 %s 不是容器（%s），已放弃。请检查「IO输入/IO输出」中的容器坐标",
     "autotrade.message.io.open_failed": "§c容器操作失败：容器窗口连续打开失败 %s 次，已放弃",
     "autotrade.message.void.return_overlap": "§e虚空回程触发坐标与 IO 容器坐标重叠，回程触发未启用（请更换触发方块或容器坐标）",
+    "autotrade.message.void.teleport_timeout": "村民一直未传送，已跳过",
 
     "autotrade.gui.title.pair_edit": "编辑交易对",
     "autotrade.gui.pair_edit.back": "返回",

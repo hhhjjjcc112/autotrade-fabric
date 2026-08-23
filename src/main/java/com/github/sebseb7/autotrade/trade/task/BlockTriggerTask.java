@@ -18,7 +18,7 @@ import net.minecraft.util.math.Direction;
  * 「交互指定方块触发机关」任务（VOID 返回触发，附录 H）：与触发方块交互产生红石信号，由装置把玩家传回原侧。 三种类型共用 interactBlock
  * 交互原语，差异只在副作用处理（TRAPPED_CHEST 含「保持 GUI → 主动关闭」，BUTTON/LEVER 交互即完成）。
  * 完成语义（空间完成）：成功 = 信号已发 + 玩家已传回（WAIT_TRANSIT 每 tick 校验：触发方块区块未加载或距离 > 64
- * 格视为已传回）， 而非「信号已发」即完成——机关无反应时 300 tick 超时后自动回 INTERACTING 重新触发（自包含重试）。
+ * 格视为已传回）， 而非「信号已发」即完成——机关无反应时 300 tick 超时后失败结束（结果由机器层决定后续处理）。
  */
 public class BlockTriggerTask extends Task {
 
@@ -41,13 +41,13 @@ public class BlockTriggerTask extends Task {
 	private boolean leverNeedsReset = false;
 	/** LEVER 类型：两段交互的第一段（还原）是否已执行 */
 	private boolean leverResetDone = false;
-	/** WAIT_TRANSIT 已等待传送完成的 tick 数（超时后重新触发） */
+	/** LEVER 类型：两段交互间隔剩余 tick（第一段还原后置 2，递减到 0 才执行第二段触发） */
+	private int leverResetWait = 0;
+	/** WAIT_TRANSIT 已等待传送完成的 tick 数（超时后失败结束） */
 	private int transitTicks = 0;
-	/** 失败重试间隔（tick）：失败不跳过、间隔后重试（决策 8——返回触发是 VOID 循环必要环节，失败=玩家困岛侧永久卡死） */
-	private static final int RETRY_INTERVAL_TICKS = 20;
 	/** 服务端实际交互距离上限（超距点击被服务端忽略） */
 	private static final double MAX_INTERACT_DISTANCE = 4.5;
-	/** 触发后等待玩家传回的超时（tick，15s > 任何合理机关反应时间）；超时 → 回 INTERACTING 重新触发（自包含重试，B1） */
+	/** 触发后等待玩家传回的超时（tick，15s > 任何合理机关反应时间）；超时 → 失败结束 */
 	private static final int TRANSIT_TIMEOUT_TICKS = 300;
 	/** 玩家距触发方块超过此距离（格）视为已传回（空间完成阈值；标准折跃门装置 ~1000 格） */
 	private static final double COMPLETION_DISTANCE = 64.0;
@@ -58,28 +58,22 @@ public class BlockTriggerTask extends Task {
 	}
 
 	@Override
-	public void tick(MinecraftClient mc) {
-		if (done)
-			return;
-
-		tickWait();
-		if (isWaiting())
-			return;
-
+	public TaskResult tick(MinecraftClient mc) {
 		// 空间完成探测：任意推进状态（INTERACTING/HOLDING/CLOSING）中检测到玩家已传回 → 直接进入 WAIT_TRANSIT
 		// 收尾（覆盖等待期间被传送的情况）
 		if (state != State.WAIT_TRANSIT && isPlayerReturned(mc)) {
 			state = State.WAIT_TRANSIT;
 			transitTicks = 0;
-			return;
+			return TaskResult.RUNNING;
 		}
 
-		switch (state) {
+		// 每个 tick 由当前状态推进一步；各分支方法内部返回 RUNNING 或终态结果（SUCCEEDED / FAILED），switch 表达式无贯穿
+		return switch (state) {
 			case INTERACTING -> tickInteracting(mc);
 			case HOLDING -> tickHolding(mc);
 			case CLOSING -> tickClosing(mc);
 			case WAIT_TRANSIT -> tickWaitTransit(mc);
-		}
+		};
 	}
 
 	// 轻校验（决策 5）：方块存在（非 air）+ 距离在服务端交互范围内，不检查内容/不做物品转移
@@ -123,25 +117,29 @@ public class BlockTriggerTask extends Task {
 		return pos.toCenterPos().squaredDistanceTo(mc.player.getPos()) > COMPLETION_DISTANCE * COMPLETION_DISTANCE;
 	}
 
-	private void tickInteracting(MinecraftClient mc) {
-		// 轻校验失败（方块被拆/距离超限）→ 警告 + 间隔重试（决策 8：失败=玩家困岛侧，必须重试到成功，不跳过）
+	private TaskResult tickInteracting(MinecraftClient mc) {
+		// 轻校验失败（方块被拆/距离超限）→ 警告 + 瞬态失败结束（不再间隔重试，结果由机器层决定）
 		if (!validateTarget(mc)) {
-			AutoTrade.logger.warn("[BlockTrigger] 触发方块 {} 缺失或距离过远，{} tick 后重试 (type={})", pos.toShortString(),
-					RETRY_INTERVAL_TICKS, type.getStringValue());
-			wait(RETRY_INTERVAL_TICKS);
-			return;
+			AutoTrade.logger.warn("[BlockTrigger] 触发方块 {} 缺失或距离过远 (type={})", pos.toShortString(),
+					type.getStringValue());
+			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
-		// STRICT 模式类型不符 → 警告 + 间隔重试（不跳过，等待玩家修正配置或方块）
+		// STRICT 模式类型不符 → 警告 + 配置失败结束（等待玩家修正配置或方块）
 		if (Configs.Void.VOID_RETURN_STRICT.getBooleanValue() && !isBlockTypeMatched(mc)) {
-			AutoTrade.logger.warn("[BlockTrigger] 触发方块类型与配置不符，STRICT 模式 {} tick 后重试 (pos={}, type={})",
-					RETRY_INTERVAL_TICKS, pos.toShortString(), type.getStringValue());
-			wait(RETRY_INTERVAL_TICKS);
-			return;
+			AutoTrade.logger.warn("[BlockTrigger] 触发方块类型与配置不符，STRICT 模式 (pos={}, type={})", pos.toShortString(),
+					type.getStringValue());
+			return TaskResult.failed(TaskResult.FailReason.CONFIG);
+		}
+
+		// LEVER 两段交互间隔：第一段（还原）后等待 2 tick 让服务端处理，期间跳过第一段分支并递减
+		if (leverResetWait > 0) {
+			leverResetWait--;
+			return TaskResult.RUNNING;
 		}
 
 		// LEVER 状态翻转（H.6 风险 4）：若拉杆已处于打开状态，直接交互会把它关闭（无信号）——
-		// 需先交互一次还原为关闭，再交互一次触发打开；两段交互之间留 tick 让服务端处理
+		// 需先交互一次还原为关闭，再交互一次触发打开；两段交互之间留 2 tick 让服务端处理
 		if (type == ReturnTriggerType.LEVER && !leverResetDone) {
 			BlockState blockState = mc.world.getBlockState(pos);
 			if (blockState.getBlock() instanceof LeverBlock && blockState.get(LeverBlock.POWERED)) {
@@ -149,8 +147,8 @@ public class BlockTriggerTask extends Task {
 				leverResetDone = true;
 				interactBlock(mc);
 				AutoTrade.logger.info("[BlockTrigger] LEVER 已处于打开状态，先交互还原再触发 (pos={})", pos.toShortString());
-				wait(2);
-				return;
+				leverResetWait = 2;
+				return TaskResult.RUNNING;
 			}
 		}
 
@@ -172,69 +170,64 @@ public class BlockTriggerTask extends Task {
 			state = State.WAIT_TRANSIT;
 			transitTicks = 0;
 		}
+		return TaskResult.RUNNING;
 	}
 
-	private void tickHolding(MinecraftClient mc) {
+	private TaskResult tickHolding(MinecraftClient mc) {
 		// GUI 已打开：保持 TRAP_CHEST_DELAY 产生持续信号，给机关反应时间
 		if (mc.currentScreen instanceof GenericContainerScreen) {
 			guiSeen = true;
 			if (holdTicks > 0) {
 				holdTicks--;
-				wait(1);
-				return;
+				return TaskResult.RUNNING;
 			}
 			// 保持时长已走完 → 关闭 GUI
 			state = State.CLOSING;
-			return;
+			return TaskResult.RUNNING;
 		}
 
 		// GUI 未打开：曾被确认但现已关闭（玩家已被机关传回，GUI 因位置变化失效）→ 尽快收尾，不必等满（H.6 风险 1）
 		if (guiSeen) {
 			state = State.CLOSING;
-			return;
+			return TaskResult.RUNNING;
 		}
 
 		// 交互后 GUI 未出现：超时窗口内继续等待
 		if (timeout > 0) {
 			timeout--;
-			wait(1);
-			return;
+			return TaskResult.RUNNING;
 		}
 
-		// 超时兜底：警告 + 间隔后回 INTERACTING 重试（决策 8：失败不跳过——失败=玩家困岛侧、VOID 循环无恢复方法，必须重试到成功）
-		AutoTrade.logger.warn("[BlockTrigger] 陷阱箱窗口未在 {} tick 内打开，{} tick 后重试",
-				Configs.Generic.OPEN_TIMEOUT.getIntegerValue(), RETRY_INTERVAL_TICKS);
-		guiSeen = false;
-		state = State.INTERACTING;
-		wait(RETRY_INTERVAL_TICKS);
+		// 超时兜底：警告 + 瞬态失败结束（不再回 INTERACTING 重试，结果由机器层决定）
+		AutoTrade.logger.warn("[BlockTrigger] 陷阱箱窗口未在 {} tick 内打开", Configs.Generic.OPEN_TIMEOUT.getIntegerValue());
+		return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 	}
 
-	private void tickClosing(MinecraftClient mc) {
+	private TaskResult tickClosing(MinecraftClient mc) {
 		// 完成前置：GUI 已关闭（H.6 风险 2：残留窗口会挡住下一轮村民交互）
 		if (mc.currentScreen instanceof GenericContainerScreen screen) {
 			screen.close();
-			wait(1);
-			return;
+			// close() 同步置 null，下 tick 即进 WAIT_TRANSIT，无需额外等待
+			return TaskResult.RUNNING;
 		}
 		// GUI 已关（D5：强制关 GUI 保留为保险）→ 进入 WAIT_TRANSIT 等待玩家传回（空间完成）
 		state = State.WAIT_TRANSIT;
 		transitTicks = 0;
+		return TaskResult.RUNNING;
 	}
 
-	private void tickWaitTransit(MinecraftClient mc) {
-		// 玩家已传回（区块未加载或距离 > 64 格）→ 空间完成，任务结束
+	private TaskResult tickWaitTransit(MinecraftClient mc) {
+		// 玩家已传回（区块未加载或距离 > 64 格）→ 空间完成，任务成功结束
 		if (isPlayerReturned(mc)) {
 			AutoTrade.logger.info("[BlockTrigger] 玩家已传回，返回触发成功 (pos={})", pos.toShortString());
-			done = true;
-			return;
+			return TaskResult.SUCCEEDED;
 		}
-		// 机关无反应（玩家一直未离开返回区）→ 超时后回 INTERACTING 重新触发（自包含重试，B1）
+		// 机关无反应（玩家一直未离开返回区）→ 超时后瞬态失败结束（不再回 INTERACTING 重新触发，结果由机器层决定）
 		if (++transitTicks >= TRANSIT_TIMEOUT_TICKS) {
-			AutoTrade.logger.warn("[BlockTrigger] 触发后 {} tick 内玩家未离开返回区，重新触发 (pos={})", TRANSIT_TIMEOUT_TICKS,
+			AutoTrade.logger.warn("[BlockTrigger] 触发后 {} tick 内玩家未离开返回区 (pos={})", TRANSIT_TIMEOUT_TICKS,
 					pos.toShortString());
-			transitTicks = 0;
-			state = State.INTERACTING;
-			wait(RETRY_INTERVAL_TICKS);
+			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
+		return TaskResult.RUNNING;
 	}
 }
