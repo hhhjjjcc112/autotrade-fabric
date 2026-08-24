@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.trade.task;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
+import com.github.sebseb7.autotrade.trade.executor.TradeExecutor;
 import com.github.sebseb7.autotrade.trade.helper.VillagerInteractHelper;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;

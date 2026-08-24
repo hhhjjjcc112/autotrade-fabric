@@ -74,8 +74,8 @@ public class GuiConfigs extends GuiConfigsBase {
 		int gap = 2;
 		int tabCount = ConfigGuiTab.VALUES.size();
 		// 单按钮最大宽度：均分浏览器宽度，保证标签按钮组不超出滚动条区域
-		// （7 个选项卡：GUI 200% 缩放下浏览器宽度 ≈ 512，(512 - 2*6) / 7 ≈ 71px，
-		// 最长标签约 36px（中文「静止交易」）/ 64px（英文「Static Trade」），放得下）
+		// （8 个选项卡：GUI 200% 缩放下浏览器宽度 ≈ 512，(512 - 2*7) / 8 ≈ 62px，
+		// 中文标签约 36px（「移动交易」）放得下；英文最长标签约 64px（「Static Trade」）略超会被钳制截断，仅极端 200% 缩放下可见）
 		int maxTabWidth = (this.getBrowserWidth() - gap * (tabCount - 1)) / tabCount;
 
 		for (ConfigGuiTab tab : ConfigGuiTab.VALUES) {
@@ -156,6 +156,7 @@ public class GuiConfigs extends GuiConfigsBase {
 		switch (tab) {
 			case GENERIC -> configs = Configs.Generic.OPTIONS;
 			case STATIC -> configs = Configs.Static.OPTIONS;
+			case MOVING -> configs = Configs.Moving.OPTIONS;
 			case VOID -> configs = Configs.Void.OPTIONS;
 			case HOTKEYS -> configs = Hotkeys.HOTKEY_LIST;
 			case TRADE_PAIRS -> {
@@ -236,7 +237,7 @@ public class GuiConfigs extends GuiConfigsBase {
 			return new ItemIOTabList(listX, listY, this.getBrowserWidth(), this.getBrowserHeight(),
 					this.getConfigWidth(), 0.f, this.useKeybindSearch(), this, tab == ConfigGuiTab.IO_INPUT);
 		}
-		// GENERIC/STATIC/VOID/HOTKEYS：基础配置列表控件（原行为，与 malilib 默认构造一致）
+		// GENERIC/STATIC/MOVING/VOID/HOTKEYS：基础配置列表控件（原行为，与 malilib 默认构造一致）
 		return new WidgetListConfigOptions(listX, listY, this.getBrowserWidth(), this.getBrowserHeight(),
 				this.getConfigWidth(), 0.f, this.useKeybindSearch(), this);
 	}
@@ -262,9 +263,10 @@ public class GuiConfigs extends GuiConfigsBase {
 				"autotrade.gui.button.config_gui.pairs"), IO_INPUT(
 						"autotrade.gui.button.config_gui.io_input"), IO_OUTPUT(
 								"autotrade.gui.button.config_gui.io_output"), STATIC(
-										"autotrade.gui.button.config_gui.static"), VOID(
-												"autotrade.gui.button.config_gui.void"), HOTKEYS(
-														"autotrade.gui.button.config_gui.hotkeys");
+										"autotrade.gui.button.config_gui.static"), MOVING(
+												"autotrade.gui.button.config_gui.moving"), VOID(
+														"autotrade.gui.button.config_gui.void"), HOTKEYS(
+																"autotrade.gui.button.config_gui.hotkeys");
 
 		private final String translationKey;
 

@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.trade.task;
+package com.github.sebseb7.autotrade.trade.executor;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
@@ -20,12 +20,8 @@ import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.village.TradeOffer;
 import net.minecraft.village.TradeOfferList;
 
-/**
- * 交易画面处理逻辑：将村民的 TradeOffer 与配置的交易对匹配，执行交易并收集结果。 由 TradeTask 在每个 tick 调用。
- */
-public class TradeExecutor {
-	/** 本次会话是否因背包空间不足/结果滞留而阻塞（供会话层决定提前结束并触发容器 IO） */
-	private boolean inventoryBlocked = false;
+// 抽象基类：共享全部交易流程（现状逻辑整体迁入，行为等价；uses 仅扫描时刻快照读取）
+abstract class AbstractTradeStrategy implements TradeStrategy {
 	/**
 	 * exact-N 右键包数预算（语义扩展：每源槽独立判定，值不变 = 8）——单成本路径的 S−M 差值、双成本路径
 	 * 各补充源槽差值、二分拆半收尾溢出均以该值为界；单成本超过 → 回退空间封顶 QUICK_MOVE（仍防饿死）， 双成本超过 → 撤销 +
@@ -33,183 +29,16 @@ public class TradeExecutor {
 	 */
 	private static final int EXACT_N_MAX_RIGHT_CLICKS = 8;
 
-	public TradeExecutor() {
-	}
+	/** 本次会话是否因背包空间不足/结果滞留而阻塞（供会话层决定提前结束并触发容器 IO） */
+	protected boolean inventoryBlocked = false;
 
 	/**
-	 * 交易画面处理：在一次调用中处理当前交易画面的全部可执行交易项。 流程：清理槽 2 残留 → 检查交易数据 → 扫描可执行交易 → 按 pass 轮转执行
-	 * → 移出槽 0/1 剩余成本 → 根据结果设置背包阻塞状态并结束本次画面处理。 每个 pass
-	 * 中每个交易项最多点击一次；结果滞留、容量不足或交易项耗尽都会移除或结束相应流程。
-	 *
-	 * @return true 表示画面数据未就绪（下个 tick 继续），false 表示会话结束（调用者应关闭画面）
+	 * 创建交易项状态对象（差异点钩子：非 use = SnapshotOfferState 快照推导，use = LiveOfferState 直接读
+	 * uses）
 	 */
-	public boolean handleMerchantScreenTick(MinecraftClient mc, MerchantScreen screen) {
-		// 重置会话状态（executor 跨会话复用，避免上一会话的 blocked 泄漏）
-		inventoryBlocked = false;
-		// 玩家或世界为空（如退出世界/传送中）时无法继续交易，等待下个 tick
-		if (mc.player == null || mc.world == null) {
-			return true;
-		}
+	protected abstract OfferState createOffer(TradeOffer offer, int index, boolean starvationCandidate);
 
-		MerchantScreenHandler handler = screen.getScreenHandler();
-		TradeOfferList offers = handler.getRecipes();
-
-		// 第 1 步：开窗残留清理（必须在任何 switchTo 之前，防御性兜底；失败 → 阻塞并结束会话，
-		// 下轮会话重开时重试清理）
-		if (!cleanupResidualResult(mc, handler)) {
-			return false;
-		}
-
-		// 第 2 步：offers/pairs 空检查（沿用现有语义）
-		List<TradePair> pairs = TradePair.loadAllPairs();
-
-		if (offers == null || offers.isEmpty()) {
-			AutoTrade.logger.info("[AutoTrade] Offers not yet synced, waiting...");
-			return true;
-		}
-
-		if (pairs.isEmpty()) {
-			AutoTrade.logger.info("[AutoTrade] No trade pairs configured");
-			return false;
-		}
-
-		// 第 3 步：预扫描可执行交易项（开屏 isDisabled() 过滤已耗尽的 offer；饿死候选标志随扫描携带）。
-		// 列表为每 tick 快照——成本消耗导致的过期由单轮结果确认兜底（轮到时 autofill 无货 → 槽 2 空 → DONE 移出）
-		List<ExecutableOffer> active = scanExecutableOffers(handler, pairs, mc.player);
-		if (active.isEmpty()) {
-			// 无任何可执行交易项：移出输入成本后结束会话（下轮会话重试）
-			moveOutInputCosts(mc, handler);
-			return false;
-		}
-
-		// 第 4 步：公平轮转 pass 循环——每 pass 遍历 active 中每个 offer 至多 1 次点击
-		// （runOneBatch 单轮体），本 pass 成交 ≥1 笔则进入下一 pass，直到无成交/全部移出/STUCK；
-		// blocked 为 STUCK/post-loop 的局部汇总，由 runPassLoop 汇总返回（见第 7 步统一写入字段）
-		PassResult passResult = runPassLoop(mc, handler, active);
-		int tradesTotal = passResult.tradesTotal();
-		int capacitySkips = passResult.capacitySkips();
-		boolean blocked = passResult.blocked();
-
-		// 第 5 步：输入移出——仅非 STUCK 路径执行（STUCK 时跳过：槽 2 滞留物是「未执行交易的预览」、
-		// 无真实物品风险，成本由 onClosed offerOrDrop 回收；跳过 moveOut 仅为省去背包满时注定失败的
-		// QUICK_MOVE 包）。不得提前 return false——否则第 7 步的 inventoryBlocked 置位不会执行；
-		// moveOutInputCosts 内部「移出失败 → inventoryBlocked=true」的兜底写入保留（成本放不回背包 = 背包满）
-		if (!blocked) {
-			moveOutInputCosts(mc, handler);
-		}
-
-		// 第 6 步：post-loop——全部 offer 均因容量不足/整批放不下跳过且 0 笔交易 → 阻塞，等容器 IO 释放空间后下轮恢复
-		if (!blocked && capacitySkips > 0 && tradesTotal == 0) {
-			blocked = true;
-		}
-
-		// 第 7 步：收尾——只置位、不清除（第 5 步 moveOutInputCosts 内部已写入 true，此处不覆盖；
-		// 方法顶部已重置过，字段在方法内只会 false→true）。会话收尾日志：tradesTotal/capacitySkips/blocked
-		// 该日志用于记录本次处理的汇总结果。
-		if (blocked) {
-			inventoryBlocked = true;
-		}
-		AutoTrade.logger.info("[AutoTrade] 会话收尾: tradesTotal={} capacitySkips={} blocked={}", tradesTotal,
-				capacitySkips, blocked);
-		return false;
-	}
-
-	// pass 循环汇总结果 record：tradesTotal = 跨 pass 累计实际成交笔数，capacitySkips = 容量跳过计数，
-	// blocked = STUCK/post-loop 的局部汇总（由调用方统一写入 inventoryBlocked 字段）
-	private record PassResult(int tradesTotal, int capacitySkips, boolean blocked) {
-	}
-
-	// 公平轮转 pass 循环——每 pass 遍历 active 中每个 offer 至多 1 次点击（runOneBatch 单轮体），
-	// 本 pass 成交 ≥1 笔则进入下一 pass，直到无成交/全部移出/STUCK。汇总
-	// tradesTotal/capacitySkips/blocked 返回。
-	private PassResult runPassLoop(MinecraftClient mc, MerchantScreenHandler handler, List<ExecutableOffer> active) {
-		int tradesTotal = 0;
-		int capacitySkips = 0;
-		boolean blocked = false;
-		// pass 轮次序号：从 1 开始，每 pass 递增。
-		int pass = 0;
-		while (true) {
-			pass++;
-			// 每 pass 起始：本 pass 是否成交（防御——无成交即终止轮转，配合出口移出保证 pass 数有界）
-			boolean anyTradedThisPass = false;
-			// 本 pass 实际成交（tradesDone>0）的 TRADED offer 数——「轮次结束」日志统计用，
-			// 防御规则移出的 0 笔 TRADED 不计入（纯日志统计，不参与任何判定）
-			int tradedOffersThisPass = 0;
-			Iterator<ExecutableOffer> it = active.iterator();
-			while (it.hasNext()) {
-				ExecutableOffer target = it.next();
-				BatchOutcome o = runOneBatch(mc, handler, target);
-				// 跨 pass 累计实际完成交易笔数（单轮成交值）
-				tradesTotal += o.tradesDone();
-				// 同步累计到 target.tradesDone——供剩余次数推导（remaining = initialUses − tradesDone）
-				target.tradesDone += o.tradesDone();
-				switch (o.result()) {
-					case TRADED :
-						// 已成交且无滞留：保留在 active 由下 pass 继续（exhausted=true → 移出，剩余次数耗尽时置位）；
-						// 防御规则：成交 0 笔且槽 2 空（无进展路径）→ 按 DONE 移出
-						anyTradedThisPass = true;
-						if (o.tradesDone() > 0) {
-							// 仅实际成交的 TRADED 计入轮次日志，不参与交易判定。
-							tradedOffersThisPass++;
-						}
-						if (o.exhausted() || (o.tradesDone() == 0 && !handler.getSlot(2).hasStack())) {
-							it.remove();
-						}
-						break;
-					case DONE :
-						// 耗尽/没货/装填失败：移出，本会话不再尝试（等价于现 DONE break 后外层 for 不回头）
-						it.remove();
-						break;
-					case CAPACITY_SKIP :
-					case STOP :
-						// 容量不足/整批放不下：移出，本会话不再尝试（等价于现 break 后外层 for 不回头）；
-						// 全部移出且 0 笔交易才阻塞，见第 6 步
-						capacitySkips++;
-						it.remove();
-						break;
-					case STUCK :
-						// 点击后结果滞留槽 2（背包真满）→ 置 blocked 终止整个 pass 与会话；不得提前
-						// return——blocked 由调用方统一写入 inventoryBlocked（否则字段不会被置位）
-						blocked = true;
-						break;
-				}
-				if (blocked) {
-					// STUCK：终止整个 pass（active 余项本会话不再尝试）
-					break;
-				}
-			}
-			// 每 pass 结束时记录：pass 从 1 严格递增、tradedOffers 为本 pass
-			// 实际成交 TRADED 数、tradesTotal 跨 pass 累计、active.size() 本 pass 移出后的剩余 offer 数
-			AutoTrade.logger.info("[AutoTrade] 轮次结束: pass={} tradedOffers={} tradesTotal={} active={}", pass,
-					tradedOffersThisPass, tradesTotal, active.size());
-			// 每 pass 出口：STUCK / 本 pass 无成交 / active 已空 → 终止轮转
-			if (blocked || !anyTradedThisPass || active.isEmpty()) {
-				break;
-			}
-		}
-		return new PassResult(tradesTotal, capacitySkips, blocked);
-	}
-
-	// 开窗残留清理：槽 2 若有滞留物先 QUICK_MOVE 移出（必须在任何 switchTo 之前）。
-	// 槽 2 滞留物表示结果尚未成功移入背包；本步先尝试 QUICK_MOVE，仍滞留则判定背包无空间。
-	// 这种情况下标记阻塞，移出输入成本后结束本次处理，下一次打开交易界面时再次清理。
-	// @return true = 槽 2 已清空，false = 滞留无法清除（会话应结束）
-	private boolean cleanupResidualResult(MinecraftClient mc, MerchantScreenHandler handler) {
-		Slot slot2 = handler.getSlot(2);
-		if (slot2.hasStack()) {
-			AutoTrade.logger.info("[AutoTrade] 清理遗留交易结果: {}x{}", slot2.getStack().getCount(),
-					Registries.ITEM.getId(slot2.getStack().getItem()));
-			quickMoveSlot(mc, handler, slot2);
-			// 本地模拟同步执行（clickSlot 本地模拟），点击返回后本地槽状态已更新；仍滞留 = 背包无空间
-			if (slot2.hasStack()) {
-				AutoTrade.logger.info("[AutoTrade] 遗留交易结果无法移入背包（背包已满）");
-				inventoryBlocked = true;
-				moveOutInputCosts(mc, handler);
-				return false;
-			}
-		}
-		return true;
-	}
+	// ---- 静态匹配辅助方法 ----
 
 	// 点击指定槽位 QUICK_MOVE，并使用点击后的本地槽位状态继续判断结果。
 	private static void quickMoveSlot(MinecraftClient mc, MerchantScreenHandler handler, Slot slot) {
@@ -226,29 +55,8 @@ public class TradeExecutor {
 		}
 	}
 
-	// 输入移出：槽 0/1 剩余成本 QUICK_MOVE 回背包；各自移出失败 → 置阻塞标志（关窗 offerOrDrop 兜底）
-	private void moveOutInputCosts(MinecraftClient mc, MerchantScreenHandler handler) {
-		moveOutInputSlot(mc, handler, 0);
-		moveOutInputSlot(mc, handler, 1);
-	}
-
-	// 移出单个输入槽（槽 slotIndex）的剩余成本：QUICK_MOVE 回背包；移出失败（槽内仍有物品）→ 打日志 +
-	// 置 inventoryBlocked=true（背包满，关窗 offerOrDrop 兜底）。@return true = 移出成功（或槽本就为空）
-	private boolean moveOutInputSlot(MinecraftClient mc, MerchantScreenHandler handler, int slotIndex) {
-		Slot slot = handler.getSlot(slotIndex);
-		if (slot.hasStack()) {
-			quickMoveSlot(mc, handler, slot);
-			if (slot.hasStack()) {
-				AutoTrade.logger.info("[AutoTrade] 成本物品无法移回背包，标记背包阻塞");
-				inventoryBlocked = true;
-				return false;
-			}
-		}
-		return true;
-	}
-
 	// 计算装填完成后背包对交易结果的可用容量；此时槽 0/1 中的装填成本不计入背包容量。
-	static int calculateResultCapacity(MerchantScreenHandler handler, ItemStack result) {
+	private static int calculateResultCapacity(MerchantScreenHandler handler, ItemStack result) {
 		boolean stackable = result.getMaxCount() > 1;
 		int emptySlots = 0;
 		int mergeSpace = 0;
@@ -266,7 +74,7 @@ public class TradeExecutor {
 	}
 
 	// 计算本次点击可使用的整批笔数：inputBatch = min(floor(槽0/costA), floor(槽1/costB))。
-	static int computeInputBatch(MerchantScreenHandler handler, TradeOffer offer) {
+	private static int computeInputBatch(MerchantScreenHandler handler, TradeOffer offer) {
 		ItemStack costA = offer.getAdjustedFirstBuyItem();
 		ItemStack costB = offer.getSecondBuyItem();
 		int trades = Integer.MAX_VALUE;
@@ -283,7 +91,7 @@ public class TradeExecutor {
 	}
 
 	// 预留「本次点击后槽 0/1 剩余成本回背包」所需空间：cost==result 按物品数精确占用结果容量，否则按量级化比较占用 1 个空槽
-	static int calculateLeftoverReservation(MerchantScreenHandler handler, TradeOffer offer, int trades) {
+	private static int calculateLeftoverReservation(MerchantScreenHandler handler, TradeOffer offer, int trades) {
 		ItemStack result = offer.getSellItem();
 		int reservation = 0;
 		// 逐输入槽处理剩余成本（槽 0 = 第一成本，槽 1 = 第二成本）
@@ -326,7 +134,7 @@ public class TradeExecutor {
 	// 判断本次有效整批是否能放入背包：所需结果数量不超过扣除剩余成本占位后的容量。
 	// 判定用 trades = effectiveBatch（有效整批，由调用方计算并传入——含 uses 剩余次数封顶）；
 	// exact-N 判定预留 = 0（输入精确消耗），由调用方另行计算 affordable
-	static boolean canFitEffectiveBatch(MerchantScreenHandler handler, TradeOffer offer, int effectiveBatch) {
+	private static boolean canFitEffectiveBatch(MerchantScreenHandler handler, TradeOffer offer, int effectiveBatch) {
 		// 防御性守卫：正常流程已保证槽 2 有结果 ⟹ 输入够 1 笔 ⟹ effectiveBatch≥1，双保险（等价于原 inputBatch 守卫）
 		if (effectiveBatch <= 0) {
 			return false;
@@ -341,37 +149,10 @@ public class TradeExecutor {
 		return capacity - reservation >= need;
 	}
 
-	/** 上次交易扫描是否因背包空间不足而跳过全部匹配交易（会话层据此提前结束并触发容器 IO） */
-	public boolean isInventoryBlocked() {
-		return inventoryBlocked;
-	}
-	// ---- 静态匹配辅助方法 ----
-
-	// 可执行交易项快照：offer = 匹配到的交易项，index = 交易栏索引（供 setRecipeIndex/switchTo/select 包使用），
-	// starvationCandidate = 容量不足候选标志（扫描时按 offer 静态计算），
-	// initialUses = 扫描时刻服务端同步的初始剩余次数（maxUses − getUses()，剩余次数推导的基准；
-	// 全文件唯一的 uses 读取点——循环内不再读取 uses），tradesDone = 跨 pass 累计实际成交笔数
-	// （供推导 remaining = initialUses − tradesDone，tradesDone 可变故不能用 record）
-	static class ExecutableOffer {
-		final TradeOffer offer;
-		final int index;
-		final boolean starvationCandidate;
-		final int initialUses;
-		int tradesDone;
-
-		// tradesDone 默认 0，由 pass 循环逐轮累计
-		ExecutableOffer(TradeOffer offer, int index, boolean starvationCandidate, int initialUses) {
-			this.offer = offer;
-			this.index = index;
-			this.starvationCandidate = starvationCandidate;
-			this.initialUses = initialUses;
-		}
-	}
-
 	// 容量不足候选门：autofillBatch × sellCount > 36 × resultMaxCount。
 	// 候选表示自动装填得到的整批结果超过空背包理论容量，需要尝试 exact-N；双成本交易走 exactTradeNDual
 	// （双成本 exact-N，不再回退 QUICK_MOVE——候选门公式本身不变，仅双成本路径出口变更）。
-	static boolean isStarvationCandidate(TradeOffer offer) {
+	private static boolean isStarvationCandidate(TradeOffer offer) {
 		// autofill 单输入槽最大填充量对应的整批笔数：可堆叠 = maxCount/costCount（珍珠等 16、绿宝石 64），
 		// 不可堆叠（maxCount=1）→ 1 笔；36 × resultMaxCount = 空背包理论最大容量（槽 3-38 共 36 槽）
 		int costCount = offer.getAdjustedFirstBuyItem().getCount();
@@ -380,40 +161,6 @@ public class TradeExecutor {
 		int sellCount = offer.getSellItem().getCount();
 		int resultMaxCount = offer.getSellItem().getMaxCount();
 		return autofillBatch * sellCount > 36 * resultMaxCount;
-	}
-
-	// 预扫描：收集未耗尽、匹配交易对、价格达标且背包有成本的交易项。
-	// 结果是每 tick 的快照；后续成本变化由轮到该交易项时的槽 2 状态再次确认。
-	static List<ExecutableOffer> scanExecutableOffers(MerchantScreenHandler handler, List<TradePair> pairs,
-			PlayerEntity player) {
-		List<ExecutableOffer> list = new ArrayList<>();
-		TradeOfferList offers = handler.getRecipes();
-		for (int i = 0; i < offers.size(); i++) {
-			TradeOffer candidate = offers.get(i);
-			// 扫描发生在任何交易之前（本窗口尚未交易，offers 为开屏时服务端同步真值）→ 此刻 isDisabled() 准确；
-			// 开窗即耗尽的 offer 直接跳过（省一次装填尝试）；会话中期耗尽的 offer 在下轮窗口重开时服务端重新同步
-			// offers → isDisabled()=true → 同样被本检查过滤（零浪费装填）。会话中期 uses 仍不可靠——内循环终止/
-			// 耗尽标记只根据输出槽状态和已同步的交易数据判断。
-			if (candidate.isDisabled())
-				continue;
-			for (int pairIndex = 0; pairIndex < pairs.size(); pairIndex++) {
-				TradePair pair = pairs.get(pairIndex);
-				// 未启用的交易对跳过
-				if (!pair.isEnabled())
-					continue;
-				if (isOfferExecutableForPair(candidate, pair, pairIndex, player)) {
-					// 检查全部通过：记入快照列表（携带饿死候选标志）并结束内层交易对循环。
-					// 快照「初始剩余次数」= maxUses − getUses()（非裸 getUses()——裸 uses 对新 offer 为 0，
-					// 避免把新交易项的 uses 误当成已使用次数，导致剩余次数被计算为 0。
-					// 本处与上方 isDisabled() 同刻（开屏服务端同步真值），是全文件唯一 allowed 的 uses 读取点；
-					// 循环内（runOneBatch/pass/exactTradeN/容量函数）不再读取 uses。
-					list.add(new ExecutableOffer(candidate, i, isStarvationCandidate(candidate),
-							candidate.getMaxUses() - candidate.getUses()));
-					break;
-				}
-			}
-		}
-		return list;
 	}
 
 	// 判定候选 offer 是否可由该交易对执行：匹配（doesOfferMatchPair，失败且 offer 实际有第二成本但交易对
@@ -460,204 +207,14 @@ public class TradeExecutor {
 		return true;
 	}
 
-	// 单 offer 单轮结果枚举：TRADED = 点击已发生且无滞留（保留在 active 下 pass 继续；exhausted=true 时移出）；
-	// DONE = 耗尽/没货/装填失败（正常收尾，移出）；
-	// CAPACITY_SKIP = 容量不足跳过（无输入或候选 affordable=0，不设 blocked，移出）；
-	// STOP = 非候选整批放不下（不 exact-N、不空间封顶兜底，该 offer 本会话不再尝试，移出）；
-	// STUCK = 点击后结果滞留槽 2（背包真满，结束会话）
-	private enum BatchResult {
-		DONE, CAPACITY_SKIP, STOP, STUCK, TRADED
-	}
-
-	// 单 offer 单轮结果 record：result = 出口结果，tradesDone = 本轮实际完成交易笔数（供编排层累计
-	// tradesTotal；跨 pass 累计由 target.tradesDone 承担），
-	// exhausted = 该 offer 剩余次数已耗尽标志（本轮恒 false，仅 TRADED 出口在剩余次数耗尽推导后置位）
-	private record BatchOutcome(BatchResult result, int tradesDone, boolean exhausted) {
-	}
-
-	// 单轮交易体：对单个 offer 执行一次「装填 + 容量判定 + 点击」，每轮至多 1 次点击。
-	// 判定流程：装填 → 槽 2 canCombine(卖品) 否 → DONE → inputBatch 计算（无 uses 项）→
-	// 整批可容纳（canFitEffectiveBatch）→ QUICK_MOVE 点击 → TRADED → 否则候选且 affordable ≥ 1 →
-	// exact-N（单成本 exactTradeN / 双成本 exactTradeNDual，按成本数分流）→ TRADED → 否则
-	// STOP（非候选）/CAPACITY_SKIP（候选 affordable==0）。
-	// 点击后滞留检测：槽 2 仍有物品 → STUCK（会话结束）。耗尽检测只信输出槽（槽 2）状态 + 服务端槽同步
-	// （≥1 tick）；槽 2 空 → DONE。本轮及后续 pass 不再读取 uses。
-	// exhausted 仅 TRADED 出口置位（剩余次数耗尽推导）；终止性由调用方 pass 循环保证（每 pass 成交 ≥1 或移出
-	// ≥1）。
-	private BatchOutcome runOneBatch(MinecraftClient mc, MerchantScreenHandler handler, ExecutableOffer target) {
-		TradeOffer offer = target.offer;
-		Slot slot2 = handler.getSlot(2);
-		ItemStack result = offer.getSellItem();
-		// 出口结果局部变量：默认 DONE（槽 2 校验失败），容量类出口前置 CAPACITY_SKIP/STOP，
-		// 点击成功出口 TRADED，滞留出口 STUCK
-		BatchResult outcome = BatchResult.DONE;
-		// 1) 装填：setRecipeIndex + switchTo + select 包（顺序同现主循环；setRecipeIndex 不可省略，
-		// 缺省时非 0 号交易本地结果槽可能不生成）
-		refillOffer(mc, handler, target);
-		// 2) 槽 2 canCombine(卖品) 校验：失败 → DONE（耗尽/没货/装填失败/switchTo 提前 return
-		// 的兜底，均表现为不匹配）。耗尽由扫描时 isDisabled()（开屏服务端同步真值）覆盖：本出口仅结束
-		// 该 offer 处理，下轮窗口重开时服务端重新同步 offers → isDisabled() 自然过滤，无需会话级标记集合
-		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {
-			return new BatchOutcome(outcome, 0, false);
-		}
-		// 3) inputBatch = min(floor(槽0/costA), floor(槽1/costB))（无 uses 项）；== 0 →
-		// CAPACITY_SKIP（无输入）
-		int inputBatch = computeInputBatch(handler, offer);
-		if (inputBatch <= 0) {
-			AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 无输入（inputBatch=0）", target.index);
-			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
-		}
-		// 剩余次数推导：remaining = 扫描快照的初始剩余次数 −
-		// 本会话已成交笔数（tradesDone 由 pass 循环跨 pass 累计）；不读 offer.getUses()/isDisabled()
-		int remaining = target.initialUses - target.tradesDone;
-		// 有效整批 = min(整批, 剩余次数)：uses 封顶后本次点击至多交易 remaining 笔
-		// need 按有效整批计算，避免把已达到使用上限的次数算入容量需求。
-		int effectiveBatch = Math.min(inputBatch, remaining);
-		// 防御：有效整批 ≤ 0 → 按 CAPACITY_SKIP 处理（日志注明「剩余次数≤0」；正常流程恒 ≥1——
-		// 扫描已过滤 isDisabled，remaining = initialUses − tradesDone 推导恒 ≥ 1，此分支仅防异常）
-		if (effectiveBatch <= 0) {
-			AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 剩余次数≤0（remaining={}）", target.index, remaining);
-			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
-		}
-		// 4) 容量判定数据：有效整批所需数量、结果容量、剩余成本占位和剩余次数。
-		long need = (long) effectiveBatch * result.getCount();
-		int capacity = calculateResultCapacity(handler, result);
-		int reservation = calculateLeftoverReservation(handler, offer, effectiveBatch);
-		logExecuting(handler, target, result, inputBatch, effectiveBatch, remaining, need, capacity, reservation);
-		// 5) 容量判定并执行 QUICK_MOVE、exact-N、CAPACITY_SKIP 或 STOP 分支。
-		BatchOutcome batch = decideAndExecuteBatch(mc, handler, target, offer, slot2, result, inputBatch,
-				effectiveBatch, need, capacity, reservation);
-		// 点击后剩余次数耗尽（推导值：初始剩余 − 已累计成交 − 本轮成交 == 0）→ exhausted=true → pass 循环立即移出
-		// （省下 pass 一次无效 switchTo；不读 offer.getUses()）。
-		if (batch.result() == BatchResult.TRADED) {
-			boolean exhausted = target.initialUses - (target.tradesDone + batch.tradesDone()) == 0;
-			return new BatchOutcome(BatchResult.TRADED, batch.tradesDone(), exhausted);
-		}
-		return batch;
-	}
-
-	// 容量判定 + 执行分支：有效整批可容纳 → QUICK_MOVE；否则候选且 affordable≥1 →
-	// exact-N（n = min(affordable, effectiveBatch)；双成本再叠加 D1 槽容量预算 64/costX.count，
-	// 按第二成本存在性分流：单成本 exactTradeN / 双成本 exactTradeNDual）；候选 affordable==0 →
-	// CAPACITY_SKIP；非候选 → STOP。
-	// 点击后统一滞留检测（checkResultStuck，QUICK_MOVE 与 exact-N/双成本路径文案不同均为行为契约）。
-	// @return 本轮 BatchOutcome（TRADED/STUCK/CAPACITY_SKIP/STOP；exhausted 由调用方 TRADED
-	// 后推导）
-	private BatchOutcome decideAndExecuteBatch(MinecraftClient mc, MerchantScreenHandler handler,
-			ExecutableOffer target, TradeOffer offer, Slot slot2, ItemStack result, int inputBatch, int effectiveBatch,
-			long need, int capacity, int reservation) {
-		if (canFitEffectiveBatch(handler, offer, effectiveBatch)) {
-			// 5) QUICK_MOVE 优先路径：整批可容纳 → 一次点击整批干净耗尽（同 tick 本地增量计数）
-			int tradesDone = tradeClick(mc, handler, slot2, result);
-			// 6) 滞留检测：点击后槽 2 仍有物品 = 背包满 insertItem 失败 → STUCK（会话结束，
-			// 滞留预览由下轮 cleanupResidualResult 续传；输入可能 offerOrDrop 掉地 = 接受）
-			if (checkResultStuck(mc, handler, target, slot2, "[AutoTrade] STUCK offer {}: 结果滞留槽 2 {}x{}（背包已满），结束会话")) {
-				return new BatchOutcome(BatchResult.STUCK, tradesDone, false);
-			}
-			// 7) 点击成功且无滞留 → TRADED（原内层循环的「回绕继续」路径映射为单轮出口之一，
-			// 保留在 active 由下 pass 重新装填继续）
-			return new BatchOutcome(BatchResult.TRADED, tradesDone, false);
-		}
-		// 整批放不下：候选且 affordable ≥ 1 → exact-N（仅防饿死）；候选 affordable==0 →
-		// CAPACITY_SKIP（空间被本批耗尽或初始即满）；非候选 → STOP
-		int affordable = capacity / result.getCount();
-		if (target.starvationCandidate && affordable >= 1) {
-			// 8) exact-N 路径：整批放不下但至少能容纳一笔时，按可用容量交易 n 笔。
-			// n = min(affordable, effectiveBatch)，不会超过剩余次数。
-			int n = Math.min(affordable, effectiveBatch);
-			// 双成本 offer（第二成本存在）：n 受 D1 输入槽容量预算扩展——
-			// M1 = n×costA.count 与 M2 = n×costB.count 必须 ≤ 64（槽 0/1 物理上限 min(64, maxCount)，
-			// 超限放置时 insertStack 截断 → 光标残留，P0 级）；故 n ≤ 64/costA.count 且 ≤ 64/costB.count。
-			if (!offer.getSecondBuyItem().isEmpty()) {
-				ItemStack costA = offer.getAdjustedFirstBuyItem();
-				ItemStack costB = offer.getSecondBuyItem();
-				n = Math.min(n, 64 / costA.getCount());
-				n = Math.min(n, 64 / costB.getCount());
-				// D1 守卫 1：预算不足（n < 1）→ CAPACITY_SKIP（防御——affordable/effectiveBatch ≥ 1 且
-				// costX.count ≤ 64 ⟹ 64/costX.count ≥ 1，正常不可达；不点击、不 fill）
-				if (n < 1) {
-					AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 双成本预算不足（n={}）", target.index, n);
-					return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
-				}
-				// ★双成本 exact-N（替代原「双成本守卫 → quickMoveFallback」；本路径永不回退普通 QUICK_MOVE）★
-				// 出口语义：TRADED = 恰交易 n 笔；CAPACITY_SKIP = 守卫失败且撤销成功（槽 0/1/光标已恢复、
-				// 预览清空 → 不会误判滞留）；STUCK = 撤销失败（背包真满，真异常）
-				BatchOutcome dual = exactTradeNDual(mc, handler, target, n, result, slot2);
-				// 9) 滞留检测（D5 守卫 7，仅成交路径需要）：成功路径输入 M1/M2 精确耗尽 → 槽 2 应清空；
-				// 滞留 = 背包满 insertItem 失败 → STUCK（由下轮 cleanupResidualResult 续传）
-				if (dual.result() == BatchResult.TRADED && checkResultStuck(mc, handler, target, slot2,
-						"[AutoTrade] STUCK offer {}: 双成本 exact-N 后结果滞留槽 2 {}x{}，结束会话")) {
-					return new BatchOutcome(BatchResult.STUCK, dual.tradesDone(), false);
-				}
-				return dual;
-			}
-			int tradesDone = exactTradeN(mc, handler, offer, target.index, n, result, slot2);
-			// 9) 滞留检测（守卫回退路径可能滞留预览）：有物品 → STUCK（由下轮 cleanupResidualResult 续传）
-			if (checkResultStuck(mc, handler, target, slot2,
-					"[AutoTrade] STUCK offer {}: exact-N/回退后结果滞留槽 2 {}x{}，结束会话")) {
-				return new BatchOutcome(BatchResult.STUCK, tradesDone, false);
-			}
-			// 10) 点击成功且无滞留 → TRADED（空间被本批耗尽 → 下 pass affordable=0 → CAPACITY_SKIP
-			// 自然移出，每会话最多 1 次 exact-N）
-			return new BatchOutcome(BatchResult.TRADED, tradesDone, false);
-		}
-		if (target.starvationCandidate) {
-			// 候选但 affordable == 0（空间被本批耗尽或初始即满）→ CAPACITY_SKIP → 移出 → 容器 IO
-			AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 候选但 affordable=0（capacity={} sellCount={}）",
-					target.index, capacity, result.getCount());
-			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
-		}
-		// 11) STOP：非候选整批放不下 → 该 offer 本会话不再尝试（不 exact-N、不空间封顶兜底）→
-		// 移出 active → 会话结束 → 输出阈值容器 IO 下轮整批续传
-		AutoTrade.logger.info(
-				"[AutoTrade] STOP offer {}: 空间满，结束会话待容器 IO（inputBatch={} need={} capacity={} reservation={}）",
-				target.index, inputBatch, need, capacity, reservation);
-		return new BatchOutcome(BatchResult.STOP, 0, false);
-	}
-
 	// 装填指定 offer：setRecipeIndex + switchTo + select 包（顺序同现主循环；setRecipeIndex 不可省略，
 	// 缺省时非 0 号交易本地结果槽可能不生成）
-	private static void refillOffer(MinecraftClient mc, MerchantScreenHandler handler, ExecutableOffer target) {
+	private static void refillOffer(MinecraftClient mc, MerchantScreenHandler handler, OfferState target) {
 		handler.setRecipeIndex(target.index);
 		handler.switchTo(target.index);
 		if (mc.getNetworkHandler() != null) {
 			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(target.index));
 		}
-	}
-
-	// 记录执行前的容量判定数据；日志格式由运行时诊断使用，禁止改动。
-	private void logExecuting(MerchantScreenHandler handler, ExecutableOffer target, ItemStack result, int inputBatch,
-			int effectiveBatch, int remaining, long need, int capacity, int reservation) {
-		AutoTrade.logger.info(
-				"[AutoTrade] EXECUTING trade offer {} result={} inputBatch={} need={} capacity={} reservation={} candidate={} effectiveBatch={} remaining={}",
-				target.index, Registries.ITEM.getId(result.getItem()), inputBatch, need, capacity, reservation,
-				target.starvationCandidate, effectiveBatch, remaining);
-	}
-
-	// 点击后滞留检测：槽 2 仍有物品 = 背包满 insertItem 失败 → STUCK（会话结束，滞留预览由下轮
-	// cleanupResidualResult 续传；输入可能 offerOrDrop 掉地 = 接受）。日志文案由调用方按路径传入（
-	// QUICK_MOVE 与 exact-N/回退路径文案不同，均为行为契约）。@return true = 滞留（调用方走 STUCK 出口）
-	private boolean checkResultStuck(MinecraftClient mc, MerchantScreenHandler handler, ExecutableOffer target,
-			Slot slot2, String stuckLog) {
-		if (slot2.hasStack()) {
-			AutoTrade.logger.info(stuckLog, target.index, slot2.getStack().getCount(),
-					Registries.ITEM.getId(slot2.getStack().getItem()));
-			return true;
-		}
-		return false;
-	}
-
-	// 交易点击：QUICK_MOVE 槽 2，并统计本次点击在背包中新增的结果数量。
-	// = 连续交易直到输入耗尽/uses 打满/背包满（空间封顶）；干净退出或滞留预览由调用方判定。
-	// 计数：点击前快照槽 3-38 卖品总数（快照时机 = 点击前、exact-N 操纵后 → 成本已移入槽 0/1，
-	// cost==sell 不污染）→ 点击后立即再快照 → 差值 / sellCount 累加；无跨会话计数状态。
-	// @return 本次点击实际成交笔数
-	private int tradeClick(MinecraftClient mc, MerchantScreenHandler handler, Slot slot2, ItemStack result) {
-		// 点击前快照（槽 3-38 卖品总数）
-		int before = countSellItemsInInventory(handler, result);
-		quickMoveSlot(mc, handler, slot2);
-		// 点击后立即再快照：差值 / sellCount = 同 tick 本地增量成交笔数
-		return (countSellItemsInInventory(handler, result) - before) / result.getCount();
 	}
 
 	// 统计槽 3-38 中与卖品同物品同 NBT（可合并）的物品总数（同 tick 本地增量计数用快照——
@@ -671,78 +228,6 @@ public class TradeExecutor {
 			}
 		}
 		return total;
-	}
-
-	// exact-N 守卫回退助手：先重新装填交易项（槽 0/1 残余成本放回并
-	// autofill 重填、槽 2 预览重建），再空间封顶 QUICK_MOVE 点击——容量 ≥ sellCount → 成交 ≥1（防饿死）；
-	// 容量 < sellCount → 结果滞留 → 由调用方 STUCK 出口终止。不能直接点击空槽 2。
-	private int quickMoveFallback(MinecraftClient mc, MerchantScreenHandler handler, int offerIndex, Slot slot2,
-			ItemStack result) {
-		handler.switchTo(offerIndex);
-		if (mc.getNetworkHandler() != null) {
-			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(offerIndex));
-		}
-		return tradeClick(mc, handler, slot2, result);
-	}
-
-	// exact-N 流程（仅单成本交易）：尽量恰好准备 N 笔成本并返回成交笔数（含守卫回退
-	// 空间封顶 QUICK_MOVE 路径）。流程：a QUICK_MOVE 槽 0 清空 → b PICKUP 成本源槽（3-38 中与 M 最接近
-	// 的堆叠）→ c 右键源槽 (S−M) 次（每次 1 包）→ d 点击槽 0 放置 M → e 槽 2 canCombine 校验 →
-	// f 点击槽 2（服务端 while 恰交易 N 笔，输入 M 精确耗尽 → 干净退出）。
-	// 守卫（任一命中 → 回退空间封顶 QUICK_MOVE）：S−M > EXACT_N_MAX_RIGHT_CLICKS（每源槽右键预算）；
-	// 双成本（★已不可达★——双成本由 decideAndExecuteBatch 分流到 exactTradeNDual（双成本 exact-N，
-	// 永不回退），本守卫仅作防御保留，防未来调用路径回归）；a 失败（槽 0 移出后仍有物品）；
-	// e 失败（槽 2 不匹配）。
-	private int exactTradeN(MinecraftClient mc, MerchantScreenHandler handler, TradeOffer offer, int offerIndex, int n,
-			ItemStack result, Slot slot2) {
-		// M = N 笔交易所需的第一成本总量
-		ItemStack cost = offer.getAdjustedFirstBuyItem();
-		int m = n * cost.getCount();
-		// 守卫：双成本 offer 不执行 exact-N → 回退空间封顶 QUICK_MOVE（★已不可达★：双成本由
-		// decideAndExecuteBatch 改走 exactTradeNDual 不再进入本方法；本守卫仅作防御保留，防未来调用路径回归）
-		if (!offer.getSecondBuyItem().isEmpty()) {
-			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（双成本）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
-		}
-		Slot slot0 = handler.getSlot(0);
-		// a) QUICK_MOVE 槽 0（autofill 整组移回背包）；失败（槽 0 移出后仍有物品）→ 回退空间封顶 QUICK_MOVE
-		if (slot0.hasStack()) {
-			quickMoveSlot(mc, handler, slot0);
-			if (slot0.hasStack()) {
-				AutoTrade.logger.info("[AutoTrade] exact-N 守卫（a 失败：槽 0 移出后仍有物品）offer {}: 回退空间封顶 QUICK_MOVE",
-						offerIndex);
-				return quickMoveFallback(mc, handler, offerIndex, slot2, result);
-			}
-		}
-		// b) 找成本源槽：优先「数量 ≥ M 且 |S−M| 最小」，否则使用数量最大堆叠；无成本堆叠
-		// （防御性：输入槽已 autofill 过，正常不可达）→ 回退空间封顶 QUICK_MOVE
-		Slot source = selectCostSourceSlot(handler, cost, m);
-		if (source == null) {
-			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（无成本源堆叠）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
-		}
-		int s = source.getStack().getCount();
-		// 守卫：右键包数预算 S−M > EXACT_N_MAX_RIGHT_CLICKS → 回退空间封顶 QUICK_MOVE（仍防饿死）
-		if (s - m > EXACT_N_MAX_RIGHT_CLICKS) {
-			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（S−M={} > {}）offer {}: 回退空间封顶 QUICK_MOVE", s - m,
-					EXACT_N_MAX_RIGHT_CLICKS, offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
-		}
-		// c) PICKUP 拿起源堆叠整组 → 右键源槽 (S−M) 次（每次放下 1 包，剩余 S−M 包留在光标）→
-		// d) 点击槽 0 放置 M（光标剩余 S−M 包被放回源槽）
-		clickSlot(mc, handler, source.id, 0, SlotActionType.PICKUP);
-		int rightClicks = Math.max(0, s - m);
-		for (int k = 0; k < rightClicks; k++) {
-			clickSlot(mc, handler, source.id, 1, SlotActionType.PICKUP);
-		}
-		clickSlot(mc, handler, slot0.id, 0, SlotActionType.PICKUP);
-		// e) 槽 2 canCombine(卖品) 校验：失败（耗尽/错配/装填异常）→ 回退空间封顶 QUICK_MOVE
-		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {
-			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（e 失败：槽 2 不匹配）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
-		}
-		// f) 点击槽 2（服务端 while 恰交易 N 笔，输入精确耗尽 → 干净退出）
-		return tradeClick(mc, handler, slot2, result);
 	}
 
 	// exact-N 成本源槽选择：优先选「数量 ≥ M 且 |S−M| 最小」的堆叠（下限 M——选中 S < M 会导致
@@ -927,6 +412,560 @@ public class TradeExecutor {
 		return true;
 	}
 
+	// 判断交易与交易对是否匹配：成本物品等于 giveItem 且产出物品等于 getItem
+	private static boolean doesOfferMatchPair(TradeOffer offer, TradePair pair) {
+		ItemStack costA = offer.getAdjustedFirstBuyItem();
+		ItemStack costB = offer.getSecondBuyItem();
+		boolean resultMatch = ItemStringHelper.matches(offer.getSellItem(), pair.getGetItem());
+		if (pair.getGiveItem2() != null && !pair.getGiveItem2().isBlank()) {
+			return resultMatch && ItemStringHelper.matches(costA, pair.getGiveItem())
+					&& ItemStringHelper.matches(costB, pair.getGiveItem2());
+		}
+		return resultMatch && costB.isEmpty() && ItemStringHelper.matches(costA, pair.getGiveItem());
+	}
+
+	// 检查玩家背包是否足以支付该交易的全部成本槽（第一/第二成本物品）
+	private static boolean playerHasMerchantCosts(PlayerEntity player, TradeOffer offer) {
+		ItemStack costA = offer.getAdjustedFirstBuyItem();
+		if (!costA.isEmpty() && !hasEnoughCostItems(player, costA)) {
+			return false;
+		}
+		ItemStack costB = offer.getSecondBuyItem();
+		if (!costB.isEmpty() && !hasEnoughCostItems(player, costB)) {
+			return false;
+		}
+		return true;
+	}
+
+	// 统计背包中与 required 精确匹配（含 NBT）的物品总数是否达到所需数量
+	private static boolean hasEnoughCostItems(PlayerEntity player, ItemStack required) {
+		int need = required.getCount();
+		int have = 0;
+		PlayerInventory inv = player.getInventory();
+		for (int s = 0; s < inv.size(); s++) {
+			ItemStack stack = inv.getStack(s);
+			if (stacksMatchExact(stack, required)) {
+				have += stack.getCount();
+				if (have >= need) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	// 精确匹配两个物品栈：同物品且 NBT 完全相等（与 ItemStack.canCombine 的 NBT 语义一致）
+	private static boolean stacksMatchExact(ItemStack a, ItemStack b) {
+		if (a.isEmpty() || b.isEmpty()) {
+			return false;
+		}
+		if (!a.isOf(b.getItem())) {
+			return false;
+		}
+		NbtCompound tagA = a.getNbt();
+		NbtCompound tagB = b.getNbt();
+		if (tagA == null && tagB == null) {
+			return true;
+		}
+		if (tagA == null || tagB == null) {
+			return false;
+		}
+		return tagA.equals(tagB);
+	}
+
+	/**
+	 * 交易画面处理：在一次调用中处理当前交易画面的全部可执行交易项。 流程：清理槽 2 残留 → 检查交易数据 → 扫描可执行交易 → 按 pass 轮转执行
+	 * → 移出槽 0/1 剩余成本 → 根据结果设置背包阻塞状态并结束本次画面处理。 每个 pass
+	 * 中每个交易项最多点击一次；结果滞留、容量不足或交易项耗尽都会移除或结束相应流程。
+	 *
+	 * @return true 表示画面数据未就绪（下个 tick 继续），false 表示会话结束（调用者应关闭画面）
+	 */
+	public boolean handleMerchantScreenTick(MinecraftClient mc, MerchantScreen screen) {
+		// 重置会话状态（executor 跨会话复用，避免上一会话的 blocked 泄漏）
+		inventoryBlocked = false;
+		// 玩家或世界为空（如退出世界/传送中）时无法继续交易，等待下个 tick
+		if (mc.player == null || mc.world == null) {
+			return true;
+		}
+
+		MerchantScreenHandler handler = screen.getScreenHandler();
+		TradeOfferList offers = handler.getRecipes();
+
+		// 第 1 步：开窗残留清理（必须在任何 switchTo 之前，防御性兜底；失败 → 阻塞并结束会话，
+		// 下轮会话重开时重试清理）
+		if (!cleanupResidualResult(mc, handler)) {
+			return false;
+		}
+
+		// 第 2 步：offers/pairs 空检查（沿用现有语义）
+		List<TradePair> pairs = TradePair.loadAllPairs();
+
+		if (offers == null || offers.isEmpty()) {
+			AutoTrade.logger.info("[AutoTrade] Offers not yet synced, waiting...");
+			return true;
+		}
+
+		if (pairs.isEmpty()) {
+			AutoTrade.logger.info("[AutoTrade] No trade pairs configured");
+			return false;
+		}
+
+		// 第 3 步：预扫描可执行交易项（开屏 isDisabled() 过滤已耗尽的 offer；饿死候选标志随扫描携带）。
+		// 列表为每 tick 快照——成本消耗导致的过期由单轮结果确认兜底（轮到时 autofill 无货 → 槽 2 空 → DONE 移出）
+		List<OfferState> active = scanExecutableOffers(handler, pairs, mc.player);
+		if (active.isEmpty()) {
+			// 无任何可执行交易项：移出输入成本后结束会话（下轮会话重试）
+			moveOutInputCosts(mc, handler);
+			return false;
+		}
+
+		// 第 4 步：公平轮转 pass 循环——每 pass 遍历 active 中每个 offer 至多 1 次点击
+		// （runOneBatch 单轮体），本 pass 成交 ≥1 笔则进入下一 pass，直到无成交/全部移出/STUCK；
+		// blocked 为 STUCK/post-loop 的局部汇总，由 runPassLoop 汇总返回（见第 7 步统一写入字段）
+		PassResult passResult = runPassLoop(mc, handler, active);
+		int tradesTotal = passResult.tradesTotal();
+		int capacitySkips = passResult.capacitySkips();
+		boolean blocked = passResult.blocked();
+
+		// 第 5 步：输入移出——仅非 STUCK 路径执行（STUCK 时跳过：槽 2 滞留物是「未执行交易的预览」、
+		// 无真实物品风险，成本由 onClosed offerOrDrop 回收；跳过 moveOut 仅为省去背包满时注定失败的
+		// QUICK_MOVE 包）。不得提前 return false——否则第 7 步的 inventoryBlocked 置位不会执行；
+		// moveOutInputCosts 内部「移出失败 → inventoryBlocked=true」的兜底写入保留（成本放不回背包 = 背包满）
+		if (!blocked) {
+			moveOutInputCosts(mc, handler);
+		}
+
+		// 第 6 步：post-loop——全部 offer 均因容量不足/整批放不下跳过且 0 笔交易 → 阻塞，等容器 IO 释放空间后下轮恢复
+		if (!blocked && capacitySkips > 0 && tradesTotal == 0) {
+			blocked = true;
+		}
+
+		// 第 7 步：收尾——只置位、不清除（第 5 步 moveOutInputCosts 内部已写入 true，此处不覆盖；
+		// 方法顶部已重置过，字段在方法内只会 false→true）。会话收尾日志：tradesTotal/capacitySkips/blocked
+		// 该日志用于记录本次处理的汇总结果。
+		if (blocked) {
+			inventoryBlocked = true;
+		}
+		AutoTrade.logger.info("[AutoTrade] 会话收尾: tradesTotal={} capacitySkips={} blocked={}", tradesTotal,
+				capacitySkips, blocked);
+		return false;
+	}
+
+	// pass 循环汇总结果 record：tradesTotal = 跨 pass 累计实际成交笔数，capacitySkips = 容量跳过计数，
+	// blocked = STUCK/post-loop 的局部汇总（由调用方统一写入 inventoryBlocked 字段）
+	private record PassResult(int tradesTotal, int capacitySkips, boolean blocked) {
+	}
+
+	// 公平轮转 pass 循环——每 pass 遍历 active 中每个 offer 至多 1 次点击（runOneBatch 单轮体），
+	// 本 pass 成交 ≥1 笔则进入下一 pass，直到无成交/全部移出/STUCK。汇总
+	// tradesTotal/capacitySkips/blocked 返回。
+	private PassResult runPassLoop(MinecraftClient mc, MerchantScreenHandler handler, List<OfferState> active) {
+		int tradesTotal = 0;
+		int capacitySkips = 0;
+		boolean blocked = false;
+		// pass 轮次序号：从 1 开始，每 pass 递增。
+		int pass = 0;
+		while (true) {
+			pass++;
+			// 每 pass 起始：本 pass 是否成交（防御——无成交即终止轮转，配合出口移出保证 pass 数有界）
+			boolean anyTradedThisPass = false;
+			// 本 pass 实际成交（tradesDone>0）的 TRADED offer 数——「轮次结束」日志统计用，
+			// 防御规则移出的 0 笔 TRADED 不计入（纯日志统计，不参与任何判定）
+			int tradedOffersThisPass = 0;
+			Iterator<OfferState> it = active.iterator();
+			while (it.hasNext()) {
+				OfferState target = it.next();
+				BatchOutcome o = runOneBatch(mc, handler, target);
+				// 跨 pass 累计实际完成交易笔数（单轮成交值）
+				tradesTotal += o.tradesDone();
+				// 同步累计到 target（record 记账）——供剩余次数推导（remaining = initialRemaining − tradesDone）
+				target.record(o.tradesDone());
+				switch (o.result()) {
+					case TRADED :
+						// 已成交且无滞留：保留在 active 由下 pass 继续（exhausted=true → 移出，剩余次数耗尽时置位）；
+						// 防御规则：成交 0 笔且槽 2 空（无进展路径）→ 按 DONE 移出
+						anyTradedThisPass = true;
+						if (o.tradesDone() > 0) {
+							// 仅实际成交的 TRADED 计入轮次日志，不参与交易判定。
+							tradedOffersThisPass++;
+						}
+						if (o.exhausted() || (o.tradesDone() == 0 && !handler.getSlot(2).hasStack())) {
+							it.remove();
+						}
+						break;
+					case DONE :
+						// 耗尽/没货/装填失败：移出，本会话不再尝试（等价于现 DONE break 后外层 for 不回头）
+						it.remove();
+						break;
+					case CAPACITY_SKIP :
+					case STOP :
+						// 容量不足/整批放不下：移出，本会话不再尝试（等价于现 break 后外层 for 不回头）；
+						// 全部移出且 0 笔交易才阻塞，见第 6 步
+						capacitySkips++;
+						it.remove();
+						break;
+					case STUCK :
+						// 点击后结果滞留槽 2（背包真满）→ 置 blocked 终止整个 pass 与会话；不得提前
+						// return——blocked 由调用方统一写入 inventoryBlocked（否则字段不会被置位）
+						blocked = true;
+						break;
+				}
+				if (blocked) {
+					// STUCK：终止整个 pass（active 余项本会话不再尝试）
+					break;
+				}
+			}
+			// 每 pass 结束时记录：pass 从 1 严格递增、tradedOffers 为本 pass
+			// 实际成交 TRADED 数、tradesTotal 跨 pass 累计、active.size() 本 pass 移出后的剩余 offer 数
+			AutoTrade.logger.info("[AutoTrade] 轮次结束: pass={} tradedOffers={} tradesTotal={} active={}", pass,
+					tradedOffersThisPass, tradesTotal, active.size());
+			// 每 pass 出口：STUCK / 本 pass 无成交 / active 已空 → 终止轮转
+			if (blocked || !anyTradedThisPass || active.isEmpty()) {
+				break;
+			}
+		}
+		return new PassResult(tradesTotal, capacitySkips, blocked);
+	}
+
+	// 开窗残留清理：槽 2 若有滞留物先 QUICK_MOVE 移出（必须在任何 switchTo 之前）。
+	// 槽 2 滞留物表示结果尚未成功移入背包；本步先尝试 QUICK_MOVE，仍滞留则判定背包无空间。
+	// 这种情况下标记阻塞，移出输入成本后结束本次处理，下一次打开交易界面时再次清理。
+	// @return true = 槽 2 已清空，false = 滞留无法清除（会话应结束）
+	private boolean cleanupResidualResult(MinecraftClient mc, MerchantScreenHandler handler) {
+		Slot slot2 = handler.getSlot(2);
+		if (slot2.hasStack()) {
+			AutoTrade.logger.info("[AutoTrade] 清理遗留交易结果: {}x{}", slot2.getStack().getCount(),
+					Registries.ITEM.getId(slot2.getStack().getItem()));
+			quickMoveSlot(mc, handler, slot2);
+			// 本地模拟同步执行（clickSlot 本地模拟），点击返回后本地槽状态已更新；仍滞留 = 背包无空间
+			if (slot2.hasStack()) {
+				AutoTrade.logger.info("[AutoTrade] 遗留交易结果无法移入背包（背包已满）");
+				inventoryBlocked = true;
+				moveOutInputCosts(mc, handler);
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// 输入移出：槽 0/1 剩余成本 QUICK_MOVE 回背包；各自移出失败 → 置阻塞标志（关窗 offerOrDrop 兜底）
+	private void moveOutInputCosts(MinecraftClient mc, MerchantScreenHandler handler) {
+		moveOutInputSlot(mc, handler, 0);
+		moveOutInputSlot(mc, handler, 1);
+	}
+
+	// 移出单个输入槽（槽 slotIndex）的剩余成本：QUICK_MOVE 回背包；移出失败（槽内仍有物品）→ 打日志 +
+	// 置 inventoryBlocked=true（背包满，关窗 offerOrDrop 兜底）。@return true = 移出成功（或槽本就为空）
+	private boolean moveOutInputSlot(MinecraftClient mc, MerchantScreenHandler handler, int slotIndex) {
+		Slot slot = handler.getSlot(slotIndex);
+		if (slot.hasStack()) {
+			quickMoveSlot(mc, handler, slot);
+			if (slot.hasStack()) {
+				AutoTrade.logger.info("[AutoTrade] 成本物品无法移回背包，标记背包阻塞");
+				inventoryBlocked = true;
+				return false;
+			}
+		}
+		return true;
+	}
+
+	// 预扫描：收集未耗尽、匹配交易对、价格达标且背包有成本的交易项。
+	// 结果是每 tick 的快照；后续成本变化由轮到该交易项时的槽 2 状态再次确认。
+	List<OfferState> scanExecutableOffers(MerchantScreenHandler handler, List<TradePair> pairs, PlayerEntity player) {
+		List<OfferState> list = new ArrayList<>();
+		TradeOfferList offers = handler.getRecipes();
+		for (int i = 0; i < offers.size(); i++) {
+			TradeOffer candidate = offers.get(i);
+			// 扫描发生在任何交易之前（本窗口尚未交易，offers 为开屏时服务端同步真值）→ 此刻 isDisabled() 准确；
+			// 开窗即耗尽的 offer 直接跳过（省一次装填尝试）；会话中期耗尽的 offer 在下轮窗口重开时服务端重新同步
+			// offers → isDisabled()=true → 同样被本检查过滤（零浪费装填）。会话中期 uses 仍不可靠——内循环终止/
+			// 耗尽标记只根据输出槽状态和已同步的交易数据判断。
+			if (candidate.isDisabled())
+				continue;
+			for (int pairIndex = 0; pairIndex < pairs.size(); pairIndex++) {
+				TradePair pair = pairs.get(pairIndex);
+				// 未启用的交易对跳过
+				if (!pair.isEnabled())
+					continue;
+				if (isOfferExecutableForPair(candidate, pair, pairIndex, player)) {
+					// 检查全部通过：记入快照列表（携带饿死候选标志）并结束内层交易对循环。
+					// 快照「初始剩余次数」= maxUses − getUses()（非裸 getUses()——裸 uses 对新 offer 为 0，
+					// 避免把新交易项的 uses 误当成已使用次数，导致剩余次数被计算为 0。
+					// 该读取在 SnapshotOfferState 构造时执行（与上方 isDisabled() 同刻 = 开屏服务端同步真值），
+					// 是 OUTPUT_SLOT 策略唯一 allowed 的 uses 读取点（USE 策略经 LiveOfferState 实时读取，见
+					// UseBasedExecutorStrategy）；OUTPUT_SLOT
+					// 循环内（runOneBatch/pass/exactTradeN/容量函数）不再读取 uses。
+					list.add(createOffer(candidate, i, isStarvationCandidate(candidate)));
+					break;
+				}
+			}
+		}
+		return list;
+	}
+
+	// 单 offer 单轮结果枚举：TRADED = 点击已发生且无滞留（保留在 active 下 pass 继续；exhausted=true 时移出）；
+	// DONE = 耗尽/没货/装填失败（正常收尾，移出）；
+	// CAPACITY_SKIP = 容量不足跳过（无输入或候选 affordable=0，不设 blocked，移出）；
+	// STOP = 非候选整批放不下（不 exact-N、不空间封顶兜底，该 offer 本会话不再尝试，移出）；
+	// STUCK = 点击后结果滞留槽 2（背包真满，结束会话）
+	private enum BatchResult {
+		DONE, CAPACITY_SKIP, STOP, STUCK, TRADED
+	}
+
+	// 单 offer 单轮结果 record：result = 出口结果，tradesDone = 本轮实际完成交易笔数（供编排层累计
+	// tradesTotal；跨 pass 累计由 target.tradesDone 承担），
+	// exhausted = 该 offer 剩余次数已耗尽标志（本轮恒 false，仅 TRADED 出口在剩余次数耗尽推导后置位）
+	private record BatchOutcome(BatchResult result, int tradesDone, boolean exhausted) {
+	}
+
+	// 单轮交易体：对单个 offer 执行一次「装填 + 容量判定 + 点击」，每轮至多 1 次点击。
+	// 判定流程：装填 → 槽 2 canCombine(卖品) 否 → DONE → inputBatch 计算（无 uses 项）→
+	// 整批可容纳（canFitEffectiveBatch）→ QUICK_MOVE 点击 → TRADED → 否则候选且 affordable ≥ 1 →
+	// exact-N（单成本 exactTradeN / 双成本 exactTradeNDual，按成本数分流）→ TRADED → 否则
+	// STOP（非候选）/CAPACITY_SKIP（候选 affordable==0）。
+	// 点击后滞留检测：槽 2 仍有物品 → STUCK（会话结束）。耗尽检测只信输出槽（槽 2）状态 + 服务端槽同步
+	// （≥1 tick）；槽 2 空 → DONE。本轮及后续 pass 不再读取 uses（OUTPUT_SLOT 策略限定；USE 策略经
+	// LiveOfferState 实时读取）。
+	// exhausted 仅 TRADED 出口置位（剩余次数耗尽推导）；终止性由调用方 pass 循环保证（每 pass 成交 ≥1 或移出
+	// ≥1）。
+	private BatchOutcome runOneBatch(MinecraftClient mc, MerchantScreenHandler handler, OfferState target) {
+		TradeOffer offer = target.offer;
+		Slot slot2 = handler.getSlot(2);
+		ItemStack result = offer.getSellItem();
+		// 出口结果局部变量：默认 DONE（槽 2 校验失败），容量类出口前置 CAPACITY_SKIP/STOP，
+		// 点击成功出口 TRADED，滞留出口 STUCK
+		BatchResult outcome = BatchResult.DONE;
+		// 1) 装填：setRecipeIndex + switchTo + select 包（顺序同现主循环；setRecipeIndex 不可省略，
+		// 缺省时非 0 号交易本地结果槽可能不生成）
+		refillOffer(mc, handler, target);
+		// 2) 槽 2 canCombine(卖品) 校验：失败 → DONE（耗尽/没货/装填失败/switchTo 提前 return
+		// 的兜底，均表现为不匹配）。耗尽由扫描时 isDisabled()（开屏服务端同步真值）覆盖：本出口仅结束
+		// 该 offer 处理，下轮窗口重开时服务端重新同步 offers → isDisabled() 自然过滤，无需会话级标记集合
+		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {
+			return new BatchOutcome(outcome, 0, false);
+		}
+		// 3) inputBatch = min(floor(槽0/costA), floor(槽1/costB))（无 uses 项）；== 0 →
+		// CAPACITY_SKIP（无输入）
+		int inputBatch = computeInputBatch(handler, offer);
+		if (inputBatch <= 0) {
+			AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 无输入（inputBatch=0）", target.index);
+			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
+		}
+		// 剩余次数推导：remaining = 扫描快照的初始剩余次数 −
+		// 本会话已成交笔数（tradesDone 由 pass 循环跨 pass 累计）；不读 offer.getUses()/isDisabled()
+		int remaining = target.remaining();
+		// 有效整批 = min(整批, 剩余次数)：uses 封顶后本次点击至多交易 remaining 笔
+		// need 按有效整批计算，避免把已达到使用上限的次数算入容量需求。
+		int effectiveBatch = Math.min(inputBatch, remaining);
+		// 防御：有效整批 ≤ 0 → 按 CAPACITY_SKIP 处理（日志注明「剩余次数≤0」；正常流程恒 ≥1——
+		// 扫描已过滤 isDisabled，remaining = initialRemaining − tradesDone 推导恒 ≥ 1，此分支仅防异常）
+		if (effectiveBatch <= 0) {
+			AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 剩余次数≤0（remaining={}）", target.index, remaining);
+			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
+		}
+		// 4) 容量判定数据：有效整批所需数量、结果容量、剩余成本占位和剩余次数。
+		long need = (long) effectiveBatch * result.getCount();
+		int capacity = calculateResultCapacity(handler, result);
+		int reservation = calculateLeftoverReservation(handler, offer, effectiveBatch);
+		logExecuting(handler, target, result, inputBatch, effectiveBatch, remaining, need, capacity, reservation);
+		// 5) 容量判定并执行 QUICK_MOVE、exact-N、CAPACITY_SKIP 或 STOP 分支。
+		BatchOutcome batch = decideAndExecuteBatch(mc, handler, target, offer, slot2, result, inputBatch,
+				effectiveBatch, need, capacity, reservation);
+		// 点击后剩余次数耗尽（推导值：初始剩余 − 已累计成交 − 本轮成交 == 0）→ exhausted=true → pass 循环立即移出
+		// （省下 pass 一次无效 switchTo；不读 offer.getUses()）。
+		if (batch.result() == BatchResult.TRADED) {
+			boolean exhausted = target.exhausted(batch.tradesDone());
+			return new BatchOutcome(BatchResult.TRADED, batch.tradesDone(), exhausted);
+		}
+		return batch;
+	}
+
+	// 容量判定 + 执行分支：有效整批可容纳 → QUICK_MOVE；否则候选且 affordable≥1 →
+	// exact-N（n = min(affordable, effectiveBatch)；双成本再叠加 D1 槽容量预算 64/costX.count，
+	// 按第二成本存在性分流：单成本 exactTradeN / 双成本 exactTradeNDual）；候选 affordable==0 →
+	// CAPACITY_SKIP；非候选 → STOP。
+	// 点击后统一滞留检测（checkResultStuck，QUICK_MOVE 与 exact-N/双成本路径文案不同均为行为契约）。
+	// @return 本轮 BatchOutcome（TRADED/STUCK/CAPACITY_SKIP/STOP；exhausted 由调用方 TRADED
+	// 后推导）
+	private BatchOutcome decideAndExecuteBatch(MinecraftClient mc, MerchantScreenHandler handler, OfferState target,
+			TradeOffer offer, Slot slot2, ItemStack result, int inputBatch, int effectiveBatch, long need, int capacity,
+			int reservation) {
+		if (canFitEffectiveBatch(handler, offer, effectiveBatch)) {
+			// 5) QUICK_MOVE 优先路径：整批可容纳 → 一次点击整批干净耗尽（同 tick 本地增量计数）
+			int tradesDone = tradeClick(mc, handler, slot2, result);
+			// 6) 滞留检测：点击后槽 2 仍有物品 = 背包满 insertItem 失败 → STUCK（会话结束，
+			// 滞留预览由下轮 cleanupResidualResult 续传；输入可能 offerOrDrop 掉地 = 接受）
+			if (checkResultStuck(mc, handler, target, slot2, "[AutoTrade] STUCK offer {}: 结果滞留槽 2 {}x{}（背包已满），结束会话")) {
+				return new BatchOutcome(BatchResult.STUCK, tradesDone, false);
+			}
+			// 7) 点击成功且无滞留 → TRADED（原内层循环的「回绕继续」路径映射为单轮出口之一，
+			// 保留在 active 由下 pass 重新装填继续）
+			return new BatchOutcome(BatchResult.TRADED, tradesDone, false);
+		}
+		// 整批放不下：候选且 affordable ≥ 1 → exact-N（仅防饿死）；候选 affordable==0 →
+		// CAPACITY_SKIP（空间被本批耗尽或初始即满）；非候选 → STOP
+		int affordable = capacity / result.getCount();
+		if (target.starvationCandidate && affordable >= 1) {
+			// 8) exact-N 路径：整批放不下但至少能容纳一笔时，按可用容量交易 n 笔。
+			// n = min(affordable, effectiveBatch)，不会超过剩余次数。
+			int n = Math.min(affordable, effectiveBatch);
+			// 双成本 offer（第二成本存在）：n 受 D1 输入槽容量预算扩展——
+			// M1 = n×costA.count 与 M2 = n×costB.count 必须 ≤ 64（槽 0/1 物理上限 min(64, maxCount)，
+			// 超限放置时 insertStack 截断 → 光标残留，P0 级）；故 n ≤ 64/costA.count 且 ≤ 64/costB.count。
+			if (!offer.getSecondBuyItem().isEmpty()) {
+				ItemStack costA = offer.getAdjustedFirstBuyItem();
+				ItemStack costB = offer.getSecondBuyItem();
+				n = Math.min(n, 64 / costA.getCount());
+				n = Math.min(n, 64 / costB.getCount());
+				// D1 守卫 1：预算不足（n < 1）→ CAPACITY_SKIP（防御——affordable/effectiveBatch ≥ 1 且
+				// costX.count ≤ 64 ⟹ 64/costX.count ≥ 1，正常不可达；不点击、不 fill）
+				if (n < 1) {
+					AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 双成本预算不足（n={}）", target.index, n);
+					return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
+				}
+				// ★双成本 exact-N（替代原「双成本守卫 → quickMoveFallback」；本路径永不回退普通 QUICK_MOVE）★
+				// 出口语义：TRADED = 恰交易 n 笔；CAPACITY_SKIP = 守卫失败且撤销成功（槽 0/1/光标已恢复、
+				// 预览清空 → 不会误判滞留）；STUCK = 撤销失败（背包真满，真异常）
+				BatchOutcome dual = exactTradeNDual(mc, handler, target, n, result, slot2);
+				// 9) 滞留检测（D5 守卫 7，仅成交路径需要）：成功路径输入 M1/M2 精确耗尽 → 槽 2 应清空；
+				// 滞留 = 背包满 insertItem 失败 → STUCK（由下轮 cleanupResidualResult 续传）
+				if (dual.result() == BatchResult.TRADED && checkResultStuck(mc, handler, target, slot2,
+						"[AutoTrade] STUCK offer {}: 双成本 exact-N 后结果滞留槽 2 {}x{}，结束会话")) {
+					return new BatchOutcome(BatchResult.STUCK, dual.tradesDone(), false);
+				}
+				return dual;
+			}
+			int tradesDone = exactTradeN(mc, handler, offer, target.index, n, result, slot2);
+			// 9) 滞留检测（守卫回退路径可能滞留预览）：有物品 → STUCK（由下轮 cleanupResidualResult 续传）
+			if (checkResultStuck(mc, handler, target, slot2,
+					"[AutoTrade] STUCK offer {}: exact-N/回退后结果滞留槽 2 {}x{}，结束会话")) {
+				return new BatchOutcome(BatchResult.STUCK, tradesDone, false);
+			}
+			// 10) 点击成功且无滞留 → TRADED（空间被本批耗尽 → 下 pass affordable=0 → CAPACITY_SKIP
+			// 自然移出，每会话最多 1 次 exact-N）
+			return new BatchOutcome(BatchResult.TRADED, tradesDone, false);
+		}
+		if (target.starvationCandidate) {
+			// 候选但 affordable == 0（空间被本批耗尽或初始即满）→ CAPACITY_SKIP → 移出 → 容器 IO
+			AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 候选但 affordable=0（capacity={} sellCount={}）",
+					target.index, capacity, result.getCount());
+			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
+		}
+		// 11) STOP：非候选整批放不下 → 该 offer 本会话不再尝试（不 exact-N、不空间封顶兜底）→
+		// 移出 active → 会话结束 → 输出阈值容器 IO 下轮整批续传
+		AutoTrade.logger.info(
+				"[AutoTrade] STOP offer {}: 空间满，结束会话待容器 IO（inputBatch={} need={} capacity={} reservation={}）",
+				target.index, inputBatch, need, capacity, reservation);
+		return new BatchOutcome(BatchResult.STOP, 0, false);
+	}
+
+	// 记录执行前的容量判定数据；日志格式由运行时诊断使用，禁止改动。
+	private void logExecuting(MerchantScreenHandler handler, OfferState target, ItemStack result, int inputBatch,
+			int effectiveBatch, int remaining, long need, int capacity, int reservation) {
+		AutoTrade.logger.info(
+				"[AutoTrade] EXECUTING trade offer {} result={} inputBatch={} need={} capacity={} reservation={} candidate={} effectiveBatch={} remaining={}",
+				target.index, Registries.ITEM.getId(result.getItem()), inputBatch, need, capacity, reservation,
+				target.starvationCandidate, effectiveBatch, remaining);
+	}
+
+	// 点击后滞留检测：槽 2 仍有物品 = 背包满 insertItem 失败 → STUCK（会话结束，滞留预览由下轮
+	// cleanupResidualResult 续传；输入可能 offerOrDrop 掉地 = 接受）。日志文案由调用方按路径传入（
+	// QUICK_MOVE 与 exact-N/回退路径文案不同，均为行为契约）。@return true = 滞留（调用方走 STUCK 出口）
+	private boolean checkResultStuck(MinecraftClient mc, MerchantScreenHandler handler, OfferState target, Slot slot2,
+			String stuckLog) {
+		if (slot2.hasStack()) {
+			AutoTrade.logger.info(stuckLog, target.index, slot2.getStack().getCount(),
+					Registries.ITEM.getId(slot2.getStack().getItem()));
+			return true;
+		}
+		return false;
+	}
+
+	// 交易点击：QUICK_MOVE 槽 2，并统计本次点击在背包中新增的结果数量。
+	// = 连续交易直到输入耗尽/uses 打满/背包满（空间封顶）；干净退出或滞留预览由调用方判定。
+	// 计数：点击前快照槽 3-38 卖品总数（快照时机 = 点击前、exact-N 操纵后 → 成本已移入槽 0/1，
+	// cost==sell 不污染）→ 点击后立即再快照 → 差值 / sellCount 累加；无跨会话计数状态。
+	// @return 本次点击实际成交笔数
+	private int tradeClick(MinecraftClient mc, MerchantScreenHandler handler, Slot slot2, ItemStack result) {
+		// 点击前快照（槽 3-38 卖品总数）
+		int before = countSellItemsInInventory(handler, result);
+		quickMoveSlot(mc, handler, slot2);
+		// 点击后立即再快照：差值 / sellCount = 同 tick 本地增量成交笔数
+		return (countSellItemsInInventory(handler, result) - before) / result.getCount();
+	}
+
+	// exact-N 守卫回退助手：先重新装填交易项（槽 0/1 残余成本放回并
+	// autofill 重填、槽 2 预览重建），再空间封顶 QUICK_MOVE 点击——容量 ≥ sellCount → 成交 ≥1（防饿死）；
+	// 容量 < sellCount → 结果滞留 → 由调用方 STUCK 出口终止。不能直接点击空槽 2。
+	private int quickMoveFallback(MinecraftClient mc, MerchantScreenHandler handler, int offerIndex, Slot slot2,
+			ItemStack result) {
+		handler.switchTo(offerIndex);
+		if (mc.getNetworkHandler() != null) {
+			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(offerIndex));
+		}
+		return tradeClick(mc, handler, slot2, result);
+	}
+
+	// exact-N 流程（仅单成本交易）：尽量恰好准备 N 笔成本并返回成交笔数（含守卫回退
+	// 空间封顶 QUICK_MOVE 路径）。流程：a QUICK_MOVE 槽 0 清空 → b PICKUP 成本源槽（3-38 中与 M 最接近
+	// 的堆叠）→ c 右键源槽 (S−M) 次（每次 1 包）→ d 点击槽 0 放置 M → e 槽 2 canCombine 校验 →
+	// f 点击槽 2（服务端 while 恰交易 N 笔，输入 M 精确耗尽 → 干净退出）。
+	// 守卫（任一命中 → 回退空间封顶 QUICK_MOVE）：S−M > EXACT_N_MAX_RIGHT_CLICKS（每源槽右键预算）；
+	// 双成本（★已不可达★——双成本由 decideAndExecuteBatch 分流到 exactTradeNDual（双成本 exact-N，
+	// 永不回退），本守卫仅作防御保留，防未来调用路径回归）；a 失败（槽 0 移出后仍有物品）；
+	// e 失败（槽 2 不匹配）。
+	private int exactTradeN(MinecraftClient mc, MerchantScreenHandler handler, TradeOffer offer, int offerIndex, int n,
+			ItemStack result, Slot slot2) {
+		// M = N 笔交易所需的第一成本总量
+		ItemStack cost = offer.getAdjustedFirstBuyItem();
+		int m = n * cost.getCount();
+		// 守卫：双成本 offer 不执行 exact-N → 回退空间封顶 QUICK_MOVE（★已不可达★：双成本由
+		// decideAndExecuteBatch 改走 exactTradeNDual 不再进入本方法；本守卫仅作防御保留，防未来调用路径回归）
+		if (!offer.getSecondBuyItem().isEmpty()) {
+			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（双成本）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
+			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+		}
+		Slot slot0 = handler.getSlot(0);
+		// a) QUICK_MOVE 槽 0（autofill 整组移回背包）；失败（槽 0 移出后仍有物品）→ 回退空间封顶 QUICK_MOVE
+		if (slot0.hasStack()) {
+			quickMoveSlot(mc, handler, slot0);
+			if (slot0.hasStack()) {
+				AutoTrade.logger.info("[AutoTrade] exact-N 守卫（a 失败：槽 0 移出后仍有物品）offer {}: 回退空间封顶 QUICK_MOVE",
+						offerIndex);
+				return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+			}
+		}
+		// b) 找成本源槽：优先「数量 ≥ M 且 |S−M| 最小」，否则使用数量最大堆叠；无成本堆叠
+		// （防御性：输入槽已 autofill 过，正常不可达）→ 回退空间封顶 QUICK_MOVE
+		Slot source = selectCostSourceSlot(handler, cost, m);
+		if (source == null) {
+			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（无成本源堆叠）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
+			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+		}
+		int s = source.getStack().getCount();
+		// 守卫：右键包数预算 S−M > EXACT_N_MAX_RIGHT_CLICKS → 回退空间封顶 QUICK_MOVE（仍防饿死）
+		if (s - m > EXACT_N_MAX_RIGHT_CLICKS) {
+			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（S−M={} > {}）offer {}: 回退空间封顶 QUICK_MOVE", s - m,
+					EXACT_N_MAX_RIGHT_CLICKS, offerIndex);
+			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+		}
+		// c) PICKUP 拿起源堆叠整组 → 右键源槽 (S−M) 次（每次放下 1 包，剩余 S−M 包留在光标）→
+		// d) 点击槽 0 放置 M（光标剩余 S−M 包被放回源槽）
+		clickSlot(mc, handler, source.id, 0, SlotActionType.PICKUP);
+		int rightClicks = Math.max(0, s - m);
+		for (int k = 0; k < rightClicks; k++) {
+			clickSlot(mc, handler, source.id, 1, SlotActionType.PICKUP);
+		}
+		clickSlot(mc, handler, slot0.id, 0, SlotActionType.PICKUP);
+		// e) 槽 2 canCombine(卖品) 校验：失败（耗尽/错配/装填异常）→ 回退空间封顶 QUICK_MOVE
+		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {
+			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（e 失败：槽 2 不匹配）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
+			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+		}
+		// f) 点击槽 2（服务端 while 恰交易 N 笔，输入精确耗尽 → 干净退出）
+		return tradeClick(mc, handler, slot2, result);
+	}
+
 	// 双成本 exact-N 守卫失败的出口映射（D5 守卫 2-5）：先撤销（undoFill），撤销成功 → 槽 0/1/光标均恢复、
 	// 预览清空 → CAPACITY_SKIP（该 offer 本会话不再尝试）；撤销失败（背包真满，物品放不回）→ STUCK
 	// （真异常，保留现场由关窗 offerOrDrop 兜底）。@return CAPACITY_SKIP / STUCK 的
@@ -948,8 +987,8 @@ public class TradeExecutor {
 	// 前置：n 已由调用方按 D1 预算封顶（n ≤ 64/costX.count ⟹ M1/M2 ≤ 64，放置不截断）。
 	// @return TRADED（tradesDone = 实际成交笔数）/ CAPACITY_SKIP /
 	// STUCK（BatchResult/BatchOutcome 语义不变）
-	private BatchOutcome exactTradeNDual(MinecraftClient mc, MerchantScreenHandler handler, ExecutableOffer target,
-			int n, ItemStack result, Slot slot2) {
+	private BatchOutcome exactTradeNDual(MinecraftClient mc, MerchantScreenHandler handler, OfferState target, int n,
+			ItemStack result, Slot slot2) {
 		TradeOffer offer = target.offer;
 		// M1/M2 = n 笔交易所需的两成本总量（n 已按 D1 封顶 → M ≤ 64，槽 0/1 可完整容纳）
 		ItemStack costA = offer.getAdjustedFirstBuyItem();
@@ -1033,64 +1072,35 @@ public class TradeExecutor {
 		return new BatchOutcome(BatchResult.TRADED, tradeClick(mc, handler, slot2, result), false);
 	}
 
-	// 判断交易与交易对是否匹配：成本物品等于 giveItem 且产出物品等于 getItem
-	static boolean doesOfferMatchPair(TradeOffer offer, TradePair pair) {
-		ItemStack costA = offer.getAdjustedFirstBuyItem();
-		ItemStack costB = offer.getSecondBuyItem();
-		boolean resultMatch = ItemStringHelper.matches(offer.getSellItem(), pair.getGetItem());
-		if (pair.getGiveItem2() != null && !pair.getGiveItem2().isBlank()) {
-			return resultMatch && ItemStringHelper.matches(costA, pair.getGiveItem())
-					&& ItemStringHelper.matches(costB, pair.getGiveItem2());
-		}
-		return resultMatch && costB.isEmpty() && ItemStringHelper.matches(costA, pair.getGiveItem());
+	/** 上次交易扫描是否因背包空间不足而跳过全部匹配交易（会话层据此提前结束并触发容器 IO） */
+	public boolean isInventoryBlocked() {
+		return inventoryBlocked;
 	}
 
-	// 检查玩家背包是否足以支付该交易的全部成本槽（第一/第二成本物品）
-	static boolean playerHasMerchantCosts(PlayerEntity player, TradeOffer offer) {
-		ItemStack costA = offer.getAdjustedFirstBuyItem();
-		if (!costA.isEmpty() && !hasEnoughCostItems(player, costA)) {
-			return false;
-		}
-		ItemStack costB = offer.getSecondBuyItem();
-		if (!costB.isEmpty() && !hasEnoughCostItems(player, costB)) {
-			return false;
-		}
-		return true;
-	}
+	// 交易项剩余次数/耗尽状态抽象：两策略的差异点（非 use = 快照推导记账；use = 直接读 offer.getUses()）。
+	// 状态是策略差异的载体，嵌套于共享流程表达归属（具体实现类嵌套于各自策略）
+	abstract static class OfferState {
+		final TradeOffer offer;
+		final int index;
+		final boolean starvationCandidate;
 
-	// 统计背包中与 required 精确匹配（含 NBT）的物品总数是否达到所需数量
-	private static boolean hasEnoughCostItems(PlayerEntity player, ItemStack required) {
-		int need = required.getCount();
-		int have = 0;
-		PlayerInventory inv = player.getInventory();
-		for (int s = 0; s < inv.size(); s++) {
-			ItemStack stack = inv.getStack(s);
-			if (stacksMatchExact(stack, required)) {
-				have += stack.getCount();
-				if (have >= need) {
-					return true;
-				}
-			}
+		OfferState(TradeOffer offer, int index, boolean starvationCandidate) {
+			this.offer = offer;
+			this.index = index;
+			this.starvationCandidate = starvationCandidate;
 		}
-		return false;
-	}
 
-	// 精确匹配两个物品栈：同物品且 NBT 完全相等（与 ItemStack.canCombine 的 NBT 语义一致）
-	static boolean stacksMatchExact(ItemStack a, ItemStack b) {
-		if (a.isEmpty() || b.isEmpty()) {
-			return false;
+		/**
+		 * 当前剩余次数（本次点击前调用；非 use = initialRemaining − tradesDone，use = maxUses −
+		 * getUses()）
+		 */
+		abstract int remaining();
+
+		/** 本轮成交 batchTradesDone 笔后是否耗尽（非 use = 推导，use = uses ≥ maxUses） */
+		abstract boolean exhausted(int batchTradesDone);
+
+		/** 跨 pass 累计成交笔数（use 版无需记账，基类空实现） */
+		void record(int tradesDone) {
 		}
-		if (!a.isOf(b.getItem())) {
-			return false;
-		}
-		NbtCompound tagA = a.getNbt();
-		NbtCompound tagB = b.getNbt();
-		if (tagA == null && tagB == null) {
-			return true;
-		}
-		if (tagA == null || tagB == null) {
-			return false;
-		}
-		return tagA.equals(tagB);
 	}
 }

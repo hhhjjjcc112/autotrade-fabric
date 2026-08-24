@@ -16,14 +16,15 @@ import net.minecraft.util.math.Direction;
 
 /**
  * 「交互指定方块触发机关」任务（VOID 返回触发，附录 H）：与触发方块交互产生红石信号，由装置把玩家传回原侧。 三种类型共用 interactBlock
- * 交互原语，差异只在副作用处理（TRAPPED_CHEST 含「保持 GUI → 主动关闭」，BUTTON/LEVER 交互即完成）。
- * 完成语义（空间完成）：成功 = 信号已发 + 玩家已传回（WAIT_TRANSIT 每 tick 校验：触发方块区块未加载或距离 > 64
- * 格视为已传回）， 而非「信号已发」即完成——机关无反应时 300 tick 超时后失败结束（结果由机器层决定后续处理）。
+ * 交互原语，差异只在副作用处理（TRAPPED_CHEST 开箱后确认 GUI 出现即保持打开——信号持续到玩家传回时服务端自动关窗；
+ * BUTTON/LEVER 交互即完成，无 GUI）。 完成语义（空间完成）：成功 = 信号已发 + 玩家已传回（WAIT_TRANSIT 每 tick
+ * 校验：触发方块区块未加载或距离 > 64 格视为已传回）， 而非「信号已发」即完成——机关无反应时 300 tick
+ * 超时后失败结束（结果由机器层决定后续处理）。
  */
 public class BlockTriggerTask extends Task {
 
 	private enum State {
-		INTERACTING, HOLDING, CLOSING, WAIT_TRANSIT
+		INTERACTING, CONFIRMING, WAIT_TRANSIT
 	}
 
 	/** 触发方块坐标 */
@@ -33,8 +34,6 @@ public class BlockTriggerTask extends Task {
 	private State state = State.INTERACTING;
 	/** 交互后等待 GUI 出现的剩余超时（tick），仅 TRAPPED_CHEST 使用 */
 	private int timeout = 0;
-	/** 开箱后保持 GUI 产生信号的剩余 tick（TRAP_CHEST_DELAY），仅 TRAPPED_CHEST 使用 */
-	private int holdTicks = 0;
 	/** GUI 是否已被确认出现过（= 服务端已登记 viewer count +1，信号已生效） */
 	private boolean guiSeen = false;
 	/** LEVER 类型：拉杆已处于打开状态，需「先还原再触发」两段交互（H.7 风险 4） */
@@ -59,7 +58,7 @@ public class BlockTriggerTask extends Task {
 
 	@Override
 	public TaskResult tick(MinecraftClient mc) {
-		// 空间完成探测：任意推进状态（INTERACTING/HOLDING/CLOSING）中检测到玩家已传回 → 直接进入 WAIT_TRANSIT
+		// 空间完成探测：任意推进状态（INTERACTING/CONFIRMING）中检测到玩家已传回 → 直接进入 WAIT_TRANSIT
 		// 收尾（覆盖等待期间被传送的情况）
 		if (state != State.WAIT_TRANSIT && isPlayerReturned(mc)) {
 			state = State.WAIT_TRANSIT;
@@ -70,8 +69,7 @@ public class BlockTriggerTask extends Task {
 		// 每个 tick 由当前状态推进一步；各分支方法内部返回 RUNNING 或终态结果（SUCCEEDED / FAILED），switch 表达式无贯穿
 		return switch (state) {
 			case INTERACTING -> tickInteracting(mc);
-			case HOLDING -> tickHolding(mc);
-			case CLOSING -> tickClosing(mc);
+			case CONFIRMING -> tickConfirming(mc);
 			case WAIT_TRANSIT -> tickWaitTransit(mc);
 		};
 	}
@@ -161,10 +159,10 @@ public class BlockTriggerTask extends Task {
 				type.getStringValue(), wasLeverReset ? "lever reset" : "none");
 
 		if (type == ReturnTriggerType.TRAPPED_CHEST) {
-			// 开箱后：等待 GUI 出现（OPEN_TIMEOUT），确认后保持 TRAP_CHEST_DELAY 信号再关闭
+			// 开箱后：进入 CONFIRMING 确认 GUI 出现（信号已登记），确认后保持 GUI 打开进入 WAIT_TRANSIT——
+			// 信号持续到玩家传回为止（服务端按距离自动关窗），无需固定保持时长
 			timeout = Configs.Generic.OPEN_TIMEOUT.getIntegerValue();
-			holdTicks = Configs.Generic.TRAP_CHEST_DELAY.getIntegerValue();
-			state = State.HOLDING;
+			state = State.CONFIRMING;
 		} else {
 			// BUTTON/LEVER：无 GUI，交互完成后进入 WAIT_TRANSIT 等待玩家传回（信号已发 ≠ 完成，空间完成）
 			state = State.WAIT_TRANSIT;
@@ -173,22 +171,20 @@ public class BlockTriggerTask extends Task {
 		return TaskResult.RUNNING;
 	}
 
-	private TaskResult tickHolding(MinecraftClient mc) {
-		// GUI 已打开：保持 TRAP_CHEST_DELAY 产生持续信号，给机关反应时间
+	private TaskResult tickConfirming(MinecraftClient mc) {
+		// GUI 已打开：确认信号已登记（服务端 viewer count +1）→ 保持 GUI 打开进入 WAIT_TRANSIT，
+		// 信号持续到玩家传回（服务端按距离自动关窗），机关反应窗口由此保证，无需固定保持时长
 		if (mc.currentScreen instanceof GenericContainerScreen) {
 			guiSeen = true;
-			if (holdTicks > 0) {
-				holdTicks--;
-				return TaskResult.RUNNING;
-			}
-			// 保持时长已走完 → 关闭 GUI
-			state = State.CLOSING;
+			state = State.WAIT_TRANSIT;
+			transitTicks = 0;
 			return TaskResult.RUNNING;
 		}
 
-		// GUI 未打开：曾被确认但现已关闭（玩家已被机关传回，GUI 因位置变化失效）→ 尽快收尾，不必等满（H.6 风险 1）
+		// GUI 未打开：曾被确认但现已关闭（玩家已被机关传回，GUI 因位置变化失效）→ 尽快收尾，不必等待（空间完成探测的兜底）
 		if (guiSeen) {
-			state = State.CLOSING;
+			state = State.WAIT_TRANSIT;
+			transitTicks = 0;
 			return TaskResult.RUNNING;
 		}
 
@@ -203,27 +199,19 @@ public class BlockTriggerTask extends Task {
 		return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 	}
 
-	private TaskResult tickClosing(MinecraftClient mc) {
-		// 完成前置：GUI 已关闭（H.6 风险 2：残留窗口会挡住下一轮村民交互）
-		if (mc.currentScreen instanceof GenericContainerScreen screen) {
-			screen.close();
-			// close() 同步置 null，下 tick 即进 WAIT_TRANSIT，无需额外等待
-			return TaskResult.RUNNING;
-		}
-		// GUI 已关（D5：强制关 GUI 保留为保险）→ 进入 WAIT_TRANSIT 等待玩家传回（空间完成）
-		state = State.WAIT_TRANSIT;
-		transitTicks = 0;
-		return TaskResult.RUNNING;
-	}
-
 	private TaskResult tickWaitTransit(MinecraftClient mc) {
-		// 玩家已传回（区块未加载或距离 > 64 格）→ 空间完成，任务成功结束
+		// 玩家已传回（区块未加载或距离 > 64 格）→ 空间完成，任务成功结束。
+		// 传回后服务端按容器距离检查（8 格）自动关闭陷阱箱窗口（ServerPlayerEntity canUse 检查），无需主动关窗
 		if (isPlayerReturned(mc)) {
 			AutoTrade.logger.info("[BlockTrigger] 玩家已传回，返回触发成功 (pos={})", pos.toShortString());
 			return TaskResult.SUCCEEDED;
 		}
-		// 机关无反应（玩家一直未离开返回区）→ 超时后瞬态失败结束（不再回 INTERACTING 重新触发，结果由机器层决定）
+		// 机关无反应（玩家一直未离开返回区）→ 失败前主动关闭残留窗口（挡住下一轮交互），再超时瞬态失败结束（不再回
+		// INTERACTING 重新触发，结果由机器层决定）
 		if (++transitTicks >= TRANSIT_TIMEOUT_TICKS) {
+			if (mc.currentScreen instanceof GenericContainerScreen screen) {
+				screen.close();
+			}
 			AutoTrade.logger.warn("[BlockTrigger] 触发后 {} tick 内玩家未离开返回区 (pos={})", TRANSIT_TIMEOUT_TICKS,
 					pos.toShortString());
 			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);

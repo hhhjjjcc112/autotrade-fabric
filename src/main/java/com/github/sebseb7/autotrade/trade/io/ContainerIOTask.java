@@ -13,7 +13,6 @@ import net.minecraft.block.BarrelBlock;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.ChestBlock;
 import net.minecraft.block.ShulkerBoxBlock;
-import net.minecraft.block.TrappedChestBlock;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
@@ -37,7 +36,6 @@ public class ContainerIOTask extends Task {
 	private State state = State.OPENING;
 	private final IOIntent intent;
 	private int containerTimeout = 0;
-	private int trapChestDelay = 0;
 	private int transferLimit = 0;
 	private int transferred = 0;
 
@@ -86,12 +84,6 @@ public class ContainerIOTask extends Task {
 				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.io.not_container",
 						pos.toShortString(), blockState.getBlock().getName().getString());
 				return TaskResult.failed(FailReason.CONFIG);
-			}
-			// 陷阱箱需要额外延迟等待红石信号稳定
-			if (blockState.getBlock() instanceof TrappedChestBlock) {
-				trapChestDelay = Configs.Generic.TRAP_CHEST_DELAY.getIntegerValue();
-			} else {
-				trapChestDelay = 0;
 			}
 		}
 
@@ -150,12 +142,6 @@ public class ContainerIOTask extends Task {
 			return TaskResult.failed(FailReason.TRANSIENT);
 		}
 		containerTimeout = 0;
-
-		// 陷阱箱延迟：等待红石信号稳定后再操作
-		if (trapChestDelay > 0) {
-			trapChestDelay--;
-			return TaskResult.RUNNING;
-		}
 
 		ScreenHandler handler = screenHandlerOf(mc.currentScreen);
 

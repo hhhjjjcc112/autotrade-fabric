@@ -161,21 +161,22 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		AutoTrade.logger.info("[MovingMode] IDLE → TRADE_SESSION (villager id={})", dispatchedVillagerId);
 	}
 
-	/** 扫描范围（格数）；MOVING 的扫描放大（×1.5）与处理记录失效阈值（> 1.5×范围）共用 */
+	/** 扫描范围（格数）；MOVING 的扫描放大（×范围乘数配置）与处理记录失效阈值（> 乘数×范围）共用 */
 	private double scanRange() {
-		return Configs.Generic.VILLAGER_SCAN_RANGE.getIntegerValue();
+		return Configs.Generic.VILLAGER_SCAN_RANGE.getIntegerValue()
+				* Configs.Moving.MOVING_RANGE_MULTIPLIER.getDoubleValue();
 	}
 
 	/**
 	 * 返回范围内全部未处理村民（距离升序），供每 tick 评分决策（M1/M6）。 同时清理失效处理记录（M3）：记录失效条件 = 村民消失 或 距离 >
-	 * 1.5×扫描范围 —— MOVING 村民交易后不消失，若仅按消失清理则记录只增不减、补货后永不重交易； 玩家离开范围后记录失效，返回时村民可重新交易。
+	 * 范围乘数×扫描范围 —— MOVING 村民交易后不消失，若仅按消失清理则记录只增不减、补货后永不重交易； 玩家离开范围后记录失效，返回时村民可重新交易。
 	 */
 	private List<Entity> findUnprocessedVillagers(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
 			return List.of();
 		}
-		double range = scanRange() * 1.5;
-		// M3：清理失效处理记录（消失 或 离开 1.5×扫描范围）
+		double range = scanRange();
+		// M3：清理失效处理记录（消失 或 离开 范围乘数×扫描范围）
 		processedVillagers.removeIf(id -> {
 			Entity e = mc.world.getEntityById(id);
 			return e == null || e.getPos().distanceTo(mc.player.getPos()) > range;

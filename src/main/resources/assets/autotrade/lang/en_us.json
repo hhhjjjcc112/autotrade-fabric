@@ -4,6 +4,7 @@
     "autotrade.gui.button.config_gui.io_input": "IO Input",
     "autotrade.gui.button.config_gui.io_output": "IO Output",
     "autotrade.gui.button.config_gui.static": "Static Trade",
+    "autotrade.gui.button.config_gui.moving": "Moving Trade",
     "autotrade.gui.button.config_gui.void": "Void Trade",
     "autotrade.gui.button.config_gui.hotkeys": "Hotkeys",
     "autotrade.gui.title.configs": "AutoTrade",
@@ -59,6 +60,9 @@
     "autotrade.trademode.moving": "§bMoving Trade",
     "autotrade.trademode.void": "§5Void Trade",
 
+    "autotrade.executormode.output_slot": "§7Output-slot derived (no uses)",
+    "autotrade.executormode.use": "§bDirect uses read (default)",
+
     "autotrade.returntrigger.none": "None (disabled)",
     "autotrade.returntrigger.trapped_chest": "Trapped Chest",
     "autotrade.returntrigger.button": "Button",
@@ -68,6 +72,7 @@
 
     "config.name.enabled": "Enabled",
     "config.name.trademode": "Trade Mode",
+    "config.name.tradeexecutormode": "Trade Executor Mode",
     "config.name.villagerscanrange": "Villager Scan Range",
     "config.name.containeriointerval": "Container Operation Interval",
     "config.name.containerioidleinterval": "Container Operation Idle Interval",
@@ -76,6 +81,7 @@
     "config.name.tasktimeout": "Task Timeout",
 
     "config.name.tradeinterval": "Trade Interval",
+    "config.name.movingrangemultiplier": "Moving Scan Range Multiplier",
 
     "config.name.voidteleporttimeout": "Void Teleport Timeout",
     "config.name.voidunloaddelay": "Void Unload Delay",
@@ -93,6 +99,7 @@
 
     "config.comment.enabled": "Trade with villagers in range when enabled",
     "config.comment.trademode": "Trade mode: Static Trade, Moving Trade, Void Trade",
+    "config.comment.tradeexecutormode": "Trade executor strategy: USE (default, reads offer.getUses() directly; simpler but relies on the local click simulation) or OUTPUT_SLOT (does not read offer uses; snapshot-based remaining)",
     "config.comment.villagerscanrange": "Villager search radius (blocks)",
     "config.comment.containeriointerval": "Min ticks between container operations (0 = check every tick)",
     "config.comment.containerioidleinterval": "Ticks to wait when no container operation is needed",
@@ -101,6 +108,7 @@
     "config.comment.tasktimeout": "Max ticks a single task may run before it is force-aborted and control returns to idle decisions (a failed void return trigger is retried next cycle). Prevents stuck states (e.g. trade offers never syncing). 0 = disabled. Raise if Void Teleport Timeout or Void Unload Delay is set above this value",
 
     "config.comment.tradeinterval": "Min ticks between trade rounds in static mode (100 ticks = 5 seconds)",
+    "config.comment.movingrangemultiplier": "Multiplier applied to the villager scan range in moving mode (used for both the scan radius and the processed-villager invalidation threshold); 1.5 = 1.5x the base range",
 
     "config.comment.voidteleporttimeout": "Timeout ticks waiting for the villager to disappear (player teleport) after the trade screen opened (100 ticks = 5 seconds); close the screen and skip the villager when it expires; 0 = wait indefinitely",
     "config.comment.voidunloaddelay": "Ticks to wait after the villager disappears (player teleport) before trading, so the server finishes unloading the villager's chunk and trade counts are not persisted to the villager (20 ticks = 1 second; 0 = trade immediately; raise if trades keep being exhausted)",

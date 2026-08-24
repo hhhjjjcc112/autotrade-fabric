@@ -18,7 +18,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 - **多交易对**：可同时添加并执行多个交易对（上游仅单交易对），并新增交易对编辑 / 列表 GUI
 - **双物品交易（give2）**：单个交易可包含两个输入物品，容器 IO 按物品配置（ItemIO 条目）
 - **设置页选项卡化**：交易对与物品 IO 配置改为设置页内的选项卡（通用 / 交易对 / IO输入 / IO输出 / 静止交易 / 虚空交易 / 快捷键），不再弹出独立配置窗口
-- **交易执行器重写**：一次性会话处理、公平轮询、精确右键次数、双成本交易、库存满检测
+- **交易执行器重写**：一次性会话处理、公平轮询、精确右键次数、双成本交易、库存满检测、可切换执行策略（USE 默认 / OUTPUT_SLOT）
 - **库存满自动暂停**：背包满时自动暂停交易，腾出空间后继续
 - **零进度会话冷却**：MOVING / VOID 模式可配置长时间无交易进展时的会话冷却
 - **容器操作延迟**：新增 Container Delay 设置，可控制容器操作的最小间隔
@@ -64,19 +64,21 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 |------|------|------|
 | Generic | `Enabled` | 总开关 |
 | Generic | `Trade Mode` | STATIC / MOVING / VOID 三种模式 |
+| Generic | `Trade Executor Mode` | 交易执行策略：USE（默认，直接读取 offer uses，逻辑更简）/ OUTPUT_SLOT（可选，不读取 offer uses，按快照推导剩余次数） |
 | Generic | `Villager Scan Range` | 村民搜索半径（格） |
 | Generic | `Trade Pairs` | 交易对列表（JSON，配置键 `tradePairs`），在「交易对」选项卡管理（列表 + 行内编辑） |
 | Generic | `Item IO` | 物品容器 IO 列表（JSON，配置键 `itemIO`，条目含 `enabled` 开关），在「IO输入 / IO输出」选项卡管理，条目由交易对自动派生 |
 | Static | `Trade Interval` | 静止模式每轮交易间隔（tick，100 = 5 秒） |
 | Static | `Container IO Interval` | 静止模式两次容器操作之间的最小间隔（tick，0 = 每 tick 都检查） |
 | Static | `Container IO Idle Interval` | 静止模式无容器操作需要执行时等待的 tick 数 |
+| Moving | `Moving Scan Range Multiplier` | 移动模式村民扫描范围乘数（作用于扫描半径与已处理村民记录失效阈值；1.5 = 基础范围的 1.5 倍） |
 | Void | `Void Teleport Timeout` | 开窗后等待村民消失（玩家传送完成）的超时（tick） |
 | Void | `Void Return Type` / `Void Return Pos` | 交易后传送玩家的返回触发块类型与坐标（陷阱箱/按钮/拉杆） |
 | Hotkeys | `Toggle Trading` / `Open GUI Settings` / `Add Trade Pair` | 开关交易 / 打开设置 / 添加交易对 |
 
 ## 设置界面
 
-设置界面（默认热键 **Right-Shift+T**）包含 **7 个选项卡**：**通用 / 交易对 / IO输入 / IO输出 / 静止交易 / 虚空交易 / 快捷键**。交易对与物品 IO 配置均内嵌为选项卡，不再弹出独立窗口。
+设置界面（默认热键 **Right-Shift+T**）包含 **8 个选项卡**：**通用 / 交易对 / IO输入 / IO输出 / 静止交易 / 移动交易 / 虚空交易 / 快捷键**。交易对与物品 IO 配置均内嵌为选项卡，不再弹出独立窗口。
 
 ### 交易对选项卡
 

@@ -10,6 +10,7 @@ import fi.dy.masa.malilib.config.ConfigUtils;
 import fi.dy.masa.malilib.config.IConfigHandler;
 import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
+import fi.dy.masa.malilib.config.options.ConfigDouble;
 import fi.dy.masa.malilib.config.options.ConfigInteger;
 import fi.dy.masa.malilib.config.options.ConfigString;
 import fi.dy.masa.malilib.util.FileUtils;
@@ -23,12 +24,13 @@ public class Configs implements IConfigHandler {
 	public static class Generic {
 		public static final ConfigBoolean ENABLED = new ConfigBoolean("enabled", false,
 				"Trade with villagers in range when enabled");
-		public static final ConfigOptionListValue TRADE_MODE = new ConfigOptionListValue("tradeMode", TradeMode.STATIC,
+		public static final ConfigOptionListValue TRADE_MODE = new ConfigOptionListValue("tradeMode", TradeMode.VOID,
 				"Trade mode: Static Trade, Moving Trade, Void Trade");
+		public static final ConfigOptionListValue TRADE_EXECUTOR_MODE = new ConfigOptionListValue("tradeExecutorMode",
+				ExecutorMode.USE,
+				"Trade executor strategy: USE (default, reads offer.getUses() directly; simpler but relies on the local click simulation) or OUTPUT_SLOT (does not read offer uses; snapshot-based remaining)");
 		public static final ConfigInteger VILLAGER_SCAN_RANGE = new ConfigInteger("villagerScanRange", 4, 1, 10,
 				"Villager search radius (blocks)");
-		public static final ConfigInteger TRAP_CHEST_DELAY = new ConfigInteger("trapChestDelay", 5, 0, 100,
-				"Ticks to keep the trapped chest screen open after opening (stabilizes the redstone signal and leaves time for the mechanism to react); shared by container IO and the void return trigger");
 		public static final ConfigInteger OPEN_TIMEOUT = new ConfigInteger("openTimeout", 10, 0, 200,
 				"Timeout ticks waiting for a screen to open after interacting (trade screen, container screen, or return trigger block); shared by all screen-open waits");
 		public static final ConfigInteger TASK_TIMEOUT = new ConfigInteger("taskTimeout", 400, 0, 300000,
@@ -39,7 +41,7 @@ public class Configs implements IConfigHandler {
 		public static final ConfigString ITEM_IO = new ConfigString("itemIO", "[]",
 				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
-				VILLAGER_SCAN_RANGE, TRAP_CHEST_DELAY, OPEN_TIMEOUT, TASK_TIMEOUT);
+				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT);
 	}
 
 	/** 静止交易设置页：仅静止模式生效的选项 */
@@ -54,6 +56,14 @@ public class Configs implements IConfigHandler {
 				CONTAINER_IO_INTERVAL, CONTAINER_IO_IDLE_INTERVAL);
 	}
 
+	/** 移动交易设置页：仅移动模式生效的选项 */
+	public static class Moving {
+		public static final ConfigDouble MOVING_RANGE_MULTIPLIER = new ConfigDouble("movingRangeMultiplier", 1.5, 0.5,
+				5.0,
+				"Multiplier applied to the villager scan range in moving mode (scan radius and the processed-villager invalidation threshold share it); 1.5 = 1.5x the base range");
+		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(MOVING_RANGE_MULTIPLIER);
+	}
+
 	/** 虚空交易设置页：仅虚空模式生效的选项 */
 	public static class Void {
 		public static final ConfigInteger VOID_TELEPORT_TIMEOUT = new ConfigInteger("voidTeleportTimeout", 100, 0,
@@ -66,7 +76,7 @@ public class Configs implements IConfigHandler {
 				"Void-mode block type used to teleport the player back after a trade round: NONE (disabled), TRAPPED_CHEST, BUTTON, LEVER");
 		public static final ConfigCoordinate VOID_RETURN_POS = new ConfigCoordinate("voidReturnPos", "0 0 0",
 				"Position of the return trigger block as \"x y z\" (e.g. -13 60 -1)");
-		public static final ConfigBoolean VOID_RETURN_STRICT = new ConfigBoolean("voidReturnStrict", false,
+		public static final ConfigBoolean VOID_RETURN_STRICT = new ConfigBoolean("voidReturnStrict", true,
 				"Strictly validate that the return trigger block type matches the configured type; mismatch is skipped with a warning (default off = only check block existence and distance)");
 
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(VOID_TELEPORT_TIMEOUT,
@@ -84,6 +94,7 @@ public class Configs implements IConfigHandler {
 
 				ConfigUtils.readConfigBase(root, "Generic", Generic.OPTIONS);
 				ConfigUtils.readConfigBase(root, "Static", Static.OPTIONS);
+				ConfigUtils.readConfigBase(root, "Moving", Moving.OPTIONS);
 				ConfigUtils.readConfigBase(root, "Void", Void.OPTIONS);
 				ConfigUtils.readConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
 
@@ -137,6 +148,7 @@ public class Configs implements IConfigHandler {
 
 			ConfigUtils.writeConfigBase(root, "Generic", Generic.OPTIONS);
 			ConfigUtils.writeConfigBase(root, "Static", Static.OPTIONS);
+			ConfigUtils.writeConfigBase(root, "Moving", Moving.OPTIONS);
 			ConfigUtils.writeConfigBase(root, "Void", Void.OPTIONS);
 			ConfigUtils.writeConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
 

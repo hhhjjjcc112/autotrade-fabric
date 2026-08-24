@@ -4,6 +4,7 @@
     "autotrade.gui.button.config_gui.io_input": "IO输入",
     "autotrade.gui.button.config_gui.io_output": "IO输出",
     "autotrade.gui.button.config_gui.static": "静止交易",
+    "autotrade.gui.button.config_gui.moving": "移动交易",
     "autotrade.gui.button.config_gui.void": "虚空交易",
     "autotrade.gui.button.config_gui.hotkeys": "快捷键",
     "autotrade.gui.title.configs": "AutoTrade 配置",
@@ -59,6 +60,9 @@
     "autotrade.trademode.moving": "§b移动交易",
     "autotrade.trademode.void": "§5虚空交易",
 
+    "autotrade.executormode.output_slot": "§7输出槽推导（不读 uses）",
+    "autotrade.executormode.use": "§b直接读取 uses（默认）",
+
     "autotrade.returntrigger.none": "无（禁用）",
     "autotrade.returntrigger.trapped_chest": "陷阱箱",
     "autotrade.returntrigger.button": "按钮",
@@ -68,6 +72,7 @@
 
     "config.name.enabled": "启用",
     "config.name.trademode": "交易模式",
+    "config.name.tradeexecutormode": "交易执行策略",
     "config.name.villagerscanrange": "村民扫描范围",
     "config.name.containeriointerval": "容器操作最小间隔",
     "config.name.containerioidleinterval": "容器空闲等待",
@@ -76,6 +81,7 @@
     "config.name.tasktimeout": "任务超时",
 
     "config.name.tradeinterval": "最小交易间隔",
+    "config.name.movingrangemultiplier": "移动扫描范围乘数",
 
     "config.name.voidteleporttimeout": "虚空传送超时",
     "config.name.voidunloaddelay": "村民卸载等待",
@@ -93,6 +99,7 @@
 
     "config.comment.enabled": "开启后自动与范围内的村民交易",
     "config.comment.trademode": "交易模式：静止交易、移动交易、虚空交易",
+    "config.comment.tradeexecutormode": "交易执行策略：USE（默认，直接读取 offer.getUses()，逻辑更简单但依赖本地点击模拟的保真度）或 OUTPUT_SLOT（不读取 offer uses，按开屏快照推导剩余次数）",
     "config.comment.villagerscanrange": "查找村民的半径范围（格）",
     "config.comment.containeriointerval": "两次容器操作之间的最小间隔（tick），0 = 每 tick 都检查",
     "config.comment.containerioidleinterval": "没有容器操作需要执行时等待的 tick 数",
@@ -101,6 +108,7 @@
     "config.comment.tasktimeout": "单个任务运行超过此时长（tick）仍未完成时将被强制中断，回到空闲决策（回程触发失败时下一轮会重试）。用于防止卡死（如交易列表始终不同步）。0 = 禁用。若「虚空传送超时」或「虚空卸载缓冲」大于本值，请同步调大",
 
     "config.comment.tradeinterval": "静止模式下每轮交易之间的最小间隔（tick），100 tick = 5 秒",
+    "config.comment.movingrangemultiplier": "移动交易模式下对「村民扫描范围」的乘数（同时用于扫描半径与已处理村民记录的失效阈值）；1.5 = 基础范围的 1.5 倍",
 
     "config.comment.voidteleporttimeout": "交易界面打开后，等待村民消失（表示玩家传送完成）的超时，单位 tick（100 tick = 5 秒）；超时后关闭界面并跳过该村民；0 = 无限等待",
     "config.comment.voidunloaddelay": "村民消失（玩家传送完成）后、开始交易前等待的 tick 数，让服务端完成村民区块卸载、交易次数不持久化到村民（20 tick = 1 秒；0 = 立即交易；交易仍被耗尽时请调大）",
