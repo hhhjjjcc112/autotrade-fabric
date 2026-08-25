@@ -109,17 +109,29 @@ public final class IoItemDeriver {
 		}
 	}
 
+	/** isAir 解析结果缓存：编码串 → 是否空气（仅缓存合法 JSON 的解析结果；GUI 线程单线程访问，无需同步） */
+	private static final Map<String, Boolean> AIR_MEMO = new HashMap<>();
+
 	/** 判断编码串是否为空气物品（{"id":"minecraft:air"}，兼容旧版裸 id 格式）；解析失败按非 air 处理 */
 	private static boolean isAir(String encoded) {
 		if (encoded == null || encoded.isBlank())
 			return true;
 		if (encoded.equals("minecraft:air"))
 			return true;
+		// 命中缓存直接返回（同一编码串反复解析是性能热点，memo 消除重复 JSON 解析）
+		Boolean memo = AIR_MEMO.get(encoded);
+		if (memo != null) {
+			return memo;
+		}
+		boolean result;
 		try {
 			JsonObject obj = JsonParser.parseString(encoded).getAsJsonObject();
-			return obj.has("id") && "minecraft:air".equals(obj.get("id").getAsString());
+			result = obj.has("id") && "minecraft:air".equals(obj.get("id").getAsString());
 		} catch (Exception e) {
+			// 非法输入不缓存（避免把异常路径的结果固化进 memo），行为与旧实现一致返回 false
 			return false;
 		}
+		AIR_MEMO.put(encoded, result);
+		return result;
 	}
 }

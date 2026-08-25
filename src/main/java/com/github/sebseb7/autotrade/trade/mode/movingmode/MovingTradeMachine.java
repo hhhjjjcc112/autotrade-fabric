@@ -13,8 +13,10 @@ import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 
@@ -36,8 +38,11 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	/** 饥饿计数上限（A.3 参数） */
 	private static final int STARVATION_CAP = 10;
 
-	/** 已处理村民记录（交易完成或超时均标记；背包满时不标记），由 findUnprocessedVillagers 做失效清理 */
-	private final List<Integer> processedVillagers = new ArrayList<>();
+	/**
+	 * 已处理村民记录（交易完成或超时均标记；背包满时不标记），由 findUnprocessedVillagers 做失效清理。 HashSet：村民 id
+	 * 无重复、contains 是每 tick 热路径（M1 收集），集合无序不影响后续显式距离排序（L190）
+	 */
+	private final Set<Integer> processedVillagers = new HashSet<>();
 	/** 当前派发给会话的目标村民 id（任务结束钩子标记已处理用，完成与强杀统一） */
 	private int dispatchedVillagerId = 0;
 
@@ -127,8 +132,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			candidates.add(
 					new Candidate(new VillagerKey(v.getId()), 0, v.getPos().distanceTo(mc.player.getPos()), null, v));
 
-		// 生命周期清理：不在本 tick 候选集合的饥饿记录移除（已处理/离开范围/不再需要 IO），防 Map 膨胀
-		starvation.keySet().retainAll(candidates.stream().map(Candidate::key).toList());
+		// 生命周期清理：不在本 tick 候选集合的饥饿记录移除（已处理/离开范围/不再需要 IO），防 Map 膨胀。
+		// 先构建 Set 再 retainAll，避免每 tick 的 stream/toList 中间分配（与 List 版 retainAll 结果一致）
+		Set<StarvationKey> keys = new HashSet<>(candidates.size());
+		for (Candidate c : candidates)
+			keys.add(c.key());
+		starvation.keySet().retainAll(keys);
 
 		if (candidates.isEmpty())
 			return;
