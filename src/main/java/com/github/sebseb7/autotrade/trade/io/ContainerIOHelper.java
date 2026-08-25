@@ -4,8 +4,9 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.IoItemDeriver;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
-import com.github.sebseb7.autotrade.trade.data.ItemIOList;
+import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import java.util.ArrayList;
@@ -19,6 +20,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.util.math.BlockPos;
 
 public final class ContainerIOHelper {
@@ -72,12 +74,13 @@ public final class ContainerIOHelper {
 
 		// 派生活动物品集：输入集 = enabled 交易对 giveItem ∪ giveItem2，输出集 = getItem
 		// （复用 IoItemDeriver，语义与手工构建一致；编码字符串精确相等判定，与 buildInventorySlotCounts 键空间一致）
-		List<TradePair> pairs = TradePair.loadAllPairs();
+		List<TradePair> pairs = TradePairCache.getAll();
 		IoItemDeriver.ActiveItemSets activeSets = IoItemDeriver.deriveActiveSets(pairs);
 		Set<String> inputItems = activeSets.inputs();
 		Set<String> outputItems = activeSets.outputs();
 
-		List<ItemIO> entries = ItemIOList.fromJson(Configs.Generic.ITEM_IO.getStringValue());
+		// 缓存访问器：配置未变时跳过 JSON 解析（仅遍历读取，不改动条目）
+		List<ItemIO> entries = ItemIOCache.getAll();
 		Map<String, Integer> slotCounts = buildInventorySlotCounts(mc.player, entries, inputItems, outputItems);
 		List<ContainerCandidate> result = new ArrayList<>();
 		for (ItemIO io : entries) {
@@ -159,10 +162,18 @@ public final class ContainerIOHelper {
 	static Map<String, Integer> buildInventorySlotCounts(PlayerEntity player, List<ItemIO> entries,
 			Set<String> inputItems, Set<String> outputItems) {
 		Map<String, Integer> counts = new HashMap<>();
+		// 索引阶段：对命中活动集的条目物品编码串预解析一次（同 id 多条目 → 列表），热循环内不再做 JSON 解析
+		Map<String, List<ItemStringHelper.ParsedItem>> byId = new HashMap<>();
 		for (ItemIO io : entries) {
 			// 键 = 出现在条目中的活动物品（输入条目 ∈ 输入集、输出条目 ∈ 输出集）
 			if (io.isInput() ? inputItems.contains(io.getItem()) : outputItems.contains(io.getItem())) {
-				counts.putIfAbsent(io.getItem(), 0);
+				ItemStringHelper.ParsedItem parsed = ItemStringHelper.parse(io.getItem());
+				if (parsed == null) {
+					// 非法编码条目不参与匹配（等价旧 getItemId 返回 "" 的落空行为）
+					continue;
+				}
+				counts.putIfAbsent(parsed.encoded(), 0);
+				byId.computeIfAbsent(parsed.id(), k -> new ArrayList<>()).add(parsed);
 			}
 		}
 		if (counts.isEmpty())
@@ -173,9 +184,14 @@ public final class ContainerIOHelper {
 			ItemStack stack = inv.getStack(s);
 			if (stack.isEmpty())
 				continue;
-			for (Map.Entry<String, Integer> e : counts.entrySet()) {
-				if (ItemStringHelper.matches(stack, e.getKey())) {
-					e.setValue(e.getValue() + 1);
+			// 每槽只计算一次实际 ID，内层仅遍历同 id 的预解析条目做 NBT 比较
+			String actualId = Registries.ITEM.getId(stack.getItem()).toString();
+			List<ItemStringHelper.ParsedItem> candidates = byId.get(actualId);
+			if (candidates == null)
+				continue;
+			for (ItemStringHelper.ParsedItem parsed : candidates) {
+				if (ItemStringHelper.matches(stack, parsed)) {
+					counts.merge(parsed.encoded(), 1, Integer::sum);
 					break;
 				}
 			}

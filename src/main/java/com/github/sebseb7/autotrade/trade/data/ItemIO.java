@@ -41,6 +41,18 @@ public final class ItemIO {
 		this.takeAmount = takeAmount;
 	}
 
+	/** 拷贝构造：复制全部 8 个字段（默认值语义经拷贝保留原值；String 为不可变对象，直接引用复制即可） */
+	public ItemIO(ItemIO other) {
+		this.item = other.item;
+		this.isInput = other.isInput;
+		this.x = other.x;
+		this.y = other.y;
+		this.z = other.z;
+		this.threshold = other.threshold;
+		this.takeAmount = other.takeAmount;
+		this.enabled = other.enabled;
+	}
+
 	public String getItem() {
 		return item;
 	}

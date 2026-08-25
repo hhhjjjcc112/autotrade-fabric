@@ -1,7 +1,9 @@
 package com.github.sebseb7.autotrade.trade.executor;
 
 import com.github.sebseb7.autotrade.AutoTrade;
+import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -31,6 +33,11 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 
 	/** 本次会话是否因背包空间不足/结果滞留而阻塞（供会话层决定提前结束并触发容器 IO） */
 	protected boolean inventoryBlocked = false;
+
+	// 会话内 pairs 预解码缓存：以配置串引用为失效信号（malilib getStringValue 返回字段引用；GUI 保存/加载
+	// 必产生新 String → 引用不等 → 重建数组）。引用相等时每 tick 复用数组，免去 offers×pairs 循环内 Gson 解析
+	private String cachedPairsJson = null;
+	private ParsedPair[] cachedParsedPairs = null;
 
 	/**
 	 * 创建交易项状态对象（差异点钩子：非 use = SnapshotOfferState 快照推导，use = LiveOfferState 直接读
@@ -167,18 +174,17 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	// 未配置 give2 时打降级警告日志）+ 单笔成本不超 limit + 背包有全部成本。
 	// 所有拒绝路径均打诊断日志（不再静默——give2 严格匹配/limit/成本不足的失败此前对用户不可见）。
 	// @return true = 可执行（调用方记入快照并结束内层交易对循环）
-	private static boolean isOfferExecutableForPair(TradeOffer candidate, TradePair pair, int pairIndex,
+	private static boolean isOfferExecutableForPair(TradeOffer candidate, ParsedPair pair, int pairIndex,
 			PlayerEntity player) {
 		// 成本/产出物品与交易对不一致 → 不可执行（按原因细分日志：双成本 offer 未配 give2 / 双成本配置仍不匹配）
 		if (!doesOfferMatchPair(candidate, pair)) {
 			boolean offerHasSecondCost = !candidate.getSecondBuyItem().isEmpty();
-			boolean pairHasGive2 = pair.getGiveItem2() != null && !pair.getGiveItem2().isBlank();
-			if (offerHasSecondCost && !pairHasGive2) {
+			if (offerHasSecondCost && !pair.hasGive2()) {
 				// 交易项有第二成本但交易对未配置 give2 时，严格匹配会拒绝该交易项并记录提示。
 				AutoTrade.logger.info(
 						"[AutoTrade] pair #{} no longer matches (offer has 2nd cost), configure give2 to match",
 						pairIndex);
-			} else if (offerHasSecondCost && pairHasGive2) {
+			} else if (offerHasSecondCost && pair.hasGive2()) {
 				// 双成本交易对仍不匹配：give/give2/get 物品不一致，或产出 NBT 已变化
 				// （如附魔书交易在村民补货后随机生成新附魔 → 需重新捕获该交易）
 				AutoTrade.logger.info(
@@ -194,9 +200,9 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		// 只有「匹配到基础价格更高的其他交易」才被拒绝（修复：价格随 demand 上涨后交易对静默失效的 bug，
 		// 图书管理员附魔书交易 priceMultiplier=0.2，demand≥1 即涨价 6+，超过捕获时的 limit 32）
 		int baseCost = candidate.getOriginalFirstBuyItem().getCount();
-		if (baseCost > pair.getLimit()) {
+		if (baseCost > pair.limit()) {
 			AutoTrade.logger.info("[AutoTrade] pair #{} offer skipped: base cost {} > limit {}", pairIndex, baseCost,
-					pair.getLimit());
+					pair.limit());
 			return false;
 		}
 		// 背包成本不足 → 不可执行（adjusted 价格随 demand 上涨时，此处按调整后价格检查实际支付能力）
@@ -412,16 +418,16 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		return true;
 	}
 
-	// 判断交易与交易对是否匹配：成本物品等于 giveItem 且产出物品等于 getItem
-	private static boolean doesOfferMatchPair(TradeOffer offer, TradePair pair) {
+	// 判断交易与交易对是否匹配：成本物品等于 giveItem 且产出物品等于 getItem（预解码版本，循环内零 Gson）
+	private static boolean doesOfferMatchPair(TradeOffer offer, ParsedPair pair) {
 		ItemStack costA = offer.getAdjustedFirstBuyItem();
 		ItemStack costB = offer.getSecondBuyItem();
-		boolean resultMatch = ItemStringHelper.matches(offer.getSellItem(), pair.getGetItem());
-		if (pair.getGiveItem2() != null && !pair.getGiveItem2().isBlank()) {
-			return resultMatch && ItemStringHelper.matches(costA, pair.getGiveItem())
-					&& ItemStringHelper.matches(costB, pair.getGiveItem2());
+		boolean resultMatch = ItemStringHelper.matches(offer.getSellItem(), pair.get());
+		if (pair.hasGive2()) {
+			return resultMatch && ItemStringHelper.matches(costA, pair.give())
+					&& ItemStringHelper.matches(costB, pair.give2());
 		}
-		return resultMatch && costB.isEmpty() && ItemStringHelper.matches(costA, pair.getGiveItem());
+		return resultMatch && costB.isEmpty() && ItemStringHelper.matches(costA, pair.give());
 	}
 
 	// 检查玩家背包是否足以支付该交易的全部成本槽（第一/第二成本物品）
@@ -498,7 +504,13 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		}
 
 		// 第 2 步：offers/pairs 空检查（沿用现有语义）
-		List<TradePair> pairs = TradePair.loadAllPairs();
+		List<TradePair> pairs = TradePairCache.getAll();
+		// pairs 预解码缓存：配置串引用变化才重建数组（每 tick 复用，免 offers×pairs 循环内 Gson 解析）
+		String pairsJson = Configs.Generic.TRADE_PAIRS.getStringValue();
+		if (pairsJson != cachedPairsJson || cachedParsedPairs == null) {
+			cachedPairsJson = pairsJson;
+			cachedParsedPairs = buildParsedPairs(pairs);
+		}
 
 		if (offers == null || offers.isEmpty()) {
 			AutoTrade.logger.info("[AutoTrade] Offers not yet synced, waiting...");
@@ -512,7 +524,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 
 		// 第 3 步：预扫描可执行交易项（开屏 isDisabled() 过滤已耗尽的 offer；饿死候选标志随扫描携带）。
 		// 列表为每 tick 快照——成本消耗导致的过期由单轮结果确认兜底（轮到时 autofill 无货 → 槽 2 空 → DONE 移出）
-		List<OfferState> active = scanExecutableOffers(handler, pairs, mc.player);
+		List<OfferState> active = scanExecutableOffers(handler, cachedParsedPairs, mc.player);
 		if (active.isEmpty()) {
 			// 无任何可执行交易项：移出输入成本后结束会话（下轮会话重试）
 			moveOutInputCosts(mc, handler);
@@ -669,9 +681,31 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		return true;
 	}
 
+	// 会话内预解码交易对 record：give/give2/get 为预解析物品（give2 空串 → parse 返回 null，与旧
+	// costB.isEmpty() 单成本分支语义对齐）；hasGive2 用原始串判空白（与旧 doesOfferMatchPair 分支条件逐字
+	// 一致——非法 give2 串仍走双成本分支并匹配失败，不能以 parse 结果判分支）；enabled/limit 供扫描循环与
+	// 价格限制直接使用
+	private record ParsedPair(ItemStringHelper.ParsedItem give, ItemStringHelper.ParsedItem give2,
+			ItemStringHelper.ParsedItem get, boolean hasGive2, boolean enabled, int limit) {
+	}
+
+	// 构建交易对预解码数组：每个 pair 的 give/give2/get 各调 ItemStringHelper.parse 一次（循环外一次性解析）
+	private static ParsedPair[] buildParsedPairs(List<TradePair> pairs) {
+		ParsedPair[] arr = new ParsedPair[pairs.size()];
+		for (int i = 0; i < pairs.size(); i++) {
+			TradePair pair = pairs.get(i);
+			String give2 = pair.getGiveItem2();
+			arr[i] = new ParsedPair(ItemStringHelper.parse(pair.getGiveItem()), ItemStringHelper.parse(give2),
+					ItemStringHelper.parse(pair.getGetItem()), give2 != null && !give2.isBlank(), pair.isEnabled(),
+					pair.getLimit());
+		}
+		return arr;
+	}
+
 	// 预扫描：收集未耗尽、匹配交易对、价格达标且背包有成本的交易项。
 	// 结果是每 tick 的快照；后续成本变化由轮到该交易项时的槽 2 状态再次确认。
-	List<OfferState> scanExecutableOffers(MerchantScreenHandler handler, List<TradePair> pairs, PlayerEntity player) {
+	List<OfferState> scanExecutableOffers(MerchantScreenHandler handler, ParsedPair[] parsedPairs,
+			PlayerEntity player) {
 		List<OfferState> list = new ArrayList<>();
 		TradeOfferList offers = handler.getRecipes();
 		for (int i = 0; i < offers.size(); i++) {
@@ -682,10 +716,10 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 			// 耗尽标记只根据输出槽状态和已同步的交易数据判断。
 			if (candidate.isDisabled())
 				continue;
-			for (int pairIndex = 0; pairIndex < pairs.size(); pairIndex++) {
-				TradePair pair = pairs.get(pairIndex);
+			for (int pairIndex = 0; pairIndex < parsedPairs.length; pairIndex++) {
+				ParsedPair pair = parsedPairs[pairIndex];
 				// 未启用的交易对跳过
-				if (!pair.isEnabled())
+				if (!pair.enabled())
 					continue;
 				if (isOfferExecutableForPair(candidate, pair, pairIndex, player)) {
 					// 检查全部通过：记入快照列表（携带饿死候选标志）并结束内层交易对循环。

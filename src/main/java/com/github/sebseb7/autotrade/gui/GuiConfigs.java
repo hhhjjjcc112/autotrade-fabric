@@ -7,7 +7,7 @@ import com.github.sebseb7.autotrade.gui.widget.ItemIOTabList;
 import com.github.sebseb7.autotrade.gui.widget.TradePairListConfigOptions;
 import com.github.sebseb7.autotrade.gui.widget.TradePairListEntryWidget;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
-import com.github.sebseb7.autotrade.trade.data.TradePairList;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import com.google.common.collect.ImmutableList;
 import fi.dy.masa.malilib.config.IConfigBase;
@@ -89,10 +89,7 @@ public class GuiConfigs extends GuiConfigsBase {
 			ButtonGeneric addBtn = new ButtonGeneric(this.width / 10, this.height - 24, 90, 20,
 					StringUtils.translate("autotrade.gui.pair_list.add"));
 			this.addButton(addBtn, (b, mb) -> {
-				String json = Configs.Generic.TRADE_PAIRS.getStringValue();
-				Configs.Generic.TRADE_PAIRS
-						.setValueFromString(TradePairList.addPair(json, "minecraft:air", "minecraft:air", 1));
-				Configs.saveToFile();
+				TradePairCache.add("minecraft:air", "minecraft:air", 1);
 				this.refreshWithScrollRestore();
 			});
 		}
@@ -175,7 +172,8 @@ public class GuiConfigs extends GuiConfigsBase {
 	// 交易对页配置行：复制旧独立列表屏 getConfigs() 的行标签逻辑
 	// （只读 ConfigString 行命名 pair_<i>，供 TradePairListEntryWidget 解析下标渲染）
 	private List<ConfigOptionWrapper> getTradePairConfigs() {
-		List<TradePair> pairs = TradePairList.fromJson(Configs.Generic.TRADE_PAIRS.getStringValue());
+		// 缓存访问器：行标签构建只读（仅 get，不改动交易对）
+		List<TradePair> pairs = TradePairCache.getAll();
 		if (pairs.isEmpty()) {
 			// 空态提示行（复用旧列表屏空态键）
 			return ImmutableList.of(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.pair_list.empty")));

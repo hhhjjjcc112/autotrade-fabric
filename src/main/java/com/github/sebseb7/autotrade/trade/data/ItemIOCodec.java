@@ -8,12 +8,13 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class ItemIOList {
+/** 物品容器 IO JSON 序列化/反序列化编解码器（缓存与增删改查职责已迁移至 {@link ItemIOCache}） */
+public final class ItemIOCodec {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Type ITEM_IO_LIST_TYPE = new TypeToken<List<ItemIOData>>() {
 	}.getType();
 
-	private ItemIOList() {
+	private ItemIOCodec() {
 	}
 
 	/** Gson 序列化用的 JSON 数据类（公有字段，直接映射） */
@@ -97,64 +98,5 @@ public final class ItemIOList {
 			AutoTrade.logger.warn("[AutoTrade] Failed to parse item IO list JSON", e);
 			return new ArrayList<>();
 		}
-	}
-
-	/** 在列表末尾新增一条物品容器 IO 配置，返回新的 JSON 字符串 */
-	public static String addItem(String json, String item, boolean isInput, int x, int y, int z, int threshold,
-			int takeAmount) {
-		List<ItemIO> items = fromJson(json);
-		items.add(new ItemIO(item, isInput, x, y, z, threshold, takeAmount));
-		return toJson(items);
-	}
-
-	/** 删除指定下标的物品容器 IO 配置，返回新的 JSON 字符串 */
-	public static String removeItem(String json, int index) {
-		List<ItemIO> items = fromJson(json);
-		if (index >= 0 && index < items.size()) {
-			items.remove(index);
-		}
-		return toJson(items);
-	}
-
-	/** 用新的配置替换指定下标，返回新的 JSON 字符串 */
-	public static String updateItem(String json, int index, ItemIO itemIO) {
-		List<ItemIO> items = fromJson(json);
-		if (index >= 0 && index < items.size()) {
-			items.set(index, itemIO);
-		}
-		return toJson(items);
-	}
-
-	/** 查找首个 (item, 方向) 匹配的条目下标（物品编码串精确相等），无匹配时返回 -1 */
-	public static int findByKey(String json, String item, boolean isInput) {
-		List<ItemIO> items = fromJson(json);
-		for (int i = 0; i < items.size(); i++) {
-			ItemIO io = items.get(i);
-			if (io.isInput() == isInput && io.getItem().equals(item)) {
-				return i;
-			}
-		}
-		return -1;
-	}
-
-	/**
-	 * 按 (item, 方向) 更新或追加条目：命中时用 entry 的坐标/阈值/单次数量/启用开关覆盖该条目， 未命中时把 entry
-	 * 追加到列表末尾，返回新的 JSON 字符串。
-	 */
-	public static String upsertItem(String json, String item, boolean isInput, ItemIO entry) {
-		List<ItemIO> items = fromJson(json);
-		int index = findByKey(json, item, isInput);
-		if (index >= 0) {
-			ItemIO existing = items.get(index);
-			existing.setX(entry.getX());
-			existing.setY(entry.getY());
-			existing.setZ(entry.getZ());
-			existing.setThreshold(entry.getThreshold());
-			existing.setTakeAmount(entry.getTakeAmount());
-			existing.setEnabled(entry.isEnabled());
-		} else {
-			items.add(entry);
-		}
-		return toJson(items);
 	}
 }

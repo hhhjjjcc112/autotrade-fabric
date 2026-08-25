@@ -4,7 +4,7 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.ReturnTriggerType;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
-import com.github.sebseb7.autotrade.trade.data.ItemIOList;
+import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
@@ -119,7 +119,8 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		// 坐标非法时视为不可用（true），避免以 (0,0,0) 参与冲突判断
 		if (pos == null)
 			return true;
-		for (ItemIO io : ItemIOList.fromJson(Configs.Generic.ITEM_IO.getStringValue())) {
+		// 缓存访问器：仅遍历读取坐标，不改动条目
+		for (ItemIO io : ItemIOCache.getAll()) {
 			if (io.getX() == pos.getX() && io.getY() == pos.getY() && io.getZ() == pos.getZ())
 				return true;
 		}

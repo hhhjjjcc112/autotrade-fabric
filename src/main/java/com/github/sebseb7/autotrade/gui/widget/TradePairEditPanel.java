@@ -1,9 +1,8 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
-import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.options.ConfigItem;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
-import com.github.sebseb7.autotrade.trade.data.TradePairList;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import com.google.common.collect.ImmutableList;
 import fi.dy.masa.malilib.config.IConfigValue;
@@ -17,7 +16,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
 
 // 交易对行内编辑面板：维护 give/give2/get/limit/note 五个配置项与自动保存、
-// 主手抓取物品逻辑，保存走 TradePairList.updatePair（由旧独立编辑屏的编辑逻辑抽取而来）。
+// 主手抓取物品逻辑，保存走 TradePairCache.update（由旧独立编辑屏的编辑逻辑抽取而来）。
 // 宿主（独立屏或未来的选项卡）负责渲染 getConfigs() 与抓取按钮，并通过 onSaved 回调刷新视图。
 public class TradePairEditPanel {
 	private final int pairIndex;
@@ -144,10 +143,8 @@ public class TradePairEditPanel {
 		InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, "autotrade.message.sell_item_set", itemId);
 	}
 
-	// 将当前交易对保存回 TRADE_PAIRS 配置（updatePair + saveToFile）
+	// 将当前交易对保存回 TRADE_PAIRS 配置（update 存拷贝 + 落盘）
 	public void saveCurrentPair() {
-		String json = Configs.Generic.TRADE_PAIRS.getStringValue();
-		Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.updatePair(json, pairIndex, currentPair));
-		Configs.saveToFile();
+		TradePairCache.update(pairIndex, currentPair);
 	}
 }

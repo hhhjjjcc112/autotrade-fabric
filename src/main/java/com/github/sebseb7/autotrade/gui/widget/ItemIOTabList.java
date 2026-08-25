@@ -1,11 +1,10 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
-import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.IoItemDeriver;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
-import com.github.sebseb7.autotrade.trade.data.ItemIOList;
+import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
-import com.github.sebseb7.autotrade.trade.data.TradePairList;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import com.google.common.collect.ImmutableList;
 import fi.dy.masa.malilib.config.options.ConfigString;
@@ -150,7 +149,8 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 	 * 构建行数据：派生 + 排序 + (item, 方向) 匹配。子类可覆写以替换行源（如旧的独立列表屏直接以 JSON 条目为行源，无派生统计）。
 	 */
 	protected List<RowData> buildRows() {
-		List<TradePair> pairs = TradePairList.fromJson(Configs.Generic.TRADE_PAIRS.getStringValue());
+		// 缓存访问器：派生只读（IoItemDeriver 仅 get 交易对字段，不改动）
+		List<TradePair> pairs = TradePairCache.getAll();
 		IoItemDeriver.DerivedIo derived = IoItemDeriver.derive(pairs);
 		List<IoItemDeriver.IoItemStat> stats = isInput ? derived.inputs() : derived.outputs();
 		// 排序：启用数降序 → 禁用数降序 → 物品 id 字母序（派生类保持出现顺序，排序由本控件负责）
@@ -161,15 +161,14 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		Comparator<IoItemDeriver.IoItemStat> byId = Comparator.comparing(s -> ItemStringHelper.getItemId(s.item()));
 		stats.sort(byEnabled.thenComparing(byDisabled).thenComparing(byId));
 
-		// 每行按 (item, 方向) 匹配已保存条目（ItemIOList.findByKey 语义：首个匹配）；未命中使用占位条目
+		// 每行按 (item, 方向) 匹配已保存条目（ItemIOCache.findByKey 语义：首个匹配）；未命中使用占位条目
 		// （enabled=true、0 0 0、阈值 1、单次 6，与计划 todo 5 的占位默认一致）
-		String ioJson = Configs.Generic.ITEM_IO.getStringValue();
-		List<ItemIO> ioItems = ItemIOList.fromJson(ioJson);
+		List<ItemIO> ioItems = ItemIOCache.getAll();
 		List<RowData> rows = new ArrayList<>(stats.size());
 		for (IoItemDeriver.IoItemStat stat : stats) {
-			int index = ItemIOList.findByKey(ioJson, stat.item(), isInput);
+			int index = ItemIOCache.findByKey(ioItems, stat.item(), isInput);
 			ItemIO entry = index >= 0
-					? ioItems.get(index)
+					? new ItemIO(ioItems.get(index))
 					: new ItemIO(stat.item(), isInput, DEFAULT_X, DEFAULT_Y, DEFAULT_Z, DEFAULT_THRESHOLD,
 							DEFAULT_TAKE_AMOUNT);
 			rows.add(new RowData(stat.item(), stat, entry, isInput));

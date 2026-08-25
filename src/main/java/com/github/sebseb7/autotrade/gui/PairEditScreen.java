@@ -1,12 +1,11 @@
 package com.github.sebseb7.autotrade.gui;
 
 import com.github.sebseb7.autotrade.Reference;
-import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.options.ConfigItem;
 import com.github.sebseb7.autotrade.gui.widget.ItemIconWidget;
 import com.github.sebseb7.autotrade.gui.widget.TradePairEditPanel;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
-import com.github.sebseb7.autotrade.trade.data.TradePairList;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import com.google.common.collect.ImmutableList;
 import fi.dy.masa.malilib.config.IConfigBase;
@@ -69,8 +68,8 @@ public class PairEditScreen extends GuiConfigsBase {
 
 	@Override
 	public void initGui() {
-		List<TradePair> pairs = TradePairList.fromJson(Configs.Generic.TRADE_PAIRS.getStringValue());
-		if (pairIndex < 0 || pairIndex >= pairs.size()) {
+		TradePair currentPair = TradePairCache.get(pairIndex);
+		if (currentPair == null) {
 			// 无效索引：仅显示返回按钮（防越界崩溃护栏）
 			this.setListPosition(this.width / 10, this.getListY());
 			this.reCreateListWidget();
@@ -80,9 +79,8 @@ public class PairEditScreen extends GuiConfigsBase {
 			this.addButton(back, (b, mb) -> GuiBase.openGui(new GuiConfigs()));
 			return;
 		}
-		TradePair currentPair = pairs.get(pairIndex);
-		// 编辑面板：维护 5 个配置项与自动保存；保存成功后重建本屏刷新显示；保存前提交列表控件中的待定文本输入
-		this.editPanel = new TradePairEditPanel(pairIndex, currentPair, this::initGui, () -> {
+		// 编辑面板持副本：GUI 原地修改不污染缓存元素（保存时 update 再存拷贝，闭环成立）
+		this.editPanel = new TradePairEditPanel(pairIndex, new TradePair(currentPair), this::initGui, () -> {
 			if (this.getListWidget() != null) {
 				this.getListWidget().applyPendingModifications();
 			}

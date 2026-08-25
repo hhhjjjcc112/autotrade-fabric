@@ -1,8 +1,5 @@
 package com.github.sebseb7.autotrade.trade.data;
 
-import com.github.sebseb7.autotrade.config.Configs;
-import java.util.List;
-
 /**
  * 表示一个交易对：玩家给出 {@code giveItem}（可选地再加 {@code giveItem2}）并收到 {@code getItem}，
  * 带有每次交易最大价格限制以及启用/禁用开关。
@@ -12,7 +9,7 @@ import java.util.List;
  * </p>
  *
  * <p>
- * 交易对以动态 JSON 列表形式存储在 config 中。使用 {@link #loadAllPairs()} 获取所有已配置的交易对。
+ * 交易对以动态 JSON 列表形式存储在 config 中。使用 {@link TradePairCache#getAll()} 获取所有已配置的交易对。
  * </p>
  */
 public final class TradePair {
@@ -40,6 +37,18 @@ public final class TradePair {
 		this.give2Count = give2Count;
 		this.getCount = getCount;
 		this.note = note;
+	}
+
+	/** 拷贝构造：复制全部 8 个字段（String 为不可变对象，直接引用复制即可） */
+	public TradePair(TradePair other) {
+		this.giveItem = other.giveItem;
+		this.getItem = other.getItem;
+		this.limit = other.limit;
+		this.enabled = other.enabled;
+		this.giveItem2 = other.giveItem2;
+		this.give2Count = other.give2Count;
+		this.getCount = other.getCount;
+		this.note = other.note;
 	}
 
 	public void setGiveItem(String v) {
@@ -90,11 +99,5 @@ public final class TradePair {
 	}
 	public void setNote(String v) {
 		this.note = v;
-	}
-
-	/** 从 JSON 配置加载所有交易对 */
-	public static List<TradePair> loadAllPairs() {
-		String json = Configs.Generic.TRADE_PAIRS.getStringValue();
-		return TradePairList.fromJson(json);
 	}
 }

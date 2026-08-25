@@ -1,10 +1,9 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
-import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
 import com.github.sebseb7.autotrade.trade.data.IoItemDeriver;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
-import com.github.sebseb7.autotrade.trade.data.ItemIOList;
+import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import fi.dy.masa.malilib.config.IConfigBase;
@@ -464,9 +463,7 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 
 	/** 按 (item, 方向) upsert 当前条目并保存到配置文件 */
 	private void saveEntry() {
-		String json = Configs.Generic.ITEM_IO.getStringValue();
-		Configs.Generic.ITEM_IO.setValueFromString(ItemIOList.upsertItem(json, item, isInput, entry));
-		Configs.saveToFile();
+		ItemIOCache.upsert(item, isInput, entry);
 	}
 
 	/**

@@ -12,7 +12,8 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 
-public final class TradePairList {
+/** 交易对 JSON 序列化/反序列化编解码器（缓存与增删改查职责已迁移至 {@link TradePairCache}） */
+public final class TradePairCodec {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Type PAIR_LIST_TYPE = new TypeToken<List<TradePairData>>() {
 	}.getType();
@@ -20,7 +21,7 @@ public final class TradePairList {
 	/** 旧版容器 IO 配置的 warn 已发送标志（进程内只提示一次，防止 fromJson 每 tick 调用时刷屏） */
 	private static boolean legacyIoWarned = false;
 
-	private TradePairList() {
+	private TradePairCodec() {
 	}
 
 	public static class TradePairData {
@@ -144,49 +145,6 @@ public final class TradePairList {
 	private static boolean hasNonZeroCoord(JsonObject obj, String key) {
 		JsonElement el = obj.get(key);
 		return el != null && el.isJsonPrimitive() && el.getAsJsonPrimitive().isNumber() && el.getAsInt() != 0;
-	}
-
-	/** 在列表末尾新增一个默认启用的交易对，返回新的 JSON 字符串 */
-	public static String addPair(String json, String give, String get, int limit) {
-		List<TradePair> pairs = fromJson(json);
-		pairs.add(new TradePair(give, get, limit, true, "", 0, 0, ""));
-		return toJson(pairs);
-	}
-
-	/** 在列表末尾新增一个默认启用的双成本交易对（give2 为第二给出物品），返回新的 JSON 字符串 */
-	public static String addPair(String json, String give, String give2, String get, int limit, int give2Count,
-			int getCount) {
-		List<TradePair> pairs = fromJson(json);
-		pairs.add(new TradePair(give, get, limit, true, give2, give2Count, getCount, ""));
-		return toJson(pairs);
-	}
-
-	/** 删除指定下标的交易对，返回新的 JSON 字符串 */
-	public static String removePair(String json, int index) {
-		List<TradePair> pairs = fromJson(json);
-		if (index >= 0 && index < pairs.size()) {
-			pairs.remove(index);
-		}
-		return toJson(pairs);
-	}
-
-	/** 用新的交易对替换指定下标，返回新的 JSON 字符串 */
-	public static String updatePair(String json, int index, TradePair pair) {
-		List<TradePair> pairs = fromJson(json);
-		if (index >= 0 && index < pairs.size()) {
-			pairs.set(index, pair);
-		}
-		return toJson(pairs);
-	}
-
-	/** 反转指定下标交易对的启用状态，返回新的 JSON 字符串 */
-	public static String togglePair(String json, int index) {
-		List<TradePair> pairs = fromJson(json);
-		if (index >= 0 && index < pairs.size()) {
-			TradePair old = pairs.get(index);
-			old.setEnabled(!old.isEnabled());
-		}
-		return toJson(pairs);
 	}
 
 }

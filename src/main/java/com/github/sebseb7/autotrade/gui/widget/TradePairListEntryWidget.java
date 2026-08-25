@@ -1,8 +1,7 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
-import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
-import com.github.sebseb7.autotrade.trade.data.TradePairList;
+import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.gui.GuiBase;
@@ -87,7 +86,8 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 				super.addConfigOption(x, y, zLevel, labelWidth, configWidth, config);
 				return;
 			}
-			List<TradePair> pairs = TradePairList.fromJson(Configs.Generic.TRADE_PAIRS.getStringValue());
+			// 缓存访问器：每行构造共享同一次解析结果（仅 get/读取，不改动交易对）
+			List<TradePair> pairs = TradePairCache.getAll();
 			if (idx < 0 || idx >= pairs.size()) {
 				super.addConfigOption(x, y, zLevel, labelWidth, configWidth, config);
 				return;
@@ -175,9 +175,7 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 					p.isEnabled() ? "autotrade.gui.pair_list.disable_btn" : "autotrade.gui.pair_list.enable_btn");
 			ButtonGeneric toggleBtn = new ButtonGeneric(toggleX, y, btnW, 20, enableLabel);
 			this.addButton(toggleBtn, (button, mouseButton) -> {
-				String json = Configs.Generic.TRADE_PAIRS.getStringValue();
-				Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.togglePair(json, idx));
-				Configs.saveToFile();
+				TradePairCache.toggle(idx);
 				if (refreshAction != null)
 					refreshAction.run();
 			});
@@ -195,9 +193,7 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			ButtonGeneric removeBtn = new ButtonGeneric(removeX, y, btnW, 20,
 					StringUtils.translate("autotrade.gui.pair_list.remove"));
 			this.addButton(removeBtn, (button, mouseButton) -> {
-				String json = Configs.Generic.TRADE_PAIRS.getStringValue();
-				Configs.Generic.TRADE_PAIRS.setValueFromString(TradePairList.removePair(json, idx));
-				Configs.saveToFile();
+				TradePairCache.remove(idx);
 				if (refreshAction != null)
 					refreshAction.run();
 			});
