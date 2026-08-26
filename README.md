@@ -66,8 +66,8 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 | Generic | `Trade Mode` | STATIC / MOVING / VOID 三种模式 |
 | Generic | `Trade Executor Mode` | 交易执行策略：USE（默认，直接读取 offer uses，逻辑更简）/ OUTPUT_SLOT（可选，不读取 offer uses，按快照推导剩余次数） |
 | Generic | `Villager Scan Range` | 村民搜索半径（格） |
-| Generic | `Trade Pairs` | 交易对列表（JSON，配置键 `tradePairs`），在「交易对」选项卡管理（列表 + 行内编辑） |
-| Generic | `Item IO` | 物品容器 IO 列表（JSON，配置键 `itemIO`，条目含 `enabled` 开关），在「IO输入 / IO输出」选项卡管理，条目由交易对自动派生 |
+| Generic | `Trade Pairs` | 交易对列表（配置键 `tradePairs`，原生 JSON 数组；0.0.16 及更早版本为 JSON 字符串，加载自动兼容并在下次保存时迁移为数组），在「交易对」选项卡管理（列表 + 行内编辑） |
+| Generic | `Item IO` | 物品容器 IO 列表（配置键 `itemIO`，原生 JSON 数组；0.0.16 及更早版本为 JSON 字符串，加载自动兼容并在下次保存时迁移为数组，条目含 `enabled` 开关），在「IO输入 / IO输出」选项卡管理，条目由交易对自动派生 |
 | Static | `Trade Interval` | 静止模式每轮交易间隔（tick，100 = 5 秒） |
 | Static | `Container IO Interval` | 静止模式两次容器操作之间的最小间隔（tick，0 = 每 tick 都检查） |
 | Static | `Container IO Idle Interval` | 静止模式无容器操作需要执行时等待的 tick 数 |
@@ -97,7 +97,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 - **第 2 行**：`[开]`/`[关]` 状态指示文本（仅展示当前启用状态，绿色/红色，同交易对列表样式）+ 启用/禁用按钮 + `x y z` 坐标输入框（**Enter / 失焦提交**；坐标为 0 0 0 占位时条目不生效）+「抓取容器」按钮（抓取玩家脚下坐标）
 - 启用数为 0 时高亮提示「当前不生效」（该物品暂未被任何启用交易对使用）
 
-> **配置说明**：`itemIO` JSON 条目含 `enabled` 字段（条目级启用开关）。**旧配置文件缺失该字段时默认启用**，无需手动迁移。条目启用开关与运行时联动——关闭后该物品不再触发容器 IO；运行时输入/输出物品集仍派生自「已启用」的交易对。
+> **配置说明**：`itemIO` JSON 条目含 `enabled` 字段（条目级启用开关）。**旧配置文件缺失该字段时默认启用**，无需手动迁移。条目启用开关与运行时联动——关闭后该物品不再触发容器 IO；运行时输入/输出物品集仍派生自「已启用」的交易对。此外，`itemIO`/`tradePairs` 配置值现为原生 JSON 数组（0.0.16 及更早版本为 JSON 字符串），旧文件加载自动兼容、下次保存时迁移为数组。
 
 ## 构建
 
@@ -122,7 +122,11 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 一键脚本（推荐，依次构建 3 个版本）：
 
 ```powershell
-.\build-versions.ps1
+.\build-versions.ps1        # Windows PowerShell
+```
+
+```bash
+./build-versions.sh         # bash 环境（Git Bash / WSL / macOS / Linux）
 ```
 
 手工执行（示例：MC 1.20.1）：
@@ -131,7 +135,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 .\gradlew build -Pminecraft_version=1.20.1 -Pmappings_version=1.20.1+build.10 -Pminecraft_version_out=1.20.1 -Pmalilib_version=0.16.1 -Pfabric_api_version=0.92.6+1.20.1 -Pfabric_api_version_min=0.83.0 -Pmod_menu_version=7.2.2 "-Pminecraft_version_range=>=1.20 <1.20.2"
 ```
 
-代码对 1.20 – 1.20.4 零改动；各版本参数矩阵见 `build-versions.ps1`。
+代码对 1.20 – 1.20.4 零改动；各版本参数矩阵见 `build-versions.ps1` 与 `build-versions.sh`（两处须同步维护）。
 
 ## 持续集成（GitHub Actions）
 

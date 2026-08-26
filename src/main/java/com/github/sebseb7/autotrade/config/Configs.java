@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.config;
 
 import com.github.sebseb7.autotrade.Reference;
 import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
+import com.github.sebseb7.autotrade.config.options.ConfigJsonArray;
 import com.github.sebseb7.autotrade.config.options.ConfigOptionListValue;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.JsonElement;
@@ -12,7 +13,6 @@ import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
 import fi.dy.masa.malilib.config.options.ConfigDouble;
 import fi.dy.masa.malilib.config.options.ConfigInteger;
-import fi.dy.masa.malilib.config.options.ConfigString;
 import fi.dy.masa.malilib.util.FileUtils;
 import fi.dy.masa.malilib.util.JsonUtils;
 import java.io.File;
@@ -36,9 +36,9 @@ public class Configs implements IConfigHandler {
 		public static final ConfigInteger TASK_TIMEOUT = new ConfigInteger("taskTimeout", 400, 0, 300000,
 				"Max ticks a single task may run before it is force-aborted and control returns to idle decisions (a failed void return trigger is retried next cycle). Prevents stuck states (e.g. trade offers never syncing). 0 = disabled. Raise if Void Teleport Timeout or Void Unload Delay is set above this value");
 
-		public static final ConfigString TRADE_PAIRS = new ConfigString("tradePairs", "[]",
+		public static final ConfigJsonArray TRADE_PAIRS = new ConfigJsonArray("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
-		public static final ConfigString ITEM_IO = new ConfigString("itemIO", "[]",
+		public static final ConfigJsonArray ITEM_IO = new ConfigJsonArray("itemIO", "[]",
 				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
 				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT);
@@ -98,15 +98,16 @@ public class Configs implements IConfigHandler {
 				ConfigUtils.readConfigBase(root, "Void", Void.OPTIONS);
 				ConfigUtils.readConfigBase(root, "Hotkeys", Hotkeys.HOTKEY_LIST);
 
-				// Read TRADE_PAIRS separately (not in OPTIONS to hide from GUI)
+				// Read TRADE_PAIRS separately (not in OPTIONS to hide from GUI)；
+				// JSON 数组格式原生读取，旧字符串格式由 ConfigJsonArray 兼容
 				if (root.has("Generic") && root.getAsJsonObject("Generic").has("tradePairs")) {
-					Generic.TRADE_PAIRS
-							.setValueFromString(root.getAsJsonObject("Generic").get("tradePairs").getAsString());
+					Generic.TRADE_PAIRS.setValueFromJsonElement(root.getAsJsonObject("Generic").get("tradePairs"));
 				}
 
-				// Read ITEM_IO separately (not in OPTIONS to hide from GUI)
+				// Read ITEM_IO separately (not in OPTIONS to hide from GUI)；
+				// JSON 数组格式原生读取，旧字符串格式由 ConfigJsonArray 兼容
 				if (root.has("Generic") && root.getAsJsonObject("Generic").has("itemIO")) {
-					Generic.ITEM_IO.setValueFromString(root.getAsJsonObject("Generic").get("itemIO").getAsString());
+					Generic.ITEM_IO.setValueFromJsonElement(root.getAsJsonObject("Generic").get("itemIO"));
 				}
 
 				// 旧配置迁移：voidReturnX/Y/Z 三个整数合并为 voidReturnPos（"x y z" 字符串）；
@@ -158,10 +159,11 @@ public class Configs implements IConfigHandler {
 				generic = new JsonObject();
 				root.add("Generic", generic);
 			}
-			generic.addProperty("tradePairs", Generic.TRADE_PAIRS.getStringValue());
+			// 以 JSON 数组元素原生写入（getAsJsonElement 保证数组格式落盘）
+			generic.add("tradePairs", Generic.TRADE_PAIRS.getAsJsonElement());
 
 			// Write ITEM_IO separately
-			generic.addProperty("itemIO", Generic.ITEM_IO.getStringValue());
+			generic.add("itemIO", Generic.ITEM_IO.getAsJsonElement());
 
 			JsonUtils.writeJsonToFile(root, new File(dir, CONFIG_FILE_NAME));
 		}

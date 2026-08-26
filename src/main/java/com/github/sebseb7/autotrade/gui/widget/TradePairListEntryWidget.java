@@ -29,8 +29,6 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 	 * true=IO输入(give/give2)、false=IO输出(get)；String=物品编码串；null = 无跳转行为）
 	 */
 	private final BiConsumer<Boolean, String> jumpToIoAction;
-	private ItemStack giveStack = ItemStack.EMPTY;
-	private ItemStack getStack = ItemStack.EMPTY;
 	/**
 	 * 当前条目备注（悬浮条目行时显示；addConfigOption 调用发生在 super 构造器内，而字段初始化器在其后才执行并会覆盖该值，
 	 * 故此处不能带初始化器（否则备注恒为空））
@@ -66,9 +64,8 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 		this.jumpToIoAction = jumpToIoAction;
 		if (refreshAction != null) {
 			this.refreshAction = refreshAction;
-		} else if (host instanceof GuiBase) {
+		} else if (host instanceof GuiBase base) {
 			// 默认刷新行为：重建宿主配置屏（与原先 parentScreen.initGui() 等价）
-			GuiBase base = (GuiBase) host;
 			this.refreshAction = base::initGui;
 		} else {
 			this.refreshAction = null;
@@ -95,8 +92,8 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			TradePair p = pairs.get(idx);
 
 			// 解码物品栈
-			giveStack = ItemStringHelper.decode(p.getGiveItem());
-			getStack = ItemStringHelper.decode(p.getGetItem());
+			ItemStack giveStack = ItemStringHelper.decode(p.getGiveItem());
+			ItemStack getStack = ItemStringHelper.decode(p.getGetItem());
 			// 解码可选第二给出物品栈（空串时为单成本交易对，不渲染图标/Input2 文本）
 			ItemStack give2Stack = ItemStringHelper.decode(p.getGiveItem2());
 			note = p.getNote() != null ? p.getNote() : "";
@@ -116,8 +113,7 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 
 			// 物品悬浮提示由 ItemIconWidget 自行处理
 			if (!giveStack.isEmpty()) {
-				giveIcon = this
-						.addWidget(new ItemIconWidget(cx, y + 1, giveStack, () -> jumpToIo(true, p.getGiveItem())));
+				giveIcon = this.addWidget(new ItemIconWidget(cx, y, giveStack, () -> jumpToIo(true, p.getGiveItem())));
 			}
 			cx += 22;
 			// give1 数量标签（x{limit}，每笔交易上限）
@@ -129,7 +125,7 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			// give2 图标 + 其每笔数量（x{give2Count}，0 = 未记录 → 不显示）；单成本交易对时整个块跳过（回归防护）
 			if (!give2Stack.isEmpty()) {
 				give2Icon = this
-						.addWidget(new ItemIconWidget(cx, y + 1, give2Stack, () -> jumpToIo(true, p.getGiveItem2())));
+						.addWidget(new ItemIconWidget(cx, y, give2Stack, () -> jumpToIo(true, p.getGiveItem2())));
 				cx += 22;
 				if (p.getGive2Count() > 0) {
 					String count2Label = StringUtils.translate("autotrade.gui.pair_list.limit_prefix",
@@ -146,8 +142,7 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			cx += arrowWidth + 6;
 
 			if (!getStack.isEmpty()) {
-				getIcon = this
-						.addWidget(new ItemIconWidget(cx, y + 1, getStack, () -> jumpToIo(false, p.getGetItem())));
+				getIcon = this.addWidget(new ItemIconWidget(cx, y, getStack, () -> jumpToIo(false, p.getGetItem())));
 			}
 			cx += 22;
 			// 产出物品每笔数量（x{getCount}，0 = 未记录 → 不显示）
