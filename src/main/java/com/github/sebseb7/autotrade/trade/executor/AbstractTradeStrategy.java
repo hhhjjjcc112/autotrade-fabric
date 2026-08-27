@@ -1,6 +1,7 @@
 package com.github.sebseb7.autotrade.trade.executor;
 
 import com.github.sebseb7.autotrade.AutoTrade;
+import com.github.sebseb7.autotrade.compat.itemscroller.ItemScrollerTradeCompat;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
 import com.github.sebseb7.autotrade.trade.data.TradePairCache;
@@ -216,10 +217,14 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	// 装填指定 offer：setRecipeIndex + switchTo + select 包（顺序同现主循环；setRecipeIndex 不可省略，
 	// 缺省时非 0 号交易本地结果槽可能不生成）
 	private static void refillOffer(MinecraftClient mc, MerchantScreenHandler handler, OfferState target) {
-		handler.setRecipeIndex(target.index);
-		handler.switchTo(target.index);
+		// 真实索引：setRecipeIndex（服务端当前 offer）与发包必须用真实索引；
+		// switchTo 内部读 getRecipes()（ItemScroller 下为重排列表）→ 须用可见索引取到正确装填物品
+		int realIndex = target.index;
+		int visibleIndex = ItemScrollerTradeCompat.getVisibleIndex(handler, realIndex, target.offer);
+		handler.setRecipeIndex(realIndex);
+		handler.switchTo(visibleIndex);
 		if (mc.getNetworkHandler() != null) {
-			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(target.index));
+			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(realIndex));
 		}
 	}
 
@@ -704,10 +709,11 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 
 	// 预扫描：收集未耗尽、匹配交易对、价格达标且背包有成本的交易项。
 	// 结果是每 tick 的快照；后续成本变化由轮到该交易项时的槽 2 状态再次确认。
+	// 兼容层：ItemScroller 收藏重排下取真实列表，索引即真实索引
 	List<OfferState> scanExecutableOffers(MerchantScreenHandler handler, ParsedPair[] parsedPairs,
 			PlayerEntity player) {
 		List<OfferState> list = new ArrayList<>();
-		TradeOfferList offers = handler.getRecipes();
+		TradeOfferList offers = ItemScrollerTradeCompat.getOriginalRecipes(handler);
 		for (int i = 0; i < offers.size(); i++) {
 			TradeOffer candidate = offers.get(i);
 			// 扫描发生在任何交易之前（本窗口尚未交易，offers 为开屏时服务端同步真值）→ 此刻 isDisabled() 准确；
@@ -931,9 +937,10 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	// exact-N 守卫回退助手：先重新装填交易项（槽 0/1 残余成本放回并
 	// autofill 重填、槽 2 预览重建），再空间封顶 QUICK_MOVE 点击——容量 ≥ sellCount → 成交 ≥1（防饿死）；
 	// 容量 < sellCount → 结果滞留 → 由调用方 STUCK 出口终止。不能直接点击空槽 2。
-	private int quickMoveFallback(MinecraftClient mc, MerchantScreenHandler handler, int offerIndex, Slot slot2,
-			ItemStack result) {
-		handler.switchTo(offerIndex);
+	private int quickMoveFallback(MinecraftClient mc, MerchantScreenHandler handler, TradeOffer offer, int offerIndex,
+			Slot slot2, ItemStack result) {
+		// 可见索引用于 switchTo（内部读 getRecipes() = 重排列表），offerIndex（真实索引）用于发包
+		handler.switchTo(ItemScrollerTradeCompat.getVisibleIndex(handler, offerIndex, offer));
 		if (mc.getNetworkHandler() != null) {
 			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(offerIndex));
 		}
@@ -957,7 +964,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		// decideAndExecuteBatch 改走 exactTradeNDual 不再进入本方法；本守卫仅作防御保留，防未来调用路径回归）
 		if (!offer.getSecondBuyItem().isEmpty()) {
 			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（双成本）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+			return quickMoveFallback(mc, handler, offer, offerIndex, slot2, result);
 		}
 		Slot slot0 = handler.getSlot(0);
 		// a) QUICK_MOVE 槽 0（autofill 整组移回背包）；失败（槽 0 移出后仍有物品）→ 回退空间封顶 QUICK_MOVE
@@ -966,7 +973,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 			if (slot0.hasStack()) {
 				AutoTrade.logger.info("[AutoTrade] exact-N 守卫（a 失败：槽 0 移出后仍有物品）offer {}: 回退空间封顶 QUICK_MOVE",
 						offerIndex);
-				return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+				return quickMoveFallback(mc, handler, offer, offerIndex, slot2, result);
 			}
 		}
 		// b) 找成本源槽：优先「数量 ≥ M 且 |S−M| 最小」，否则使用数量最大堆叠；无成本堆叠
@@ -974,14 +981,14 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		Slot source = selectCostSourceSlot(handler, cost, m);
 		if (source == null) {
 			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（无成本源堆叠）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+			return quickMoveFallback(mc, handler, offer, offerIndex, slot2, result);
 		}
 		int s = source.getStack().getCount();
 		// 守卫：右键包数预算 S−M > EXACT_N_MAX_RIGHT_CLICKS → 回退空间封顶 QUICK_MOVE（仍防饿死）
 		if (s - m > EXACT_N_MAX_RIGHT_CLICKS) {
 			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（S−M={} > {}）offer {}: 回退空间封顶 QUICK_MOVE", s - m,
 					EXACT_N_MAX_RIGHT_CLICKS, offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+			return quickMoveFallback(mc, handler, offer, offerIndex, slot2, result);
 		}
 		// c) PICKUP 拿起源堆叠整组 → 右键源槽 (S−M) 次（每次放下 1 包，剩余 S−M 包留在光标）→
 		// d) 点击槽 0 放置 M（光标剩余 S−M 包被放回源槽）
@@ -994,7 +1001,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		// e) 槽 2 canCombine(卖品) 校验：失败（耗尽/错配/装填异常）→ 回退空间封顶 QUICK_MOVE
 		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {
 			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（e 失败：槽 2 不匹配）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
-			return quickMoveFallback(mc, handler, offerIndex, slot2, result);
+			return quickMoveFallback(mc, handler, offer, offerIndex, slot2, result);
 		}
 		// f) 点击槽 2（服务端 while 恰交易 N 笔，输入精确耗尽 → 干净退出）
 		return tradeClick(mc, handler, slot2, result);
