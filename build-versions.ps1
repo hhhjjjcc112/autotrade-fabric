@@ -21,6 +21,7 @@ $builds = @(
             "-Pfabric_api_version=0.92.6+1.20.1",
             "-Pfabric_api_version_min=0.83.0",
             "-Pmod_menu_version=7.2.2",
+            "-Pitemscroller_version=0.20.0",
             "-Pminecraft_version_range=>=1.20 <1.20.2"
         )
     },
@@ -34,6 +35,7 @@ $builds = @(
             "-Pfabric_api_version=0.91.6+1.20.2",
             "-Pfabric_api_version_min=0.86.1",
             "-Pmod_menu_version=8.0.1",
+            "-Pitemscroller_version=0.21.0",
             "-Pminecraft_version_range=>=1.20.2 <1.20.3"
         )
     },
@@ -47,6 +49,7 @@ $builds = @(
             "-Pfabric_api_version=0.92.1+1.20.4",
             "-Pfabric_api_version_min=0.91.1",
             "-Pmod_menu_version=9.0.0",
+            "-Pitemscroller_version=0.22.0",
             "-Pminecraft_version_range=>=1.20.3 <1.20.5"
         )
     }

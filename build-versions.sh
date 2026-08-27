@@ -14,9 +14,9 @@ set -euo pipefail
 # 版本矩阵：每行 = 构建名称 | gradle 属性参数（| 为分隔符；含空格的参数整体作为单个参数传递）
 # 与 build-versions.ps1 保持一致，修改版本参数时两处必须同步
 matrix=(
-    "1.20.1|-Pminecraft_version=1.20.1|-Pmappings_version=1.20.1+build.10|-Pminecraft_version_out=1.20.1|-Pmalilib_version=0.16.1|-Pfabric_api_version=0.92.6+1.20.1|-Pfabric_api_version_min=0.83.0|-Pmod_menu_version=7.2.2|-Pminecraft_version_range=>=1.20 <1.20.2"
-    "1.20.2|-Pminecraft_version=1.20.2|-Pmappings_version=1.20.2+build.4|-Pminecraft_version_out=1.20.2|-Pmalilib_version=0.17.0|-Pfabric_api_version=0.91.6+1.20.2|-Pfabric_api_version_min=0.86.1|-Pmod_menu_version=8.0.1|-Pminecraft_version_range=>=1.20.2 <1.20.3"
-    "1.20.4|-Pminecraft_version=1.20.4|-Pmappings_version=1.20.4+build.3|-Pminecraft_version_out=1.20.4|-Pmalilib_version=0.18.0|-Pfabric_api_version=0.92.1+1.20.4|-Pfabric_api_version_min=0.91.1|-Pmod_menu_version=9.0.0|-Pminecraft_version_range=>=1.20.3 <1.20.5"
+    "1.20.1|-Pminecraft_version=1.20.1|-Pmappings_version=1.20.1+build.10|-Pminecraft_version_out=1.20.1|-Pmalilib_version=0.16.1|-Pfabric_api_version=0.92.6+1.20.1|-Pfabric_api_version_min=0.83.0|-Pmod_menu_version=7.2.2|-Pitemscroller_version=0.20.0|-Pminecraft_version_range=>=1.20 <1.20.2"
+    "1.20.2|-Pminecraft_version=1.20.2|-Pmappings_version=1.20.2+build.4|-Pminecraft_version_out=1.20.2|-Pmalilib_version=0.17.0|-Pfabric_api_version=0.91.6+1.20.2|-Pfabric_api_version_min=0.86.1|-Pmod_menu_version=8.0.1|-Pitemscroller_version=0.21.0|-Pminecraft_version_range=>=1.20.2 <1.20.3"
+    "1.20.4|-Pminecraft_version=1.20.4|-Pmappings_version=1.20.4+build.3|-Pminecraft_version_out=1.20.4|-Pmalilib_version=0.18.0|-Pfabric_api_version=0.92.1+1.20.4|-Pfabric_api_version_min=0.91.1|-Pmod_menu_version=9.0.0|-Pitemscroller_version=0.22.0|-Pminecraft_version_range=>=1.20.3 <1.20.5"
 )
 
 # 前置检查：必须在 Gradle 项目目录下执行（与 build-versions.ps1 用法一致）
