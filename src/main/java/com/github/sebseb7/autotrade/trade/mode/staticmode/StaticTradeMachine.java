@@ -162,4 +162,29 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		tradeCooldown = 0;
 		containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
 	}
+
+	/** 返回本轮已处理村民数（HUD 只读展示用） */
+	public int getProcessedCount() {
+		return processedVillagers.size();
+	}
+
+	/** 返回本轮目标村民数（HUD 只读展示用） */
+	public int getTargetCount() {
+		return targetVillagers.size();
+	}
+
+	/** 返回交易冷却剩余 tick（HUD 只读展示用） */
+	public int getTradeCooldown() {
+		return tradeCooldown;
+	}
+
+	/** 返回容器 IO 间隔冷却剩余 tick（HUD 只读展示用） */
+	public int getContainerIOCooldown() {
+		return containerIOCooldown;
+	}
+
+	/** 返回当前派发的目标村民 id（HUD 只读展示用） */
+	public int getDispatchedVillagerId() {
+		return dispatchedVillagerId;
+	}
 }

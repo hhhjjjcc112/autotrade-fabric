@@ -2,7 +2,6 @@ package com.github.sebseb7.autotrade.trade.mode.voidmode;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.ReturnTriggerType;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
@@ -69,7 +68,7 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 	}
 
 	/** 返回触发是否已配置（TYPE ≠ NONE 且坐标解析成功且非 0 哨兵值） */
-	private boolean isReturnTriggerConfigured() {
+	public boolean isReturnTriggerConfigured() {
 		if (Configs.Void.VOID_RETURN_TYPE.getOptionListValue() == ReturnTriggerType.NONE)
 			return false;
 		BlockPos pos = parseReturnPos();

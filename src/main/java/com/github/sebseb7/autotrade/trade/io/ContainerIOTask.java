@@ -200,4 +200,9 @@ public class ContainerIOTask extends Task {
 		closeScreenIfOpen(mc.currentScreen);
 		return TaskResult.SUCCEEDED;
 	}
+
+	/** 返回当前任务状态枚举（HUD 只读展示用） */
+	public State getState() {
+		return state;
+	}
 }

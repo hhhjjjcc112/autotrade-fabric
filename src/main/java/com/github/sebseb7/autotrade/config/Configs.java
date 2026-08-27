@@ -4,6 +4,10 @@ import com.github.sebseb7.autotrade.Reference;
 import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
 import com.github.sebseb7.autotrade.config.options.ConfigJsonArray;
 import com.github.sebseb7.autotrade.config.options.ConfigOptionListValue;
+import com.github.sebseb7.autotrade.render.HudPosition;
+import com.github.sebseb7.autotrade.trade.executor.ExecutorMode;
+import com.github.sebseb7.autotrade.trade.mode.TradeMode;
+import com.github.sebseb7.autotrade.trade.mode.voidmode.ReturnTriggerType;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -35,13 +39,17 @@ public class Configs implements IConfigHandler {
 				"Timeout ticks waiting for a screen to open after interacting (trade screen, container screen, or return trigger block); shared by all screen-open waits");
 		public static final ConfigInteger TASK_TIMEOUT = new ConfigInteger("taskTimeout", 400, 0, 300000,
 				"Max ticks a single task may run before it is force-aborted and control returns to idle decisions (a failed void return trigger is retried next cycle). Prevents stuck states (e.g. trade offers never syncing). 0 = disabled. Raise if Void Teleport Timeout or Void Unload Delay is set above this value");
+		public static final ConfigBoolean DEBUG_HUD = new ConfigBoolean("debugHud", false,
+				"Show the debug HUD overlay with live trade status and counters (small corner panel with a semi-transparent background; hidden while a screen is open)");
+		public static final ConfigOptionListValue DEBUG_HUD_POSITION = new ConfigOptionListValue("debugHudPosition",
+				HudPosition.TOP_LEFT, "Screen corner where the debug HUD is drawn");
 
 		public static final ConfigJsonArray TRADE_PAIRS = new ConfigJsonArray("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
 		public static final ConfigJsonArray ITEM_IO = new ConfigJsonArray("itemIO", "[]",
 				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
-				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT);
+				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT, DEBUG_HUD, DEBUG_HUD_POSITION);
 	}
 
 	/** 静止交易设置页：仅静止模式生效的选项 */

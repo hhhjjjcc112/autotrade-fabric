@@ -199,4 +199,9 @@ public abstract class TradeTask extends Task {
 	public boolean isInventoryBlocked() {
 		return inventoryBlocked;
 	}
+
+	/** 返回当前任务状态枚举（HUD 只读展示用） */
+	public State getState() {
+		return state;
+	}
 }

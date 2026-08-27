@@ -4,6 +4,7 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.Hotkeys;
 import com.github.sebseb7.autotrade.gui.GuiConfigs;
+import com.github.sebseb7.autotrade.runtime.AutoTradeClientTick;
 import fi.dy.masa.malilib.config.options.ConfigHotkey;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.Message;

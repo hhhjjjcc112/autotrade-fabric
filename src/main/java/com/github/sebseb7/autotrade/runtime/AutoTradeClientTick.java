@@ -1,11 +1,12 @@
-package com.github.sebseb7.autotrade.handler;
+package com.github.sebseb7.autotrade.runtime;
 
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.TradeMode;
 import com.github.sebseb7.autotrade.trade.machine.TradingMachine;
+import com.github.sebseb7.autotrade.trade.mode.TradeMode;
 import com.github.sebseb7.autotrade.trade.mode.movingmode.MovingTradeMachine;
 import com.github.sebseb7.autotrade.trade.mode.staticmode.StaticTradeMachine;
 import com.github.sebseb7.autotrade.trade.mode.voidmode.VoidTradeMachine;
+import com.github.sebseb7.autotrade.trade.stats.TradeStats;
 import fi.dy.masa.malilib.interfaces.IClientTickHandler;
 import java.util.EnumMap;
 import java.util.Map;
@@ -29,6 +30,8 @@ public class AutoTradeClientTick implements IClientTickHandler {
 		for (TradingMachine m : machines.values()) {
 			m.reset();
 		}
+		// 统计与机器状态同生命周期：仅热键 toggle-ON 触发 reset，设置页勾选启用不清零
+		TradeStats.getInstance().reset();
 	}
 
 	@Override
@@ -46,5 +49,13 @@ public class AutoTradeClientTick implements IClientTickHandler {
 		if (machine != null) {
 			machine.tick(mc);
 		}
+	}
+
+	/** 返回当前启用的交易机器（mod 关闭时返回 null；仅查询，不 tick） */
+	public TradingMachine getActiveMachine() {
+		if (!Configs.Generic.ENABLED.getBooleanValue()) {
+			return null;
+		}
+		return machines.get((TradeMode) Configs.Generic.TRADE_MODE.getOptionListValue());
 	}
 }

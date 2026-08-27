@@ -4,6 +4,7 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
+import com.github.sebseb7.autotrade.trade.stats.TradeStats;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
@@ -113,6 +114,10 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	 *            任务最后一次 tick 返回的结果（成功或失败）
 	 */
 	protected void onTaskEnded(Task task, TaskResult result) {
+		// 统计：仅记录成功完成的容器 IO（失败/超时/强杀不计入调试计数）
+		if (task instanceof ContainerIOTask op && result.isSucceeded()) {
+			TradeStats.getInstance().recordIoOp(op.isInputOp());
+		}
 		if (result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED) {
 			// 会话因背包空间不足失败结束 → 暂停交易并提示
 			inventoryPauseCooldown = INVENTORY_PAUSE_TICKS;
@@ -175,5 +180,20 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		if (currentTask instanceof TradeTask)
 			return "TRADE_SESSION";
 		return "CONTAINER_IO";
+	}
+
+	/** 返回当前任务（HUD 只读展示用；null = 空闲） */
+	public Task getCurrentTask() {
+		return currentTask;
+	}
+
+	/** 返回当前任务已运行的 tick 数（HUD 只读展示用） */
+	public int getTaskTicks() {
+		return taskTicks;
+	}
+
+	/** 返回背包满暂停冷却剩余 tick（HUD 只读展示用；>0 表示暂停中） */
+	public int getInventoryPauseCooldown() {
+		return inventoryPauseCooldown;
 	}
 }

@@ -212,4 +212,14 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		dispatchedVillagerId = 0;
 		starvation.clear();
 	}
+
+	/** 返回已处理村民数（HUD 只读展示用） */
+	public int getProcessedCount() {
+		return processedVillagers.size();
+	}
+
+	/** 返回当前饥饿记账条目数（HUD 只读展示用） */
+	public int getStarvationCount() {
+		return starvation.size();
+	}
 }

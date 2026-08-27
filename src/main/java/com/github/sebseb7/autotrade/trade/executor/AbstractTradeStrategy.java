@@ -5,6 +5,7 @@ import com.github.sebseb7.autotrade.compat.itemscroller.ItemScrollerTradeCompat;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
 import com.github.sebseb7.autotrade.trade.data.TradePairCache;
+import com.github.sebseb7.autotrade.trade.stats.TradeStats;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -505,7 +506,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		// 第 1 步：开窗残留清理（必须在任何 switchTo 之前，防御性兜底；失败 → 阻塞并结束会话，
 		// 下轮会话重开时重试清理）
 		if (!cleanupResidualResult(mc, handler)) {
-			return false;
+			return endSession(0);
 		}
 
 		// 第 2 步：offers/pairs 空检查（沿用现有语义）
@@ -524,7 +525,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 
 		if (pairs.isEmpty()) {
 			AutoTrade.logger.info("[AutoTrade] No trade pairs configured");
-			return false;
+			return endSession(0);
 		}
 
 		// 第 3 步：预扫描可执行交易项（开屏 isDisabled() 过滤已耗尽的 offer；饿死候选标志随扫描携带）。
@@ -533,7 +534,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		if (active.isEmpty()) {
 			// 无任何可执行交易项：移出输入成本后结束会话（下轮会话重试）
 			moveOutInputCosts(mc, handler);
-			return false;
+			return endSession(0);
 		}
 
 		// 第 4 步：公平轮转 pass 循环——每 pass 遍历 active 中每个 offer 至多 1 次点击
@@ -565,6 +566,12 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		}
 		AutoTrade.logger.info("[AutoTrade] 会话收尾: tradesTotal={} capacitySkips={} blocked={}", tradesTotal,
 				capacitySkips, blocked);
+		return endSession(tradesTotal);
+	}
+
+	/** 会话结束统一出口：记录会话成交数（含 0 笔会话，保证 HUD 会话计数不显示过期值）并返回 false */
+	private boolean endSession(int trades) {
+		TradeStats.getInstance().recordSession(trades);
 		return false;
 	}
 

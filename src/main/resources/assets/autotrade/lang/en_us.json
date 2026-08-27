@@ -79,6 +79,8 @@
     "config.name.trapchestdelay": "Trap Chest Delay",
     "config.name.opentimeout": "Screen Open Timeout",
     "config.name.tasktimeout": "Task Timeout",
+    "config.name.debughud": "Debug HUD",
+    "config.name.debughudposition": "Debug HUD Position",
 
     "config.name.tradeinterval": "Trade Interval",
     "config.name.movingrangemultiplier": "Moving Scan Range Multiplier",
@@ -106,6 +108,8 @@
     "config.comment.trapchestdelay": "Ticks to keep the trapped chest screen open after opening (stabilizes the redstone signal and leaves time for the mechanism to react); shared by container IO and the void return trigger",
     "config.comment.opentimeout": "Timeout ticks waiting for a screen to open after interacting (trade screen, container screen, or return trigger block); shared by all screen-open waits",
     "config.comment.tasktimeout": "Max ticks a single task may run before it is force-aborted and control returns to idle decisions (a failed void return trigger is retried next cycle). Prevents stuck states (e.g. trade offers never syncing). 0 = disabled. Raise if Void Teleport Timeout or Void Unload Delay is set above this value",
+    "config.comment.debughud": "Show the debug HUD overlay with live trade status and counters (small corner panel with a semi-transparent background; hidden while a screen is open)",
+    "config.comment.debughudposition": "Screen corner where the debug HUD is drawn",
 
     "config.comment.tradeinterval": "Min ticks between trade rounds in static mode (100 ticks = 5 seconds)",
     "config.comment.movingrangemultiplier": "Multiplier applied to the villager scan range in moving mode (used for both the scan radius and the processed-villager invalidation threshold); 1.5 = 1.5x the base range",
@@ -119,5 +123,17 @@
     "config.comment.paireditgive2": "Optional second give item for 2-for-1 trades (leave empty for single-cost pairs)",
     "config.comment.paireditget": "Click [Grab Get] to use the item in hand",
     "config.comment.paireditlimit": "Max amount of the FIRST give item per trade (the 2nd give item is not price-adjusted and has no limit)",
-    "config.comment.paireditnote": "Notes"
+    "config.comment.paireditnote": "Notes",
+
+    "autotrade.debug.title": "AutoTrade Debug",
+    "autotrade.debug.status": "Enabled: %s | Mode: %s",
+    "autotrade.debug.on": "ON",
+    "autotrade.debug.off": "OFF",
+    "autotrade.debug.machine": "Machine: %s | ticks: %d | inv pause: %dt",
+    "autotrade.debug.task": "Task: %s | %s",
+    "autotrade.debug.trades": "Session trades: %d | Total: %d",
+    "autotrade.debug.io": "IO: in %d | out %d",
+    "autotrade.debug.static_line": "Static: %d/%d villagers | trade %dt | io %dt",
+    "autotrade.debug.moving_line": "Moving: %d processed | %d starving",
+    "autotrade.debug.void_line": "Void: return trigger %s"
 }

@@ -1,7 +1,6 @@
 package com.github.sebseb7.autotrade.trade.executor;
 
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.config.ExecutorMode;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
 

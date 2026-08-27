@@ -79,6 +79,8 @@
     "config.name.trapchestdelay": "陷阱箱延迟",
     "config.name.opentimeout": "界面打开超时",
     "config.name.tasktimeout": "任务超时",
+    "config.name.debughud": "调试 HUD",
+    "config.name.debughudposition": "调试 HUD 位置",
 
     "config.name.tradeinterval": "最小交易间隔",
     "config.name.movingrangemultiplier": "移动扫描范围乘数",
@@ -106,6 +108,8 @@
     "config.comment.trapchestdelay": "打开陷阱箱后保持其界面开启的时长（tick），用于稳定红石信号并等待机关反应；输入/输出容器与虚空回程触发共用",
     "config.comment.opentimeout": "与方块或村民交互后等待界面打开的超时（tick）；交易界面、容器界面与回程触发界面共用",
     "config.comment.tasktimeout": "单个任务运行超过此时长（tick）仍未完成时将被强制中断，回到空闲决策（回程触发失败时下一轮会重试）。用于防止卡死（如交易列表始终不同步）。0 = 禁用。若「虚空传送超时」或「虚空卸载缓冲」大于本值，请同步调大",
+    "config.comment.debughud": "在屏幕上显示调试 HUD，展示实时交易状态与计数器（角落小面板，半透明背景；打开界面时隐藏）",
+    "config.comment.debughudposition": "调试 HUD 绘制在屏幕的哪个角落",
 
     "config.comment.tradeinterval": "静止模式下每轮交易之间的最小间隔（tick），100 tick = 5 秒",
     "config.comment.movingrangemultiplier": "移动交易模式下对「村民扫描范围」的乘数（同时用于扫描半径与已处理村民记录的失效阈值）；1.5 = 基础范围的 1.5 倍",
@@ -119,5 +123,17 @@
     "config.comment.paireditgive2": "可选第二成本物品，用于 2 换 1 交易（留空表示单成本交易对）",
     "config.comment.paireditget": "点击 [抓取产物] 按钮使用手中物品",
     "config.comment.paireditlimit": "每笔交易第一个成本物品的最大数量（第二个成本物品不参与计价，无上限）",
-    "config.comment.paireditnote": "备注"
+    "config.comment.paireditnote": "备注",
+
+    "autotrade.debug.title": "AutoTrade 调试",
+    "autotrade.debug.status": "已启用: %s | 模式: %s",
+    "autotrade.debug.on": "开",
+    "autotrade.debug.off": "关",
+    "autotrade.debug.machine": "机器: %s | ticks: %d | 背包暂停: %dt",
+    "autotrade.debug.task": "任务: %s | %s",
+    "autotrade.debug.trades": "会话成交: %d | 累计: %d",
+    "autotrade.debug.io": "IO: 入 %d | 出 %d",
+    "autotrade.debug.static_line": "静止: %d/%d 村民 | 交易冷却 %dt | IO %dt",
+    "autotrade.debug.moving_line": "移动: %d 已处理 | %d 饥饿",
+    "autotrade.debug.void_line": "虚空: 回程触发 %s"
 }

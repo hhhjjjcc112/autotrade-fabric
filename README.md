@@ -31,12 +31,13 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 - **物品/容器定位**：用**命名物品展示框**指定买卖物品；容器坐标在设置页「IO输入 / IO输出」选项卡中配置——条目由交易对数据自动派生，同一物品只需配置一次坐标
 - **中英文双语**界面（i18n）
 - **Mod Menu** 支持；设置界面默认热键 **Right-Shift+T**（打不开设置时可装 Mod Menu https://modrinth.com/mod/modmenu）
+- **调试 HUD**：设置页「通用」选项卡开启 Debug HUD 后，屏幕角落显示半透明调试面板（启停/模式/机器/任务状态、会话与累计成交数、容器 IO 计数、模式特有数据），位置可选四角（默认左上）；打开交易/容器界面时面板被界面盖住（预期行为）
 
 ## 支持的版本
 
 | 项目 | 版本 |
 |------|------|
-| AutoTrade Mod | 0.0.16 |
+| AutoTrade Mod | 0.0.17 |
 | Minecraft | 1.20 – 1.20.4（Fabric） |
 | 前置 | malilib、fabric-api |
 
@@ -68,6 +69,8 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 | Generic | `Villager Scan Range` | 村民搜索半径（格） |
 | Generic | `Trade Pairs` | 交易对列表（配置键 `tradePairs`，原生 JSON 数组；0.0.16 及更早版本为 JSON 字符串，加载自动兼容并在下次保存时迁移为数组），在「交易对」选项卡管理（列表 + 行内编辑） |
 | Generic | `Item IO` | 物品容器 IO 列表（配置键 `itemIO`，原生 JSON 数组；0.0.16 及更早版本为 JSON 字符串，加载自动兼容并在下次保存时迁移为数组，条目含 `enabled` 开关），在「IO输入 / IO输出」选项卡管理，条目由交易对自动派生 |
+| Generic | `Debug HUD` | 调试 HUD 开关（默认关；开启后角落显示半透明调试面板） |
+| Generic | `Debug HUD Position` | 调试 HUD 所在屏幕角落（左上/右上/左下/右下，默认左上） |
 | Static | `Trade Interval` | 静止模式每轮交易间隔（tick，100 = 5 秒） |
 | Static | `Container IO Interval` | 静止模式两次容器操作之间的最小间隔（tick，0 = 每 tick 都检查） |
 | Static | `Container IO Idle Interval` | 静止模式无容器操作需要执行时等待的 tick 数 |
