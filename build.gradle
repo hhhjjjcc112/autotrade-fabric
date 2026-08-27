@@ -9,7 +9,7 @@ java {
 }
 
 repositories {
-	maven { url = 'https://masa.dy.fi/maven' }
+	maven { url = 'https://api.modrinth.com/maven' }
 	maven { url = 'https://maven.terraformersmc.com/releases/' }
 	maven { url = 'https://maven.fabricmc.net/' }
 }
@@ -18,13 +18,13 @@ dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings "net.fabricmc:yarn:${project.mappings_version}:v2"
 	modImplementation "net.fabricmc:fabric-loader:${project.fabric_loader_version}"
-	modImplementation "fi.dy.masa.malilib:malilib-fabric-${project.minecraft_version_out}:${project.malilib_version}"
+	modImplementation "maven.modrinth:malilib:${project.malilib_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 	modCompileOnly "com.terraformersmc:modmenu:${project.mod_menu_version}"
 	// ItemScroller 可选依赖：编译期引用 villager API（fi.dy.masa.itemscroller.villager），运行时类由用户
-	// 安装的 ItemScroller 提供（mod 内用 isModLoaded 检测，不新增运行时依赖）。jar 由 libs/ 目录 vendor
-	// （见 libs/README.md），缺失会导致编译失败
-	modCompileOnly files("libs/itemscroller-fabric-${project.minecraft_version_out}-${project.itemscroller_version}.jar")
+	// 安装的 ItemScroller 提供（mod 内用 isModLoaded 检测，不新增运行时依赖）。坐标走 Modrinth Maven
+	// （slug 为 item-scroller，带连字符），版本号与 build-versions 矩阵一一对应
+	modCompileOnly "maven.modrinth:item-scroller:${project.itemscroller_version}"
 }
 
 group = project.group + "." + project.mod_id
