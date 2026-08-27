@@ -161,7 +161,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 
 ## 已知问题
 
-- ItemScroller 的交易收藏功能会破坏交易，请勿与 ItemScroller 的交易收藏同时使用
+- **ItemScroller 交易收藏兼容**：已支持与 ItemScroller 的收藏交易同时使用——交易执行按 ItemScroller 真实交易顺序索引，收藏重排不再影响交易；ItemScroller 为可选依赖（无需安装也可使用本 mod）
 
 ## 许可
 
