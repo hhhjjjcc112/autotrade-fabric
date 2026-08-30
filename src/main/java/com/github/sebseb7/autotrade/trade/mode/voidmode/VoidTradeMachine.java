@@ -5,7 +5,6 @@ import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
 import fi.dy.masa.malilib.gui.Message;
@@ -38,7 +37,7 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 			return;
 
 		// 优先容器 IO（先卸货/补货再返回，否则岛侧容器被「传回原侧」永久饿死，决策 2）
-		if (ContainerIOHelper.startContainerIO(mc, this::setTaskIfEmpty))
+		if (containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
 			return;
 
 		// 返回触发：已配置时先做交接与可达性判定（空间相位：玩家在岛侧 ⇔ 返回块可达），优先级高于找村民（决策 2）

@@ -17,7 +17,7 @@
     "autotrade.message.invalid_pos": "§cInvalid position format. Use \"x y z\" (e.g. -13 60 -1)",
     "autotrade.message.inventory.full": "§eInventory full - trading paused until output container frees space",
     "autotrade.message.added_trade_pairs": "§aAdded %d new trade pair(s)",
-    "autotrade.message.void.exhausted": "§cVillager trades have been exhausted - the void unload buffer may be too small, or the rig's chunk stays loaded (spawn/force-loaded chunks). Raise Void Unload Delay or relocate the rig",
+    "autotrade.message.void.exhausted": "§cVillager trade uses detected (count persisted/leftover) - either a leftover count from a previous wrong trade, or the void unload buffer is too small / the rig's chunk stays loaded (spawn/force-loaded chunks), causing counts to be saved. Trading continues but yields fewer trades per cycle; raise Void Unload Delay or check the rig location, or let the villager restock / replace it to reset the leftover count",
     "autotrade.message.io.not_container": "§cContainer operation failed: target position %s is not a container (%s), aborted. Check the container coordinates in IO Input/IO Output",
     "autotrade.message.io.open_failed": "§cContainer operation failed: failed to open the container screen %s times in a row, aborted",
     "autotrade.message.void.return_overlap": "§eVoid return trigger position overlaps an IO container coordinate - return trigger disabled (move the trigger block or the container coordinates)",
@@ -81,6 +81,8 @@
     "config.name.tasktimeout": "Task Timeout",
     "config.name.debughud": "Debug HUD",
     "config.name.debughudposition": "Debug HUD Position",
+    "config.name.idlescaninterval": "Idle Scan Interval",
+    "config.name.containerreach": "Container Reach",
 
     "config.name.tradeinterval": "Trade Interval",
     "config.name.movingrangemultiplier": "Moving Scan Range Multiplier",
@@ -110,6 +112,8 @@
     "config.comment.tasktimeout": "Max ticks a single task may run before it is force-aborted and control returns to idle decisions (a failed void return trigger is retried next cycle). Prevents stuck states (e.g. trade offers never syncing). 0 = disabled. Raise if Void Teleport Timeout or Void Unload Delay is set above this value",
     "config.comment.debughud": "Show the debug HUD overlay with live trade status and counters (small corner panel with a semi-transparent background; hidden while a screen is open)",
     "config.comment.debughudposition": "Screen corner where the debug HUD is drawn",
+    "config.comment.idlescaninterval": "Ticks to reuse the container IO scan result before rescanning (lower = fresher container detection, higher = less CPU). Finishing any task always rescans immediately.",
+    "config.comment.containerreach": "Max distance in blocks to a container for container IO to trigger (the server ignores clicks beyond ~4.5 blocks, so higher values may not work).",
 
     "config.comment.tradeinterval": "Min ticks between trade rounds in static mode (100 ticks = 5 seconds)",
     "config.comment.movingrangemultiplier": "Multiplier applied to the villager scan range in moving mode (used for both the scan radius and the processed-villager invalidation threshold); 1.5 = 1.5x the base range",

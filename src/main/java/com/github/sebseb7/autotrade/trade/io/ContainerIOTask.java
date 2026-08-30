@@ -2,7 +2,7 @@ package com.github.sebseb7.autotrade.trade.io;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper.IOIntent;
+import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TaskResult.FailReason;
@@ -31,6 +31,19 @@ public class ContainerIOTask extends Task {
 
 	private enum State {
 		OPENING, TRANSFERRING, CLOSING
+	}
+
+	/** 容器 IO 意图：物品 IO 条目 + 输入/输出方向 */
+	public record IOIntent(ItemIO io, boolean isInput) {
+		/**
+		 * 饥饿记账用的稳定标识：容器坐标 + 方向（跨条目实例稳定，同一容器意图共享饥饿计数）； 格式单一实现在 ContainerCandidate，MOVING
+		 * 饥饿记账依赖
+		 */
+		public String ioKey() {
+			// 委托调度器 ContainerCandidate 的单一实现（ioKey 格式唯一出处，MOVING 饥饿记账依赖其稳定）
+			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, isInput,
+					0).ioKey();
+		}
 	}
 
 	private State state = State.OPENING;

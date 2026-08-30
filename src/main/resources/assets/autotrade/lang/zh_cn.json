@@ -17,7 +17,7 @@
     "autotrade.message.invalid_pos": "§c坐标格式错误，请使用空格分隔（如 -13 60 -1）",
     "autotrade.message.inventory.full": "§e背包空间不足，已暂停交易；等待输出容器腾出空间后自动恢复",
     "autotrade.message.added_trade_pairs": "§a已添加 %d 个交易对",
-    "autotrade.message.void.exhausted": "§c村民交易已耗尽——村民卸载等待可能不足，或装置区块被持续加载（出生点/强制加载区块）。请调大「村民卸载等待」或更换装置位置",
+    "autotrade.message.void.exhausted": "§c检测到村民交易已有使用次数（次数被持久化/残留）——可能是此前误交易留下的次数，或虚空卸载缓冲不足、装置区块被持续加载（出生点/强制加载区块）导致次数回写。交易不会停止，但每次可交易数量会减少；请调大「村民卸载等待」或检查装置位置；若为残留次数，让村民补货或更换村民即可清零",
     "autotrade.message.io.not_container": "§c容器操作失败：目标位置 %s 不是容器（%s），已放弃。请检查「IO输入/IO输出」中的容器坐标",
     "autotrade.message.io.open_failed": "§c容器操作失败：容器窗口连续打开失败 %s 次，已放弃",
     "autotrade.message.void.return_overlap": "§e虚空回程触发坐标与 IO 容器坐标重叠，回程触发未启用（请更换触发方块或容器坐标）",
@@ -81,6 +81,8 @@
     "config.name.tasktimeout": "任务超时",
     "config.name.debughud": "调试 HUD",
     "config.name.debughudposition": "调试 HUD 位置",
+    "config.name.idlescaninterval": "空闲扫描间隔",
+    "config.name.containerreach": "容器可及距离",
 
     "config.name.tradeinterval": "最小交易间隔",
     "config.name.movingrangemultiplier": "移动扫描范围乘数",
@@ -110,6 +112,8 @@
     "config.comment.tasktimeout": "单个任务运行超过此时长（tick）仍未完成时将被强制中断，回到空闲决策（回程触发失败时下一轮会重试）。用于防止卡死（如交易列表始终不同步）。0 = 禁用。若「虚空传送超时」或「虚空卸载缓冲」大于本值，请同步调大",
     "config.comment.debughud": "在屏幕上显示调试 HUD，展示实时交易状态与计数器（角落小面板，半透明背景；打开界面时隐藏）",
     "config.comment.debughudposition": "调试 HUD 绘制在屏幕的哪个角落",
+    "config.comment.idlescaninterval": "容器 IO 扫描结果的复用时长（tick，越小检测越及时、越大越省 CPU）。任意任务结束都会立即重新扫描。",
+    "config.comment.containerreach": "触发容器 IO 的最大方块距离。超过约 4.5 格的点击可能被服务端忽略，不建议调大。",
 
     "config.comment.tradeinterval": "静止模式下每轮交易之间的最小间隔（tick），100 tick = 5 秒",
     "config.comment.movingrangemultiplier": "移动交易模式下对「村民扫描范围」的乘数（同时用于扫描半径与已处理村民记录的失效阈值）；1.5 = 基础范围的 1.5 倍",

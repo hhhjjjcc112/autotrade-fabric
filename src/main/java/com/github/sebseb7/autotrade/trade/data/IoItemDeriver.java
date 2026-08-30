@@ -54,7 +54,7 @@ public final class IoItemDeriver {
 
 	/**
 	 * 派生仅启用交易对的物品集合：输入集 = 启用交易对 giveItem ∪ giveItem2，输出集 = getItem。 语义与
-	 * ContainerIOHelper.findPendingContainers 的集合构建逐字对齐（供运行时复用）。
+	 * ContainerIOScheduler.scanPendingContainers 的集合构建逐字对齐（供运行时复用）。
 	 */
 	public static ActiveItemSets deriveActiveSets(List<TradePair> pairs) {
 		Set<String> inputItems = new HashSet<>();

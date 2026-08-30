@@ -3,10 +3,9 @@ package com.github.sebseb7.autotrade.trade.mode.movingmode;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper.ContainerCandidate;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
+import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
@@ -52,7 +51,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	/** 村民饥饿键：实体 id */
 	private record VillagerKey(int entityId) implements StarvationKey {
 	}
-	/** 容器饥饿键：ContainerIOHelper.ContainerCandidate.ioKey()（跨 ItemIO 条目稳定） */
+	/** 容器饥饿键：ContainerIOScheduler.ContainerCandidate.ioKey()（跨 ItemIO 条目稳定） */
 	private record ContainerKey(String ioKey) implements StarvationKey {
 	}
 
@@ -126,7 +125,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		// 容器先入列（bonus=CONTAINER_BONUS），村民后入列（bonus=0）——平分时容器优先（等价原 bestContainerScore
 		// >= bestVillagerScore）
 		List<Candidate> candidates = new ArrayList<>();
-		for (ContainerCandidate c : ContainerIOHelper.findPendingContainers(mc))
+		for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc))
 			candidates.add(new Candidate(new ContainerKey(c.ioKey()), CONTAINER_BONUS, c.distance(), c, null));
 		for (Entity v : findUnprocessedVillagers(mc))
 			candidates.add(
@@ -160,9 +159,9 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			if (c != best)
 				starvation.merge(c.key(), 1, this::capStarvation);
 
-		// 派发：容器 → startContainerIO（按原对象派发）；村民 → 构造器锁定派发，会话内不再自行重扫（竞态修复）
+		// 派发：容器 → startCandidate（按原对象派发）；村民 → 构造器锁定派发，会话内不再自行重扫（竞态修复）
 		if (best.key() instanceof ContainerKey) {
-			ContainerIOHelper.startContainerIO(best.container(), this::setTaskIfEmpty);
+			containerIOScheduler.startCandidate(best.container(), this::setTaskIfEmpty);
 			return;
 		}
 		dispatchedVillagerId = ((VillagerKey) best.key()).entityId();

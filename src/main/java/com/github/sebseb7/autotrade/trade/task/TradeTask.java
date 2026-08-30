@@ -122,7 +122,8 @@ public abstract class TradeTask extends Task {
 				// 耗尽检测告警：此时 offers 仍是开窗时服务端同步真值（尚未被本地点击模拟污染）——
 				// 健康虚空装置中村民每次重载 uses 应为 0，任何 uses > 0 都是交易被持久化到村民的痕迹
 				if (hasExhaustedTradeEvidence(screen)) {
-					AutoTrade.logger.warn("[VoidMode] 村民交易已耗尽：卸载缓冲不足或装置区块被持续加载，无限交易失效（请调大 voidUnloadDelay 或检查装置位置）");
+					AutoTrade.logger.warn(
+							"[VoidMode] 村民交易已有使用次数（被持久化/残留）：可能是此前误交易留下的次数，或卸载缓冲不足/装置区块被持续加载；交易仍继续但每次可交易数量减少（请调大 voidUnloadDelay 或检查装置位置）");
 					InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.void.exhausted");
 				}
 				state = State.TRADING;

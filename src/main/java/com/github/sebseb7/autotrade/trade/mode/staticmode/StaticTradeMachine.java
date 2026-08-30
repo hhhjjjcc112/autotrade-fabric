@@ -3,7 +3,6 @@ package com.github.sebseb7.autotrade.trade.mode.staticmode;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
@@ -16,7 +15,8 @@ import net.minecraft.entity.Entity;
 /**
  * STATIC 模式：站在固定位置逐村交易 + 容器 IO + 交易/IO 冷却。 扫描/名单/已处理记录全部在机器层维护：每轮扫描范围内全部村民建立
  * 名单（targetVillagers），按顺序逐个派发单村民会话，名单处理完后进入交易冷却（约 5 秒），冷却结束重新扫描开始新一轮
- * （每轮都重新处理全部村民，不记忆上一轮谁已耗尽）。 容器 IO 在交易冷却期间按 IO 间隔尝试，交易进行中不插队。
+ * （每轮都重新处理全部村民，不记忆上一轮谁已耗尽）。 容器 IO 在交易冷却期间按 IO 间隔尝试（经机器层 ContainerIOScheduler
+ * 调度），交易进行中不插队。
  */
 public class StaticTradeMachine extends AbstractTradeMachine {
 
@@ -137,7 +137,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 
 		// 交易冷却期间（非交易中）→ 尝试容器 IO；无 IO 需求则重置为闲置间隔
 		if (containerIOCooldown == 0) {
-			if (ContainerIOHelper.startContainerIO(mc, this::setTaskIfEmpty))
+			if (containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
 				return;
 			containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
 		}

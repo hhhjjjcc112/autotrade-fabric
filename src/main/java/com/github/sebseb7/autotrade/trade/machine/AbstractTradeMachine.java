@@ -2,7 +2,6 @@ package com.github.sebseb7.autotrade.trade.machine;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.stats.TradeStats;
 import com.github.sebseb7.autotrade.trade.task.Task;
@@ -33,6 +32,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	private int inventoryPauseCooldown = 0;
 	/** 背包满后的暂停时长：100 tick = 5 秒，到期后重新探测背包空间 */
 	private static final int INVENTORY_PAUSE_TICKS = 100;
+
+	/** 容器 IO 调度器（机器层拥有调度决策；本基类与三模式共用同一实例） */
+	protected final ContainerIOScheduler containerIOScheduler = new ContainerIOScheduler();
 
 	protected AbstractTradeMachine() {
 	}
@@ -69,6 +71,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 			if (!result.isRunning()) {
 				// 任务结束（成功或失败）→ 回调并清空，落入下方 tickIdle（同 tick，等价现状 fall-through）
 				onTaskEnded(currentTask, result);
+				// 任何任务结束都可能改变背包（交易消耗/产出、容器转运增减）→ 缓存必须失效
+				containerIOScheduler.invalidate();
 				currentTask = null;
 				taskTicks = 0;
 			} else {
@@ -100,6 +104,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		AutoTrade.logger.warn("[ModeMachine] 任务运行超过 {} tick 未完成，看门狗强杀 ({}, state={})", taskTicks,
 				currentTask.getClass().getSimpleName(), getStateName());
 		onTaskInterrupted(currentTask);
+		// 强杀时转运可能半途，背包状态不可信 → 缓存必须失效
+		containerIOScheduler.invalidate();
 		currentTask = null;
 		taskTicks = 0;
 	}
@@ -156,7 +162,7 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 			return false;
 
 		// 暂停期间每 tick 尝试输出优先容器 IO（本地零成本检查，无 IO 需求时不发包）
-		if (ContainerIOHelper.startOutputFirstContainerIO(mc, this::setTaskIfEmpty))
+		if (containerIOScheduler.startOutputFirst(mc, this::setTaskIfEmpty))
 			return true;
 
 		inventoryPauseCooldown--;
@@ -171,6 +177,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		currentTask = null;
 		taskTicks = 0;
 		inventoryPauseCooldown = 0;
+		// 重置后背包状态可能已变（清空/转移）→ 缓存立即失效，避免复用过期扫描结果
+		containerIOScheduler.invalidate();
 	}
 
 	@Override
