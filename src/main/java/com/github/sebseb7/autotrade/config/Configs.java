@@ -43,12 +43,15 @@ public class Configs implements IConfigHandler {
 				"Show the debug HUD overlay with live trade status and counters (small corner panel with a semi-transparent background; hidden while a screen is open)");
 		public static final ConfigOptionListValue DEBUG_HUD_POSITION = new ConfigOptionListValue("debugHudPosition",
 				HudPosition.TOP_LEFT, "Screen corner where the debug HUD is drawn");
-		/** 容器 IO 扫描缓存复用间隔（tick）；任务结束立即失效重扫 */
+		/** 背包物品计数复用间隔（tick）；容器候选每次重算（距离实时）；任意任务结束立即重算背包 */
 		public static final ConfigInteger IDLE_SCAN_INTERVAL = new ConfigInteger("idleScanInterval", 5, 1, 20,
-				"Ticks to reuse the container IO scan result before rescanning (lower = fresher container detection, higher = less CPU). Finishing any task always rescans immediately");
+				"Ticks to reuse the backpack item-count map before recounting (container candidates are recomputed every tick with fresh distance; finishing any task always recounts immediately)");
 		/** 触发容器 IO 的最大容器距离（格）；超过约 4.5 格服务端会忽略点击 */
 		public static final ConfigInteger CONTAINER_REACH = new ConfigInteger("containerReach", 4, 2, 8,
 				"Max distance in blocks to a container for container IO to trigger (the server ignores clicks beyond ~4.5 blocks, so higher values may not work)");
+		/** 输出操作单次搬运的最大组数（999 = 全部匹配物品）；防极端场景同 tick 点击风暴 */
+		public static final ConfigInteger OUTPUT_MOVE_CAP = new ConfigInteger("outputMoveCap", 999, 1, 9999,
+				"Maximum item stacks moved in a single output container-IO operation (999 = move all matching stacks)");
 
 		public static final ConfigJsonArray TRADE_PAIRS = new ConfigJsonArray("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
@@ -56,7 +59,7 @@ public class Configs implements IConfigHandler {
 				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
 				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT, DEBUG_HUD, DEBUG_HUD_POSITION,
-				IDLE_SCAN_INTERVAL, CONTAINER_REACH);
+				IDLE_SCAN_INTERVAL, CONTAINER_REACH, OUTPUT_MOVE_CAP);
 	}
 
 	/** 静止交易设置页：仅静止模式生效的选项 */

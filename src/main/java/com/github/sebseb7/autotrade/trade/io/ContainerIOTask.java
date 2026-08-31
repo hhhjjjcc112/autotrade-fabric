@@ -3,6 +3,7 @@ package com.github.sebseb7.autotrade.trade.io;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
+import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TaskResult.FailReason;
@@ -27,6 +28,10 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.World;
 
+/**
+ * 容器 IO 任务：打开目标容器窗口后，在 1 tick 内循环搬运全部匹配物品（burst transfer）， 直到达 transferLimit
+ * 上限或无匹配物品即停；随后关窗结束（OPENING→TRANSFERRING→CLOSING→SUCCEEDED）。
+ */
 public class ContainerIOTask extends Task {
 
 	private enum State {
@@ -36,26 +41,45 @@ public class ContainerIOTask extends Task {
 	/** 容器 IO 意图：物品 IO 条目 + 输入/输出方向 */
 	public record IOIntent(ItemIO io, boolean isInput) {
 		/**
-		 * 饥饿记账用的稳定标识：容器坐标 + 方向（跨条目实例稳定，同一容器意图共享饥饿计数）； 格式单一实现在 ContainerCandidate，MOVING
-		 * 饥饿记账依赖
+		 * 条目级饥饿记账标识：物品 + 坐标 + 方向（跨条目实例稳定，同容器不同物品独立记账）； 格式单一实现在
+		 * ContainerCandidate，MOVING 饥饿记账依赖
 		 */
 		public String ioKey() {
 			// 委托调度器 ContainerCandidate 的单一实现（ioKey 格式唯一出处，MOVING 饥饿记账依赖其稳定）
 			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, isInput,
 					0).ioKey();
 		}
+
+		/**
+		 * 容器身份键（坐标+方向）：L2 让位检查器排除同容器条目、CONFIG 失败冷却用； 委托 ContainerCandidate 单一实现
+		 * （直接传值不解析 ioKey 字符串——物品编码为 Gson JSON，NBT 可含任意字符，分隔符解析不可靠）
+		 */
+		public String containerKey() {
+			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, isInput,
+					0).containerKey();
+		}
 	}
 
 	private State state = State.OPENING;
 	private final IOIntent intent;
+	/** 让位检查器（MOVING 注入；null = 不检查，STATIC/VOID 任务无让位检查点） */
+	private final CompetitorChecker competitorChecker;
 	private int containerTimeout = 0;
 	private int transferLimit = 0;
 	private int transferred = 0;
 
 	public ContainerIOTask(IOIntent intent) {
+		this(intent, null);
+	}
+
+	/** 带让位检查器的构造（MOVING 注入；检查点见 tickTransferring——转移后见应让位竞争者即提前关窗） */
+	public ContainerIOTask(IOIntent intent, CompetitorChecker competitorChecker) {
 		this.intent = intent;
-		// 输入操作按条目单次取放数量转移，输出操作一次性清空（999 上限）
-		this.transferLimit = intent.isInput() ? intent.io().getTakeAmount() : 999;
+		this.competitorChecker = competitorChecker;
+		// 输入操作按条目单次取放数量转移，输出操作一次性清空（OUTPUT_MOVE_CAP 上限）
+		this.transferLimit = intent.isInput()
+				? intent.io().getTakeAmount()
+				: Configs.Generic.OUTPUT_MOVE_CAP.getIntegerValue();
 	}
 
 	/** 是否为输入操作（从容器取货，give1/give2 均算输入）；输出操作完成后背包空间释放，机器层可据此解除交易暂停 */
@@ -158,18 +182,21 @@ public class ContainerIOTask extends Task {
 
 		ScreenHandler handler = screenHandlerOf(mc.currentScreen);
 
-		if (transferred >= transferLimit) {
-			state = State.CLOSING;
-			return TaskResult.RUNNING;
-		}
-
-		boolean clicked = intent.isInput() ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
-
-		if (clicked) {
+		// 1 tick 内循环搬运全部：每迭代一次 QUICK_MOVE（1 组），直到达 transferLimit 上限或无匹配物品；
+		// clickSlot 本地模拟同步生效，循环内槽位状态实时更新（同 tick 多包点击先例：交易 executor runPassLoop）
+		while (transferred < transferLimit) {
+			boolean clicked = intent.isInput() ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
+			if (!clicked) {
+				break; // 无匹配物品 = 搬运完毕
+			}
 			transferred++;
-		} else {
-			state = State.CLOSING;
+			// L2 让位检查点（保留）：搬运中见「应让位」竞争者（不同容器 / hunger≥2 村民）→ 提前关窗让位；
+			// 注：若 moving-fairness-refactor 计划已先行（删抢占），本段随 competitorChecker 一并删除
+			if (competitorChecker != null && competitorChecker.hasCompetitor(mc, intent.containerKey())) {
+				break;
+			}
 		}
+		state = State.CLOSING;
 		return TaskResult.RUNNING;
 	}
 

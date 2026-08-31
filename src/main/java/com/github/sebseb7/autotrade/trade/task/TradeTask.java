@@ -4,6 +4,7 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.executor.TradeExecutor;
 import com.github.sebseb7.autotrade.trade.helper.VillagerInteractHelper;
+import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
 import net.minecraft.client.MinecraftClient;
@@ -30,6 +31,10 @@ public abstract class TradeTask extends Task {
 
 	/** 当前目标村民实体 id（由机器层选中后通过构造器锁定传入，本会话不再自行扫描重选） */
 	private final int villagerActive;
+	/** 基础抢占检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无抢占检查点，行为零变化） */
+	private final CompetitorChecker competitorChecker;
+	/** 本次会话是否因抢占让位提前结束（机器层据此不标记已处理、饥饿 +1） */
+	private boolean yielded = false;
 	private State state = State.INTERACTING;
 	private final TradeExecutor executor = new TradeExecutor();
 	private int interactTimeout = 0;
@@ -44,7 +49,16 @@ public abstract class TradeTask extends Task {
 
 	/** 锁定本会话要处理的目标村民（由机器层在派发前调用，修复「机器层评分选 A、会话内部重扫可能取到 B」的竞态） */
 	public TradeTask(int villagerActiveId) {
+		this(villagerActiveId, null);
+	}
+
+	/**
+	 * 锁定目标村民 + 注入基础抢占检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无抢占检查点）。 检查器见
+	 * hunger≥2 未处理村民时，本会话在 TRADING 每 tick 检查点提前关窗让位（已执行交易保留）
+	 */
+	public TradeTask(int villagerActiveId, CompetitorChecker competitorChecker) {
 		this.villagerActive = villagerActiveId;
+		this.competitorChecker = competitorChecker;
 	}
 
 	@Override
@@ -176,6 +190,14 @@ public abstract class TradeTask extends Task {
 			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
+		// 基础抢占检查点：MOVING 注入的检查器见 hunger≥2 未处理村民 → 提前关窗让位（已执行交易保留）
+		if (competitorChecker != null && competitorChecker.hasCompetitor(mc, null)) {
+			yielded = true;
+			state = State.CLOSING_SCREEN;
+			AutoTrade.logger.info("[TradeTask] TRADING → CLOSING_SCREEN (yield, villager={})", villagerActive);
+			return TaskResult.RUNNING;
+		}
+
 		boolean hasMoreWork = executor.handleMerchantScreenTick(mc, screen);
 		if (!hasMoreWork) {
 			// 同步「背包空间不足」标志：由 executor 判断是正常无匹配还是结果放不下
@@ -199,6 +221,11 @@ public abstract class TradeTask extends Task {
 	/** 本次会话是否因背包空间不足提前结束（正常路径机器层用结果判断；强杀路径无结果故保留本访问器供机器层查询） */
 	public boolean isInventoryBlocked() {
 		return inventoryBlocked;
+	}
+
+	/** 本次会话是否因抢占让位提前结束（机器层据此不标记已处理、饥饿 +1；正常路径与强杀路径均查询） */
+	public boolean isYielded() {
+		return yielded;
 	}
 
 	/** 返回当前任务状态枚举（HUD 只读展示用） */

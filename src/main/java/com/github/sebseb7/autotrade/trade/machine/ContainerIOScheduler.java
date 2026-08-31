@@ -28,50 +28,73 @@ import net.minecraft.registry.Registries;
  * + 扫描缓存全部集中于此。
  *
  * <p>
- * 扫描缓存语义：空闲时复用上次扫描结果（TTL = {@link Configs.Generic#IDLE_SCAN_INTERVAL} tick），
- * 任意任务结束/重置时经 {@link #invalidate()} 立即失效重扫——交易与转运都改变背包，必须重扫； AFK 最坏情况下容器变化最多延迟
- * idleScanInterval tick 才被感知。
+ * 扫描缓存语义：缓存对象 = 背包物品计数 map（{@link #buildInventorySlotCounts} 结果——36 槽遍历 +
+ * Registry id 解析 + NBT 匹配，与玩家位置无关的慢变量），TTL 复用间隔 =
+ * {@link Configs.Generic#IDLE_SCAN_INTERVAL} tick；容器候选每次调用重算 （距离/阈值/ioKey
+ * 拼接，微秒级），距离每 tick 新鲜（MOVING 玩家移动），无 TTL 陈旧问题；任意任务结束/重置时经 {@link #invalidate()}
+ * 强制清空背包计数缓存——交易与转运都改变背包，必须重算。
  * </p>
  */
 public class ContainerIOScheduler {
 
 	/** 容器 IO 候选：物品 IO 条目 + 方向 + 距离（MOVING 模式饥饿评分用；距离 ≤ CONTAINER_REACH 格） */
 	public record ContainerCandidate(ItemIO io, boolean isInput, double distance) {
-		/** 饥饿记账用的稳定标识：容器坐标 + 方向（跨条目实例稳定，同一容器意图共享饥饿计数） */
+		/** 条目级饥饿标识：物品 + 坐标 + 方向（同容器不同物品 = 不同 key，独立记账；消除共享键翻倍/恒选首个缺陷） */
 		public String ioKey() {
+			return io.getItem() + "#" + io.getX() + "," + io.getY() + "," + io.getZ() + "#" + isInput;
+		}
+
+		/** 容器身份键（坐标+方向）：L2 检查器排除同容器条目、CONFIG 失败冷却用 */
+		public String containerKey() {
 			return io.getX() + "," + io.getY() + "," + io.getZ() + "#" + isInput;
 		}
 	}
 
-	/** 扫描缓存：null = 未扫描/已失效（任务结束/重置后必须重扫） */
-	private List<ContainerCandidate> cachedCandidates = null;
-	/** 缓存生成时的世界 tick（配合 IDLE_SCAN_INTERVAL 做 TTL 复用） */
-	private long cachedAtTick = Long.MIN_VALUE;
-
-	/** 使扫描缓存失效：任何任务结束/重置时调用——交易与转运都改变背包，必须重扫 */
-	public void invalidate() {
-		cachedCandidates = null;
+	/**
+	 * 让位检查器：检测范围内是否存在除 excludedContainerKey 外的「应让位」候选（MOVING 注入；null = 不检查）。
+	 * 容器身份一律直接传值（不解析 ioKey 字符串——物品编码为 Gson JSON，NBT 字符串值可含任意字符，任何分隔符解析都不可靠）
+	 */
+	@FunctionalInterface
+	public interface CompetitorChecker {
+		boolean hasCompetitor(MinecraftClient mc, String excludedContainerKey);
 	}
 
 	/**
-	 * 返回当前需要容器 IO 的候选列表（只读契约：调用方不得修改返回的列表或其中的候选）。 玩家/世界缺失时直接返回空列表（不触碰缓存）；否则优先复用 TTL
-	 * 内的扫描缓存， 未命中则重新扫描并记录缓存时间。
+	 * 背包物品计数缓存（键 = 规范化物品编码，{@link #buildInventorySlotCounts} 产物）：null =
+	 * 未扫描/已失效（任务结束/重置后必须重算）；候选列表不缓存
+	 */
+	private Map<String, Integer> cachedSlotCounts = null;
+	/** 背包计数缓存生成时的世界 tick（配合 IDLE_SCAN_INTERVAL 做 TTL 复用） */
+	private long cachedAtTick = Long.MIN_VALUE;
+	/** 让位检查器（MOVING 注入；null = 不检查，STATIC/VOID 保持原行为） */
+	private CompetitorChecker competitorChecker = null;
+
+	/** 使扫描缓存失效：任何任务结束/重置时调用——交易与转运都改变背包，必须重算背包计数 */
+	public void invalidate() {
+		cachedSlotCounts = null;
+	}
+
+	/** 设置让位检查器（MOVING 模式构造器注入；STATIC/VOID 不设置，任务无让位检查点） */
+	public void setCompetitorChecker(CompetitorChecker checker) {
+		this.competitorChecker = checker;
+	}
+
+	/**
+	 * 返回当前需要容器 IO 的候选列表（只读契约：调用方不得修改返回的列表或其中的候选）。 玩家/世界缺失时直接返回空列表（不触碰缓存）；
+	 * 候选每次调用重算（距离实时，MOVING 玩家移动每 tick 新鲜）；背包计数 map 在 {@link #scanPendingContainers}
+	 * 内按 TTL 复用。
 	 */
 	public List<ContainerCandidate> findPendingContainers(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
 			return List.of();
 		}
-		long now = mc.world.getTime();
-		// 缓存未失效且未超 TTL：直接复用上次扫描结果（空闲时每 idleScanInterval tick 才全量扫描一次）
-		if (cachedCandidates != null && now - cachedAtTick < Configs.Generic.IDLE_SCAN_INTERVAL.getIntegerValue()) {
-			return cachedCandidates;
-		}
-		cachedCandidates = scanPendingContainers(mc);
-		cachedAtTick = now;
-		return cachedCandidates;
+		return scanPendingContainers(mc);
 	}
 
-	/** 全量扫描：收集所有 ≤ CONTAINER_REACH 格需要 IO 的容器候选（输入/输出各条目为独立候选），MOVING 饥饿评分用 */
+	/**
+	 * 全量扫描：收集所有 ≤ CONTAINER_REACH 格需要 IO 的容器候选（输入/输出各条目为独立候选），MOVING 饥饿评分用；背包计数 map
+	 * 按 TTL 复用，条目循环无条件执行
+	 */
 	private List<ContainerCandidate> scanPendingContainers(MinecraftClient mc) {
 		// 派生活动物品集：输入集 = enabled 交易对 giveItem ∪ giveItem2，输出集 = getItem
 		// （复用 IoItemDeriver，语义与手工构建一致；编码字符串精确相等判定，与 buildInventorySlotCounts 键空间一致）
@@ -82,7 +105,13 @@ public class ContainerIOScheduler {
 
 		// 缓存访问器：配置未变时跳过 JSON 解析（仅遍历读取，不改动条目）
 		List<ItemIO> entries = ItemIOCache.getAll();
-		Map<String, Integer> slotCounts = buildInventorySlotCounts(mc.player, entries, inputItems, outputItems);
+		// 背包计数是慢变量（36 槽遍历 + Registry id 解析 + NBT 匹配，与玩家位置无关）：TTL 内复用缓存，超时/失效后重算并记录时间；
+		// 候选循环（距离/阈值/ioKey 拼接，微秒级）每次无条件执行——距离每 tick 新鲜（MOVING 玩家移动）
+		long now = mc.world.getTime();
+		if (cachedSlotCounts == null || now - cachedAtTick >= Configs.Generic.IDLE_SCAN_INTERVAL.getIntegerValue()) {
+			cachedSlotCounts = buildInventorySlotCounts(mc.player, entries, inputItems, outputItems);
+			cachedAtTick = now;
+		}
 		List<ContainerCandidate> result = new ArrayList<>();
 		for (ItemIO io : entries) {
 			// 条目级启用开关：禁用的条目不参与任何容器 IO（在方向命中检查之前）
@@ -104,7 +133,7 @@ public class ContainerIOScheduler {
 				continue;
 			}
 			// 阈值判定内联：输入（从容器取货）槽位数不超过阈值时补货；输出（向容器出货）槽位数达到阈值时清出
-			int slots = slotCounts.getOrDefault(io.getItem(), 0);
+			int slots = cachedSlotCounts.getOrDefault(io.getItem(), 0);
 			boolean needed = isInput ? (slots <= io.getThreshold()) : (slots >= io.getThreshold());
 			if (!needed) {
 				continue;
@@ -150,12 +179,13 @@ public class ContainerIOScheduler {
 		return startCandidate(best, starter);
 	}
 
-	/** 按指定候选启动容器 IO（MOVING 模式饥饿评分选中后使用） */
+	/** 按指定候选启动容器 IO（MOVING 模式饥饿评分选中后使用；检查器随任务透传，L2 让位检查点用） */
 	public boolean startCandidate(ContainerCandidate candidate, Consumer<ContainerIOTask> starter) {
 		if (candidate == null) {
 			return false;
 		}
-		starter.accept(new ContainerIOTask(new ContainerIOTask.IOIntent(candidate.io(), candidate.isInput())));
+		starter.accept(new ContainerIOTask(new ContainerIOTask.IOIntent(candidate.io(), candidate.isInput()),
+				competitorChecker));
 		logIOStart(candidate);
 		return true;
 	}

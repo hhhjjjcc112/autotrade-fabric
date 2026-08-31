@@ -67,6 +67,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		// 当前任务推进：每 tick 执行一步，返回非 RUNNING 结果即任务结束
 		if (currentTask != null) {
 			taskTicks++;
+			// 任务运行期钩子：窗口记账（MOVING 的 L1）——先于任务推进，保证任务 tick 前的窗口可见；
+			// 看门狗强杀 tick 上亦执行（子类需保证与强杀清理无冲突）
+			onTaskTick(mc);
 			TaskResult result = currentTask.tick(mc);
 			if (!result.isRunning()) {
 				// 任务结束（成功或失败）→ 回调并清空，落入下方 tickIdle（同 tick，等价现状 fall-through）
@@ -108,6 +111,14 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		containerIOScheduler.invalidate();
 		currentTask = null;
 		taskTicks = 0;
+	}
+
+	/**
+	 * 任务运行期间的每 tick 钩子（默认空）：子类可做窗口记账/节流扫描（MOVING 的 L1 任务期记账——
+	 * 任务运行期进入范围的目标并入窗口快照，离窗差集补记错过）。 在 currentTask.tick 之前调用；看门狗强杀 tick
+	 * 上也会执行（子类需保证与强杀清理无冲突）。
+	 */
+	protected void onTaskTick(MinecraftClient mc) {
 	}
 
 	/**

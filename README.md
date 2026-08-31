@@ -69,8 +69,9 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 | Generic | `Villager Scan Range` | 村民搜索半径（格） |
 | Generic | `Trade Pairs` | 交易对列表（配置键 `tradePairs`，原生 JSON 数组；0.0.16 及更早版本为 JSON 字符串，加载自动兼容并在下次保存时迁移为数组），在「交易对」选项卡管理（列表 + 行内编辑） |
 | Generic | `Item IO` | 物品容器 IO 列表（配置键 `itemIO`，原生 JSON 数组；0.0.16 及更早版本为 JSON 字符串，加载自动兼容并在下次保存时迁移为数组，条目含 `enabled` 开关），在「IO输入 / IO输出」选项卡管理，条目由交易对自动派生 |
-| Generic | `Idle Scan Interval` | 容器 IO 扫描结果复用间隔（tick，1-20，默认 5；任意任务结束立即重扫） |
+| Generic | `Idle Scan Interval` | 背包物品计数复用间隔（tick，1-20，默认 5；容器候选每次重算、距离实时；任意任务结束立即重算背包） |
 | Generic | `Container Reach` | 触发容器 IO 的最大容器距离（格，2-8，默认 4；超过约 4.5 格服务端会忽略点击） |
+| Generic | `Output Move Cap` | 输出容器 IO 单次搬运的最大组数（1-9999，默认 999；999 = 全部匹配物品） |
 | Generic | `Debug HUD` | 调试 HUD 开关（默认关；开启后角落显示半透明调试面板） |
 | Generic | `Debug HUD Position` | 调试 HUD 所在屏幕角落（左上/右上/左下/右下，默认左上） |
 | Static | `Trade Interval` | 静止模式每轮交易间隔（tick，100 = 5 秒） |

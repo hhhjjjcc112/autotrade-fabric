@@ -1,5 +1,6 @@
 package com.github.sebseb7.autotrade.trade.mode.movingmode;
 
+import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 
 /**
@@ -10,6 +11,11 @@ public class MovingTradeTask extends TradeTask {
 
 	public MovingTradeTask(int villagerActiveId) {
 		super(villagerActiveId);
+	}
+
+	/** MOVING 机器层注入基础抢占检查器（见 hunger≥2 未处理村民 → 提前关窗让位） */
+	public MovingTradeTask(int villagerActiveId, CompetitorChecker competitorChecker) {
+		super(villagerActiveId, competitorChecker);
 	}
 
 	@Override
