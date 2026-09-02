@@ -62,8 +62,10 @@ public class ContainerIOTask extends Task {
 
 	private State state = State.OPENING;
 	private final IOIntent intent;
-	/** 让位检查器（MOVING 注入；null = 不检查，STATIC/VOID 任务无让位检查点） */
+	/** 安全点让位检查器（MOVING 注入；null = 不检查，STATIC/VOID 任务无让位检查点） */
 	private final CompetitorChecker competitorChecker;
+	/** 本次会话是否因安全点让位提前结束（防重入守卫：yielded 后不再重复触发让位检查——竞争者持续存在时任务卡到看门狗强杀） */
+	private boolean yielded = false;
 	private int containerTimeout = 0;
 	private int transferLimit = 0;
 	private int transferred = 0;
@@ -72,7 +74,7 @@ public class ContainerIOTask extends Task {
 		this(intent, null);
 	}
 
-	/** 带让位检查器的构造（MOVING 注入；检查点见 tickTransferring——转移后见应让位竞争者即提前关窗） */
+	/** 带让位检查器的构造（MOVING 注入；检查点见 tick() 入口——每 tick 一次，覆盖等待窗口/搬运循环全部状态） */
 	public ContainerIOTask(IOIntent intent, CompetitorChecker competitorChecker) {
 		this.intent = intent;
 		this.competitorChecker = competitorChecker;
@@ -94,6 +96,15 @@ public class ContainerIOTask extends Task {
 
 	@Override
 	public TaskResult tick(MinecraftClient mc) {
+		// 安全点让位检查（每 tick 一次，覆盖全部状态——等待窗口/搬运循环均可让位；
+		// 仅 MOVING 注入检查器（STATIC/VOID = null，行为零变化）；yielded 后不再重复触发（防竞争者持续存在时卡到看门狗强杀）；
+		// 开箱在途让位的残留窗口由机器层兜底关闭（MovingTradeMachine.tickIdle 开头）
+		if (!yielded && competitorChecker != null && competitorChecker.hasCompetitor(mc, intent.containerKey())) {
+			yielded = true;
+			state = State.CLOSING;
+			AutoTrade.logger.info("[ContainerIO] 让位抢占 (container={})", intent.containerKey());
+			return TaskResult.RUNNING;
+		}
 		return switch (state) {
 			case OPENING -> tickOpening(mc);
 			case TRANSFERRING -> tickTransferring(mc);
@@ -190,11 +201,6 @@ public class ContainerIOTask extends Task {
 				break; // 无匹配物品 = 搬运完毕
 			}
 			transferred++;
-			// L2 让位检查点（保留）：搬运中见「应让位」竞争者（不同容器 / hunger≥2 村民）→ 提前关窗让位；
-			// 注：若 moving-fairness-refactor 计划已先行（删抢占），本段随 competitorChecker 一并删除
-			if (competitorChecker != null && competitorChecker.hasCompetitor(mc, intent.containerKey())) {
-				break;
-			}
 		}
 		state = State.CLOSING;
 		return TaskResult.RUNNING;

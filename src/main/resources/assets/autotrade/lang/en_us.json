@@ -22,6 +22,7 @@
     "autotrade.message.io.open_failed": "§cContainer operation failed: failed to open the container screen %s times in a row, aborted",
     "autotrade.message.void.return_overlap": "§eVoid return trigger position overlaps an IO container coordinate - return trigger disabled (move the trigger block or the container coordinates)",
     "autotrade.message.void.teleport_timeout": "Villager never teleported, skipping",
+    "autotrade.message.moving.starvation_hint": "§e[Moving] A %s (hunger %d, %.1f blocks away) has not been served for a long time - check your movement path or the target's position",
 
     "autotrade.gui.title.pair_edit": "Edit Trade Pair",
     "autotrade.gui.pair_edit.back": "Back",

@@ -10,6 +10,8 @@ import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.Container
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
+import fi.dy.masa.malilib.gui.Message;
+import fi.dy.masa.malilib.util.InfoUtils;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -18,6 +20,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
+import net.minecraft.client.gui.screen.ingame.MerchantScreen;
+import net.minecraft.client.gui.screen.ingame.ShulkerBoxScreen;
 import net.minecraft.entity.Entity;
 
 /**
@@ -26,23 +31,28 @@ import net.minecraft.entity.Entity;
  * <p>
  * 防饥饿语义（周期级，见 docs/TRADE_MODES.md §三）：目标离开范围时未服务 → 饥饿 +1（cap 10）；服务后（任何结果）清 0；
  * 饥饿跨窗口持久化（错过记忆）。目标持续未服务则每轮 +1，多轮后必然超过容器 bonus 成为最高分插队（前提：目标轮间离窗——
- * 静止玩家/小环线农场中目标永在窗口不被服务为已知边界）。
+ * 静止玩家/小环线农场中目标永在窗口不被服务为已知边界，由驻留老化根治）。
  * </p>
  *
  * <p>
  * 评分 score = 饥饿×HUNGER_WEIGHT + bonus（容器 +2，决策零成本；村民 0），无距离项；tie-break：最久未服务 →
- * 距离近 → 容器先入列。任务期窗口补偿：L1 任务期记账（onTaskTick 收集窗口内候选入 seenKeys，离窗差集补记错过）； L2
- * 容器任务让位（转移后见不同容器 / hunger≥2 村民即提前关窗，结构性错过根治）。CONFIG 失败容器冷却 100 tick
+ * 距离近 → 容器先入列。任务期窗口补偿：L1 任务期记账（onTaskTick 收集窗口内候选入 seenKeys，离窗差集补记错过）；
+ * 驻留老化（tickIdle 评分前对候选按 lastServedTick 老化——从未服务或超老化间隔 → 饥饿 +1 并重置周期，每周期至多 +1； 3
+ * 周期后必超容器 bonus 插队；容器统一老化——被村民插队压着的容器不会反向饿死）。CONFIG 失败容器冷却 100 tick
  * （防失败容器独占运行位的忙循环/刷屏）。候选收集/处理记录（processedVillagers）在机器层维护：评分选中村民后通过
  * 构造器锁定派发，会话内不再自行重扫（修复「machine 选 A、session 取到 B」的竞态）。
  * </p>
  *
  * <p>
- * 基础抢占（2026-08-30，D7-D11）：村民交易任务运行期（TradeTask.tickTrading 每 tick 检查点），若扫到
- * hunger≥2 的未处理村民 B，则 A 提前关窗让位、转投 B（已执行交易保留）。被抢占方 A 不标记已处理、饥饿 +1、
- * lastServedTick 不更新 → 下次保留「最久未服务」tie-break 优势。仅 MOVING 注入检查器（STATIC/VOID 走旧构造器
- * checker=null，无抢占路径）；检查器只查 hunger≥2 未处理村民、排除容器（容器是持续状态，村民让位给容器会饿死
- * 回归——驻留老化另行根治）。村民扫描 L1/L2 均每 tick 无条件执行（正确性优先，无节流）。
+ * 安全点让位（2026-08-31，moving-fairness-refactor）：任务 tick() 入口每 tick
+ * 一次检查点（覆盖全部状态——等待窗口/ 交互在途/交易循环均可让位；旧 tickTrading 内检查点已删除）。让位条件 = 候选内（≤
+ * MOVING_INTERACT_RANGE，确定可服务） 存在目标 T（≠ 当前任务目标）满足 starvation[T] ≥ 阈值 且
+ * starvation[T] > starvation[当前目标]（严格大于防互抢、 排除自己防自抢）。被让位方不标记已处理、饥饿不 +1（被让位 ≠
+ * 错过——旧「让位 +1」是自抢/互抢死循环的振荡放大器， 已废弃）、seenKeys
+ * 保留。村民任务只被更饿村民抢占（容器是持续状态，村民让位给容器会饿死回归）；容器任务被更饿村民/
+ * 更饿不同容器抢占（公平轮转确定版）。交互在途让位的残留窗口由机器层兜底关闭（tickIdle 开头检测交易/容器屏即 close，
+ * 等效阻止窗口出现——1.20.4 源码核实）。仅 MOVING 注入检查器（STATIC/VOID 走旧构造器 checker=null，无让位路径）。
+ * 村民候选限交互距离（远处村民只记账不派发——交互必失败的结构性错过根治）；饥饿阈值一次性提示（hintedKeys 防刷屏， 服务完成清除后可再提示）。
  * </p>
  */
 public class MovingTradeMachine extends AbstractTradeMachine {
@@ -63,6 +73,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	private final Set<Integer> processedVillagers = new HashSet<>();
 	/** 当前派发给会话的目标村民 id（任务结束钩子标记已处理用，完成与强杀统一） */
 	private int dispatchedVillagerId = 0;
+	/**
+	 * 当前派发给会话的目标容器条目 ioKey（容器检查器查自身饥饿用；与 dispatchedVillagerId
+	 * 对称——excludedContainerKey 是 containerKey 格式（x,y,z#isInput），而饥饿记账键是 ioKey
+	 * 格式（item#x,y,z#isInput），不能混用）
+	 */
+	private String dispatchedContainerIoKey = "";
 
 	/** 饥饿记账统一键：村民 = 实体 id，容器 = 条目 ioKey（item#x,y,z#isInput） */
 	private sealed interface StarvationKey permits VillagerKey, ContainerKey {
@@ -97,33 +113,57 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 
 	/** 最近一次可见的世界 tick（结束钩子记录 CONFIG 冷却用；误差 ≤1 tick，100 tick 冷却不敏感） */
 	private long lastWorldTick = 0;
-	/** 基础抢占检查器（村民任务注入）：仅 hunger≥2 未处理村民触发（不含容器——容器是持续状态，村民让位给容器会饿死回归） */
+	/** 安全点让位检查器（村民任务注入）：候选内存在「饥饿 ≥ 阈值 且 > 当前村民」的未处理村民（排除自己）→ 让位 */
 	private final CompetitorChecker villagerCompetitorChecker;
+	/** 提示防刷屏状态：已提示过饥饿阈值的目标键（服务完成/清除饥饿时移除，reset 清空） */
+	private final Set<StarvationKey> hintedKeys = new HashSet<>();
 
 	public MovingTradeMachine() {
 		super();
-		// L2 让位检查器注入：容器任务转移后见「不同容器 / hunger≥2 村民」即让位（见 ContainerIOTask 检查点）
+		// 安全点让位检查器（容器任务注入）：候选内存在「饥饿 ≥ 阈值 且 > 当前容器」的村民/不同容器 → 让位
 		containerIOScheduler.setCompetitorChecker((mc, excludedContainerKey) -> {
-			// 不同容器候选：同容器条目不视为竞争者（决策层 tie-break 已轮转，避免 X/Y 各转移 1 组互相让位
-			// → 每转移开/关箱、吞吐降 3~4 倍的 ping-pong）；冷却中的失败容器也不触发让位
-			for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc)) {
-				if (!c.containerKey().equals(excludedContainerKey) && !isContainerOnCooldown(mc, c.containerKey())) {
+			// 当前容器自身饥饿（基准）：用派发时记录的 ioKey 查（excludedContainerKey 是 containerKey 格式，与记账键不一致）
+			int myHunger = excludedContainerKey == null
+					? 0
+					: starvation.getOrDefault(new ContainerKey(dispatchedContainerIoKey), 0);
+			int hintThreshold = Configs.Moving.MOVING_STARVATION_HINT_THRESHOLD.getIntegerValue();
+			double range = Configs.Moving.MOVING_INTERACT_RANGE.getDoubleValue();
+			// 候选内更饿的村民（机会窗口优先；容器任务让位给更饿村民，防饿死回归）
+			for (Entity v : findUnprocessedVillagers(mc)) {
+				if (v.getPos().distanceTo(mc.player.getPos()) > range) {
+					continue;
+				}
+				int h = starvation.getOrDefault(new VillagerKey(v.getId()), 0);
+				if (h >= hintThreshold && h > myHunger) {
 					return true;
 				}
 			}
-			// 村民：仅 hunger ≥ 2 的未处理村民触发让位（hunger 0 村民让位无效且降容器吞吐；hunger ≥ 2 时让位使村民提前被服务）。
-			// 每 tick 无条件扫描（正确性优先，无节流）
-			for (Entity v : findUnprocessedVillagers(mc)) {
-				if (starvation.getOrDefault(new VillagerKey(v.getId()), 0) >= 2) {
+			// 候选内更饿的不同容器（公平轮转确定版；同容器条目不视为竞争者——防 X/Y 各转移 1 组互相让位的 ping-pong）
+			for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc)) {
+				if (c.containerKey().equals(excludedContainerKey) || isContainerOnCooldown(mc, c.containerKey())) {
+					continue;
+				}
+				int h = starvation.getOrDefault(new ContainerKey(c.ioKey()), 0);
+				if (h >= hintThreshold && h > myHunger) {
 					return true;
 				}
 			}
 			return false;
 		});
-		// 基础抢占检查器：村民任务运行期见 hunger≥2 未处理村民 → 提前关窗让位（excludedContainerKey 参数忽略——只查村民）
+		// 安全点让位检查器（村民任务注入）：候选内存在「饥饿 ≥ 阈值 且 > 当前村民」的未处理村民（排除自己）→ 让位
 		villagerCompetitorChecker = (mc, excludedContainerKey) -> {
+			int myHunger = starvation.getOrDefault(new VillagerKey(dispatchedVillagerId), 0);
+			int hintThreshold = Configs.Moving.MOVING_STARVATION_HINT_THRESHOLD.getIntegerValue();
+			double range = Configs.Moving.MOVING_INTERACT_RANGE.getDoubleValue();
 			for (Entity v : findUnprocessedVillagers(mc)) {
-				if (starvation.getOrDefault(new VillagerKey(v.getId()), 0) >= 2) {
+				if (v.getId() == dispatchedVillagerId) { // 排除自己（防自抢）
+					continue;
+				}
+				if (v.getPos().distanceTo(mc.player.getPos()) > range) { // 候选内（确定可服务）
+					continue;
+				}
+				int h = starvation.getOrDefault(new VillagerKey(v.getId()), 0);
+				if (h >= hintThreshold && h > myHunger) { // 严格大于（防互抢）
 					return true;
 				}
 			}
@@ -151,14 +191,14 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		// 强杀路径无结果可用：用任务访问器判断（与现状 handleTaskEnded 强杀路径一致）
 		if (task instanceof TradeTask ts) {
 			if (ts.isYielded()) {
-				// 让位后 CLOSING 阶段被强杀：不得误标已处理（等价 handleTaskEnded 让位分支）
-				starvation.merge(new VillagerKey(dispatchedVillagerId), 1, this::capStarvation);
+				// 安全点让位后 CLOSING 阶段被强杀：不得误标已处理、饥饿不 +1（等价 handleTaskEnded 让位分支）
 			} else if (!ts.isInventoryBlocked()) {
 				// 标记该村民已处理并清除饥饿（强杀不标记则村民永远"未处理"，看门狗每轮重派 → 无限循环）；
 				// 背包满不标记（保留现状 inventoryBlocked 短路语义：保留记录，背包清空后由失效清理重试）
 				processedVillagers.add(dispatchedVillagerId);
 				starvation.remove(new VillagerKey(dispatchedVillagerId));
 				seenKeys.remove(new VillagerKey(dispatchedVillagerId));
+				hintedKeys.remove(new VillagerKey(dispatchedVillagerId));
 			}
 		} else if (task instanceof ContainerIOTask op) {
 			// 容器 IO 强杀也清饥饿 + 窗口快照移除——保持现状（无论完成还是强杀均视为该目标已执行一次，
@@ -177,20 +217,22 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	private void handleTaskEnded(Task task, TaskResult result) {
 		if (task instanceof TradeTask ts) {
 			if (ts.isYielded()) {
-				// 抢占让位：不标记已处理、饥饿 +1（被抢占 = 错过一次）、lastServedTick 不更新
-				// → 下次保留「最久未服务」tie-break 优势；同 tick fall-through 决策会重新收集该村民
-				starvation.merge(new VillagerKey(dispatchedVillagerId), 1, this::capStarvation);
+				// 安全点让位：不标记已处理、饥饿不 +1（被让位 ≠ 错过——保持原 hunger 公平参与下次评分；
+				// 旧实现「让位 +1」使 A=2→3 又抢回 B → 自抢/互抢死循环（P1/P2），已废弃）；
+				// seenKeys 保留（目标在范围内不离窗；出范围自然离窗 +1 记错过）
 			} else if (!(result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED)) {
 				// 标记该村民已处理并清除饥饿（完成与超时路径均在此统一标记）；
 				// 背包满失败不标记（等价现状 inventoryBlocked 短路语义：保留记录，背包清空后由失效清理重试）
 				processedVillagers.add(dispatchedVillagerId);
 				starvation.remove(new VillagerKey(dispatchedVillagerId));
 				seenKeys.remove(new VillagerKey(dispatchedVillagerId));
+				hintedKeys.remove(new VillagerKey(dispatchedVillagerId));
 			}
 		} else if (task instanceof ContainerIOTask op) {
 			// 容器 IO 完成 → 清饥饿记录 + 窗口快照移除（任何结果均清；村民选中执行后进 processedVillagers 并显式移除，语义等价）
 			starvation.remove(new ContainerKey(op.getIntent().ioKey()));
 			seenKeys.remove(new ContainerKey(op.getIntent().ioKey()));
+			hintedKeys.remove(new ContainerKey(op.getIntent().ioKey()));
 			// CONFIG 失败 → 冷却排除：失败清饥饿后该容器仍 pending（scanPendingContainers 不校验方块类型）且 bonus
 			// 恒胜出，
 			// 不冷却则整轮忙循环（独占运行位 + 弹窗刷屏）；冷却 CONFIG_FAIL_COOLDOWN tick 到期重试
@@ -221,9 +263,37 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	@Override
 	protected void tickIdle(MinecraftClient mc) {
 		lastWorldTick = mc.world.getTime();
+		// 残留窗口兜底：让位/异常路径可能遗留「交互在途、窗口晚到」的窗口（任务已结束）→ 检测到即关闭
+		// （HandledScreen.close() 完整链路：发 CloseHandledScreenC2SPacket +
+		// setScreen(null)；服务端
+		// onCloseHandledScreen 不校验 syncId 无条件关 handler——1.20.4 源码核实，等效阻止窗口出现）
+		if (mc.currentScreen instanceof MerchantScreen || mc.currentScreen instanceof GenericContainerScreen
+				|| mc.currentScreen instanceof ShulkerBoxScreen) {
+			mc.currentScreen.close();
+			AutoTrade.logger.info("[MovingMode] 残留窗口兜底关闭 ({})", mc.currentScreen.getClass().getSimpleName());
+		}
 		// 背包满暂停：期间只做输出优先的容器 IO，不启动交易会话
 		if (tickInventoryPause(mc)) {
 			return;
+		}
+
+		// 饥饿阈值提示：scanRange 内 hunger ≥ 阈值且未提示过 → 一次性提示（hintedKeys 防刷屏；服务完成清除后可再提示）
+		int hintThreshold = Configs.Moving.MOVING_STARVATION_HINT_THRESHOLD.getIntegerValue();
+		for (Entity v : findUnprocessedVillagers(mc)) {
+			VillagerKey k = new VillagerKey(v.getId());
+			int h = starvation.getOrDefault(k, 0);
+			if (h >= hintThreshold && hintedKeys.add(k)) {
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.moving.starvation_hint",
+						"villager", h, v.getPos().distanceTo(mc.player.getPos()));
+			}
+		}
+		for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc)) {
+			ContainerKey k = new ContainerKey(c.ioKey());
+			int h = starvation.getOrDefault(k, 0);
+			if (h >= hintThreshold && hintedKeys.add(k)) {
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.moving.starvation_hint",
+						"container", h, c.distance());
+			}
 		}
 
 		// 收集候选：范围内需要 IO 的容器条目（过滤 CONFIG 冷却中）∪ 未处理村民（无冷却，每 tick 决策）；
@@ -234,9 +304,13 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 				candidates.add(new Candidate(new ContainerKey(c.ioKey()), CONTAINER_BONUS, c.distance(), c, null));
 			}
 		}
+		double interactRange = Configs.Moving.MOVING_INTERACT_RANGE.getDoubleValue();
 		for (Entity v : findUnprocessedVillagers(mc)) {
-			candidates.add(
-					new Candidate(new VillagerKey(v.getId()), 0, v.getPos().distanceTo(mc.player.getPos()), null, v));
+			double dist = v.getPos().distanceTo(mc.player.getPos());
+			if (dist > interactRange) {
+				continue; // 候选限交互距离（远处村民只记账不派发——交互必失败的结构性错过根治）
+			}
+			candidates.add(new Candidate(new VillagerKey(v.getId()), 0, dist, null, v));
 		}
 
 		// 本 tick 候选键集合（离窗差集用）
@@ -262,6 +336,17 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			return;
 		}
 
+		// 驻留老化：候选目标按 lastServedTick 老化——从未服务或 now - lastServed >= 老化间隔 → 饥饿 +1 并重置周期
+		// （每周期至多 +1；3 周期后必然超容器 bonus 2 插队；容器统一老化——被村民插队压着的容器不会反向饿死）
+		long agingInterval = Configs.Moving.MOVING_STARVATION_AGING_INTERVAL.getIntegerValue();
+		for (Candidate c : candidates) {
+			long lastServed = lastServedTick.getOrDefault(c.key(), Long.MIN_VALUE);
+			if (lastServed == Long.MIN_VALUE || mc.world.getTime() - lastServed >= agingInterval) {
+				starvation.merge(c.key(), 1, this::capStarvation);
+				lastServedTick.put(c.key(), mc.world.getTime());
+			}
+		}
+
 		// 一遍循环评分：score = 饥饿×HUNGER_WEIGHT + bonus（无距离项）；tie-break：
 		// 最久未服务（lastServedTick 最小，默认 MIN_VALUE = 从未服务优先）→ 距离近 → 先入列（容器，平分时容器胜）
 		Candidate best = null;
@@ -280,8 +365,9 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			}
 		}
 
-		// 派发：容器 → startCandidate（按原对象派发，L2 检查器随任务注入）；村民 → 构造器锁定派发，会话内不再自行重扫（竞态修复）
-		if (best.key() instanceof ContainerKey) {
+		// 派发：容器 → startCandidate（按原对象派发，安全点让位检查器随任务注入）；村民 → 构造器锁定派发，会话内不再自行重扫（竞态修复）
+		if (best.key() instanceof ContainerKey k) {
+			dispatchedContainerIoKey = k.ioKey(); // 记录当前容器条目 ioKey（检查器查自身饥饿用）
 			containerIOScheduler.startCandidate(best.container(), this::setTaskIfEmpty);
 		} else {
 			dispatchedVillagerId = ((VillagerKey) best.key()).entityId();
@@ -348,10 +434,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		super.reset();
 		processedVillagers.clear();
 		dispatchedVillagerId = 0;
+		dispatchedContainerIoKey = "";
 		starvation.clear();
 		seenKeys.clear();
 		lastServedTick.clear();
 		failedContainerCooldown.clear();
+		hintedKeys.clear();
 	}
 
 	/** 返回已处理村民数（HUD 只读展示用） */

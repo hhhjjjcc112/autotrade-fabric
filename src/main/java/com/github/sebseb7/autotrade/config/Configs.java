@@ -79,7 +79,24 @@ public class Configs implements IConfigHandler {
 		public static final ConfigDouble MOVING_RANGE_MULTIPLIER = new ConfigDouble("movingRangeMultiplier", 1.5, 0.5,
 				5.0,
 				"Multiplier applied to the villager scan range in moving mode (scan radius and the processed-villager invalidation threshold share it); 1.5 = 1.5x the base range");
-		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(MOVING_RANGE_MULTIPLIER);
+		/** 村民候选/派发最大距离（格）：服务端实体交互上限 6 格（AABB-眼睛 < 36.0），默认 6.0 保守匹配；玩家移动中点击有滞后可放宽 */
+		public static final ConfigDouble MOVING_INTERACT_RANGE = new ConfigDouble("movingInteractRange", 6.0, 3.0, 10.0,
+				"Max distance (blocks) for villager candidates to be dispatched in moving mode (server entity-interaction limit is 6 blocks: AABB-to-eye < 6.0; raise if moving players fail to interact)");
+		/**
+		 * 驻留老化周期（tick）：候选目标超过该 tick 未被服务 → 饥饿 +1 并重置周期（驻留目标饥饿增长的唯一途径；3 周期后必超容器 bonus）
+		 */
+		public static final ConfigInteger MOVING_STARVATION_AGING_INTERVAL = new ConfigInteger(
+				"movingStarvationAgingInterval", 100, 20, 600,
+				"Ticks after which an unserved candidate in range gains +1 starvation (resident targets never leave range, so aging is their only hunger growth path; 3 cycles beat the container bonus)");
+		/**
+		 * 饥饿阈值（提示 + 让位共用）：scanRange 内 hunger ≥ 该值 → 一次性提示；候选内 hunger ≥ 该值 且 > 当前任务目标 →
+		 * 让位抢占
+		 */
+		public static final ConfigInteger MOVING_STARVATION_HINT_THRESHOLD = new ConfigInteger(
+				"movingStarvationHintThreshold", 4, 1, 10,
+				"Starvation threshold: targets with hunger >= this value trigger a one-time in-game hint (check your movement path); running tasks yield to hungrier targets in interaction range");
+		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(MOVING_RANGE_MULTIPLIER,
+				MOVING_INTERACT_RANGE, MOVING_STARVATION_AGING_INTERVAL, MOVING_STARVATION_HINT_THRESHOLD);
 	}
 
 	/** 虚空交易设置页：仅虚空模式生效的选项 */

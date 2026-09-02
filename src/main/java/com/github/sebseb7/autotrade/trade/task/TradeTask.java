@@ -21,7 +21,7 @@ import net.minecraft.village.TradeOfferList;
  * INTERACTING（右键交互）→ WAITING_FOR_SCREEN（等待界面出现）→ TRADING（执行匹配交易）→
  * CLOSING_SCREEN（关闭界面）→ 结束 的直链推进，处理完单个村民即结束（返回 {@link TaskResult#SUCCEEDED}
  * 或失败结果）， 由机器层决定下一目标或进入冷却。 各模式的差异（void 延迟策略）由子类覆写的抽象策略方法提供；标记/冷却节奏由机器层
- * onTaskEnded 统一处理。
+ * onTaskEnded 统一处理。 tick() 入口含安全点让位检查点（MOVING 注入检查器时：候选内更饿目标 → 提前关窗让位）。
  */
 public abstract class TradeTask extends Task {
 
@@ -31,9 +31,9 @@ public abstract class TradeTask extends Task {
 
 	/** 当前目标村民实体 id（由机器层选中后通过构造器锁定传入，本会话不再自行扫描重选） */
 	private final int villagerActive;
-	/** 基础抢占检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无抢占检查点，行为零变化） */
+	/** 安全点让位检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无让位检查点，行为零变化） */
 	private final CompetitorChecker competitorChecker;
-	/** 本次会话是否因抢占让位提前结束（机器层据此不标记已处理、饥饿 +1） */
+	/** 本次会话是否因安全点让位提前结束（机器层据此不标记已处理、饥饿不 +1） */
 	private boolean yielded = false;
 	private State state = State.INTERACTING;
 	private final TradeExecutor executor = new TradeExecutor();
@@ -53,8 +53,8 @@ public abstract class TradeTask extends Task {
 	}
 
 	/**
-	 * 锁定目标村民 + 注入基础抢占检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无抢占检查点）。 检查器见
-	 * hunger≥2 未处理村民时，本会话在 TRADING 每 tick 检查点提前关窗让位（已执行交易保留）
+	 * 锁定目标村民 + 注入安全点让位检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无让位检查点）。
+	 * 检查器见候选内更饿目标时，本会话在 tick() 入口检查点提前关窗让位（已执行交易保留）
 	 */
 	public TradeTask(int villagerActiveId, CompetitorChecker competitorChecker) {
 		this.villagerActive = villagerActiveId;
@@ -63,6 +63,15 @@ public abstract class TradeTask extends Task {
 
 	@Override
 	public TaskResult tick(MinecraftClient mc) {
+		// 安全点让位检查（每 tick 一次，覆盖全部状态——等待窗口/交互在途/交易循环均可让位；
+		// 仅 MOVING 注入检查器（STATIC/VOID = null，行为零变化）；yielded 后不再重复触发；
+		// 交互在途让位的残留窗口由机器层兜底关闭（MovingTradeMachine.tickIdle 开头）
+		if (!yielded && competitorChecker != null && competitorChecker.hasCompetitor(mc, null)) {
+			yielded = true;
+			state = State.CLOSING_SCREEN;
+			AutoTrade.logger.info("[TradeTask] 让位抢占 (villager={}, state={})", villagerActive, state);
+			return TaskResult.RUNNING;
+		}
 		// 每个 tick 由当前状态推进一步；各分支方法内部返回 RUNNING 或终态结果（SUCCEEDED / FAILED），switch 表达式无贯穿
 		return switch (state) {
 			case INTERACTING -> tickInteracting(mc);
@@ -190,14 +199,6 @@ public abstract class TradeTask extends Task {
 			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
-		// 基础抢占检查点：MOVING 注入的检查器见 hunger≥2 未处理村民 → 提前关窗让位（已执行交易保留）
-		if (competitorChecker != null && competitorChecker.hasCompetitor(mc, null)) {
-			yielded = true;
-			state = State.CLOSING_SCREEN;
-			AutoTrade.logger.info("[TradeTask] TRADING → CLOSING_SCREEN (yield, villager={})", villagerActive);
-			return TaskResult.RUNNING;
-		}
-
 		boolean hasMoreWork = executor.handleMerchantScreenTick(mc, screen);
 		if (!hasMoreWork) {
 			// 同步「背包空间不足」标志：由 executor 判断是正常无匹配还是结果放不下
@@ -223,7 +224,7 @@ public abstract class TradeTask extends Task {
 		return inventoryBlocked;
 	}
 
-	/** 本次会话是否因抢占让位提前结束（机器层据此不标记已处理、饥饿 +1；正常路径与强杀路径均查询） */
+	/** 本次会话是否因安全点让位提前结束（机器层据此不标记已处理、饥饿不 +1；正常路径与强杀路径均查询） */
 	public boolean isYielded() {
 		return yielded;
 	}

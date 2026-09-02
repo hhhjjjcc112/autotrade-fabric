@@ -22,6 +22,7 @@
     "autotrade.message.io.open_failed": "§c容器操作失败：容器窗口连续打开失败 %s 次，已放弃",
     "autotrade.message.void.return_overlap": "§e虚空回程触发坐标与 IO 容器坐标重叠，回程触发未启用（请更换触发方块或容器坐标）",
     "autotrade.message.void.teleport_timeout": "村民一直未传送，已跳过",
+    "autotrade.message.moving.starvation_hint": "§e[Moving] 有%s（饥饿 %d，距离 %.1f 格）长期未被服务，请检查移动路径或目标位置",
 
     "autotrade.gui.title.pair_edit": "编辑交易对",
     "autotrade.gui.pair_edit.back": "返回",
