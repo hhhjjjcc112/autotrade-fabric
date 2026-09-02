@@ -3,6 +3,7 @@ package com.github.sebseb7.autotrade.trade.io;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
+import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
@@ -30,7 +31,8 @@ import net.minecraft.world.World;
 
 /**
  * 容器 IO 任务：打开目标容器窗口后，在 1 tick 内循环搬运全部匹配物品（burst transfer）， 直到达 transferLimit
- * 上限或无匹配物品即停；随后关窗结束（OPENING→TRANSFERRING→CLOSING→SUCCEEDED）。
+ * 上限或无匹配物品即停；随后关窗结束（OPENING→TRANSFERRING→CLOSING→SUCCEEDED）。 目标容器位置取自 IOIntent
+ * 携带的位置记录（loc），与条目坐标解耦（多位置记录维度）。
  */
 public class ContainerIOTask extends Task {
 
@@ -38,16 +40,16 @@ public class ContainerIOTask extends Task {
 		OPENING, TRANSFERRING, CLOSING
 	}
 
-	/** 容器 IO 意图：物品 IO 条目 + 输入/输出方向 */
-	public record IOIntent(ItemIO io, boolean isInput) {
+	/** 容器 IO 意图：物品 IO 条目 + 位置记录 + 输入/输出方向 */
+	public record IOIntent(ItemIO io, ItemIOLocation loc, boolean isInput) {
 		/**
 		 * 条目级饥饿记账标识：物品 + 坐标 + 方向（跨条目实例稳定，同容器不同物品独立记账）； 格式单一实现在
 		 * ContainerCandidate，MOVING 饥饿记账依赖
 		 */
 		public String ioKey() {
 			// 委托调度器 ContainerCandidate 的单一实现（ioKey 格式唯一出处，MOVING 饥饿记账依赖其稳定）
-			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, isInput,
-					0).ioKey();
+			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, loc,
+					isInput, 0).ioKey();
 		}
 
 		/**
@@ -55,8 +57,8 @@ public class ContainerIOTask extends Task {
 		 * （直接传值不解析 ioKey 字符串——物品编码为 Gson JSON，NBT 可含任意字符，分隔符解析不可靠）
 		 */
 		public String containerKey() {
-			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, isInput,
-					0).containerKey();
+			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, loc,
+					isInput, 0).containerKey();
 		}
 	}
 
@@ -113,8 +115,8 @@ public class ContainerIOTask extends Task {
 	}
 
 	private TaskResult tickOpening(MinecraftClient mc) {
-		// 目标容器坐标直接取自条目自身（输入/输出共用条目坐标）
-		BlockPos pos = new BlockPos(intent.io().getX(), intent.io().getY(), intent.io().getZ());
+		// 目标容器坐标直接取自位置记录（输入/输出共用条目坐标）
+		BlockPos pos = new BlockPos(intent.loc().getX(), intent.loc().getY(), intent.loc().getZ());
 
 		if (mc.world != null) {
 			// 目标方块所在区块可能尚未加载（VOID 模式传送回岛后异步加载窗口）：未加载时 getBlockState 会返回空气，

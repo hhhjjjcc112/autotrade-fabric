@@ -4,6 +4,7 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
+import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
@@ -11,6 +12,7 @@ import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
 /**
@@ -25,6 +27,12 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 
 	/** 返回触发坐标与 IO 容器坐标互斥校验结果缓存（null = 尚未校验；校验一次后避免每 tick 重复解析 ItemIOList，决策 4） */
 	private Boolean returnTriggerConflict = null;
+
+	/**
+	 * 非法维度警告已提示标志（一次性防刷屏，同 MOVING hintedKeys 惯例；isReturnTriggerConfigured 每
+	 * tick/每帧被调用，不设防会无限堆积消息）
+	 */
+	private static boolean invalidDimensionWarned = false;
 
 	public VoidTradeMachine() {
 		super();
@@ -66,12 +74,27 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		}
 	}
 
-	/** 返回触发是否已配置（TYPE ≠ NONE 且坐标解析成功且非 0 哨兵值） */
+	/** 返回触发是否已配置（TYPE ≠ NONE 且坐标解析成功且非 0 哨兵值；维度空串 = 任意维度不过滤，非空且非法视为未配置） */
 	public boolean isReturnTriggerConfigured() {
 		if (Configs.Void.VOID_RETURN_TYPE.getOptionListValue() == ReturnTriggerType.NONE)
 			return false;
+		// 维度配置：空串 = 任意维度（不过滤、不视为未配置）；非空且非法 → 视为未配置 + 一次性警告（防刷屏，同 MOVING hintedKeys 惯例）
+		String dim = Configs.Void.VOID_RETURN_DIM.getStringValue();
+		if (!dim.isEmpty() && !isValidDimension(dim)) {
+			if (!invalidDimensionWarned) {
+				invalidDimensionWarned = true;
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
+						"autotrade.message.void.invalid_dimension");
+			}
+			return false;
+		}
 		BlockPos pos = parseReturnPos();
 		return pos != null && !pos.equals(BlockPos.ORIGIN);
+	}
+
+	/** 维度 registry id 是否合法（非空且可被 Identifier 解析） */
+	private static boolean isValidDimension(String dim) {
+		return dim != null && !dim.isBlank() && Identifier.tryParse(dim) != null;
 	}
 
 	/**
@@ -103,6 +126,10 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 	private boolean isReturnBlockReachable(MinecraftClient mc) {
 		if (mc.world == null || mc.player == null)
 			return false;
+		// 维度过滤：VOID_RETURN_DIM 非空时玩家必须处于该维度才判定可达（空串 = 任意维度，跳过该过滤）
+		String dim = Configs.Void.VOID_RETURN_DIM.getStringValue();
+		if (!dim.isEmpty() && !dim.equals(mc.world.getRegistryKey().getValue().toString()))
+			return false;
 		BlockPos pos = parseReturnPos();
 		if (pos == null)
 			return false;
@@ -111,16 +138,28 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		return pos.toCenterPos().squaredDistanceTo(mc.player.getPos()) <= 4.5 * 4.5;
 	}
 
-	// 遍历全部 ItemIO 条目，检查触发坐标是否与任一条目容器坐标重叠（决策 4；空列表 = 无冲突）
+	// 遍历全部 ItemIO 条目的位置记录，检查触发坐标是否与任一条启用记录容器坐标重叠（决策 4；空列表 = 无冲突）。
+	// 按维判定：仅统计启用记录（行级 io.isEnabled() 且记录级
+	// loc.isEnabled()——禁用即「我确认不需要这个容器」，禁用后冲突提示消失）；
+	// 同坐标 且（记录维度为空 = 任意维度，或与回程维度相同；回程维度空串时视为与任意记录同维）→ 冲突
 	private boolean hasTriggerPosConflict() {
 		BlockPos pos = parseReturnPos();
 		// 坐标非法时视为不可用（true），避免以 (0,0,0) 参与冲突判断
 		if (pos == null)
 			return true;
+		String returnDim = Configs.Void.VOID_RETURN_DIM.getStringValue();
 		// 缓存访问器：仅遍历读取坐标，不改动条目
 		for (ItemIO io : ItemIOCache.getAll()) {
-			if (io.getX() == pos.getX() && io.getY() == pos.getY() && io.getZ() == pos.getZ())
-				return true;
+			if (!io.isEnabled())
+				continue; // 行级禁用：不参与冲突判定
+			for (ItemIOLocation loc : io.getLocations()) {
+				if (!loc.isEnabled())
+					continue; // 记录级禁用：不参与冲突判定
+				if (loc.getX() == pos.getX() && loc.getY() == pos.getY() && loc.getZ() == pos.getZ()
+						&& (loc.getDimension().isEmpty() || returnDim.isEmpty()
+								|| loc.getDimension().equals(returnDim)))
+					return true;
+			}
 		}
 		return false;
 	}

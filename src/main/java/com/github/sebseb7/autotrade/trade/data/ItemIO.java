@@ -1,7 +1,11 @@
 package com.github.sebseb7.autotrade.trade.data;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
- * 表示一条物品容器 IO 配置：指定某个物品（{@code item}）从输入容器取出或放入输出容器， 并带有容器坐标、补货阈值与单次取放数量。
+ * 表示一条物品容器 IO 配置：指定某个物品（{@code item}）从输入容器取出或放入输出容器，
+ * 并带有一组容器位置记录（{@link ItemIOLocation}，每条含维度/坐标/启用）、行级补货阈值、 单次取放数量与行级总开关。
  *
  * <p>
  * {@code item} 使用 {@link com.github.sebseb7.autotrade.util.ItemStringHelper}
@@ -16,12 +20,11 @@ package com.github.sebseb7.autotrade.trade.data;
 public final class ItemIO {
 	private String item;
 	private boolean isInput;
-	private int x;
-	private int y;
-	private int z;
-	/** 补货阈值（占用槽位数，默认 1 = 剩 1 组时补货） */
+	/** 容器位置记录列表（每条含维度 + 坐标 + 启用开关；同一物品可配置多个容器） */
+	private List<ItemIOLocation> locations = new ArrayList<>();
+	/** 补货/清出阈值（单位：组 = 槽位数；输入方向：该物品占用 ≤ N 组时补货；输出方向：占用 ≥ N 组时清出。默认 1 = 剩 1 组时补货） */
 	private int threshold = 1;
-	/** 单次取放数量（默认 6） */
+	/** 单次取放数量（单位：组 = 槽位数，每次容器 IO 最多搬运的组数；仅输入方向生效，默认 6） */
 	private int takeAmount = 6;
 	/** 条目启用开关（默认 true；旧配置文件缺失该字段时读取为启用，无需迁移） */
 	private boolean enabled = true;
@@ -30,24 +33,23 @@ public final class ItemIO {
 	public ItemIO() {
 	}
 
-	/** 全参构造：直接指定全部字段 */
-	public ItemIO(String item, boolean isInput, int x, int y, int z, int threshold, int takeAmount) {
+	/** 全参构造：直接指定全部字段（enabled 保持默认 true） */
+	public ItemIO(String item, boolean isInput, List<ItemIOLocation> locations, int threshold, int takeAmount) {
 		this.item = item;
 		this.isInput = isInput;
-		this.x = x;
-		this.y = y;
-		this.z = z;
+		this.locations = locations;
 		this.threshold = threshold;
 		this.takeAmount = takeAmount;
 	}
 
-	/** 拷贝构造：复制全部 8 个字段（默认值语义经拷贝保留原值；String 为不可变对象，直接引用复制即可） */
+	/** 拷贝构造：复制全部字段；locations 为可变对象列表，逐条深拷贝以防 UI 副本与缓存条目共享引用 */
 	public ItemIO(ItemIO other) {
 		this.item = other.item;
 		this.isInput = other.isInput;
-		this.x = other.x;
-		this.y = other.y;
-		this.z = other.z;
+		this.locations = new ArrayList<>();
+		for (ItemIOLocation loc : other.locations) {
+			this.locations.add(new ItemIOLocation(loc));
+		}
 		this.threshold = other.threshold;
 		this.takeAmount = other.takeAmount;
 		this.enabled = other.enabled;
@@ -69,28 +71,19 @@ public final class ItemIO {
 		this.isInput = v;
 	}
 
-	public int getX() {
-		return x;
+	/** 返回内部位置记录列表引用（调用方约定只读，不得直接增删改元素） */
+	public List<ItemIOLocation> getLocations() {
+		return locations;
 	}
 
-	public void setX(int v) {
-		this.x = v;
+	/** 整体替换位置记录列表 */
+	public void setLocations(List<ItemIOLocation> v) {
+		this.locations = v;
 	}
 
-	public int getY() {
-		return y;
-	}
-
-	public void setY(int v) {
-		this.y = v;
-	}
-
-	public int getZ() {
-		return z;
-	}
-
-	public void setZ(int v) {
-		this.z = v;
+	/** 位置记录条数 */
+	public int locationCount() {
+		return locations.size();
 	}
 
 	public int getThreshold() {

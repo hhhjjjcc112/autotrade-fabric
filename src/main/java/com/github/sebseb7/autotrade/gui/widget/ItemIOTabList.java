@@ -26,7 +26,7 @@ import java.util.List;
  * <p>
  * 行集合 = {@link IoItemDeriver#derive} 全部交易对（含禁用）后按方向过滤，渲染前按 enabledCount 降序排序
  * （次键：disabledCount 降序，再物品 id 字母序）；每行与 {@link ItemIOList} 按 (item, 方向) 匹配
- * （findByKey 语义），未命中使用占位条目（enabled=true、0 0 0、阈值 1、单次 6）；派生集为空时渲染空态提示行。
+ * （findByKey 语义），未命中使用占位条目（enabled=true、无位置记录、阈值 1、单次 6）；派生集为空时渲染空态提示行。
  * </p>
  *
  * <p>
@@ -36,12 +36,9 @@ import java.util.List;
  * </p>
  */
 public class ItemIOTabList extends WidgetListConfigOptions {
-	/** 行高：沿用旧 IO 列表的 ENTRY_HEIGHT=40 */
+	/** 空态提示行高（0 记录派生行高由 getBrowserEntryHeightFor 按 heightFor 动态计算，与空态行解耦） */
 	public static final int ENTRY_HEIGHT = ItemIOEntryWidget.ENTRY_HEIGHT;
-	/** 未命中已保存条目时占位条目的默认值：坐标 0 0 0、阈值 1、单次 6、启用 */
-	private static final int DEFAULT_X = 0;
-	private static final int DEFAULT_Y = 0;
-	private static final int DEFAULT_Z = 0;
+	/** 未命中已保存条目时占位条目的默认值：无位置记录（0 记录）、阈值 1、单次 6、启用 */
 	private static final int DEFAULT_THRESHOLD = 1;
 	private static final int DEFAULT_TAKE_AMOUNT = 6;
 
@@ -56,9 +53,9 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 	 * reCreateListEntryWidgets → applyPendingModifications）导致重入
 	 */
 	private boolean applyingPendingModifications;
-	/** 重建前聚焦文本框的定位身份（行物品编码串 + 字段种类），重建后恢复焦点；null = 无聚焦 */
+	/** 重建前聚焦文本框的定位身份（行物品编码串 + 字段引用：种类 + 记录下标），重建后恢复焦点；null = 无聚焦 */
 	private String focusRowItem;
-	private ItemIOEntryWidget.FieldKind focusFieldKind;
+	private ItemIOEntryWidget.FieldRef focusFieldRef;
 
 	/**
 	 * @param isInput
@@ -116,30 +113,30 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		}
 	}
 
-	/** 重建前记录聚焦文本框身份（行物品 + 字段种类）；无聚焦时记录为空 */
+	/** 重建前记录聚焦文本框身份（行物品 + 字段引用：种类 + 记录下标）；无聚焦时记录为空 */
 	private void captureFocusState() {
 		this.focusRowItem = null;
-		this.focusFieldKind = null;
+		this.focusFieldRef = null;
 		for (WidgetConfigOption widget : this.listWidgets) {
 			if (widget instanceof ItemIOEntryWidget ioWidget) {
-				ItemIOEntryWidget.FieldKind kind = ioWidget.getFocusedFieldKind();
-				if (kind != null) {
+				ItemIOEntryWidget.FieldRef ref = ioWidget.getFocusedFieldRef();
+				if (ref != null) {
 					this.focusRowItem = ioWidget.getItem();
-					this.focusFieldKind = kind;
+					this.focusFieldRef = ref;
 					return;
 				}
 			}
 		}
 	}
 
-	/** 重建后按（行物品, 字段种类）恢复聚焦文本框；行已不存在时静默跳过 */
+	/** 重建后按（行物品, 字段引用）恢复聚焦文本框；行已不存在时静默跳过（记录下标越界时控件内已静默回落） */
 	private void restoreFocusState() {
-		if (this.focusRowItem == null || this.focusFieldKind == null) {
+		if (this.focusRowItem == null || this.focusFieldRef == null) {
 			return;
 		}
 		for (WidgetConfigOption widget : this.listWidgets) {
 			if (widget instanceof ItemIOEntryWidget ioWidget && ioWidget.getItem().equals(this.focusRowItem)) {
-				ioWidget.focusField(this.focusFieldKind);
+				ioWidget.focusField(this.focusFieldRef);
 				return;
 			}
 		}
@@ -162,15 +159,14 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		stats.sort(byEnabled.thenComparing(byDisabled).thenComparing(byId));
 
 		// 每行按 (item, 方向) 匹配已保存条目（ItemIOCache.findByKey 语义：首个匹配）；未命中使用占位条目
-		// （enabled=true、0 0 0、阈值 1、单次 6，与计划 todo 5 的占位默认一致）
+		// （无位置记录 = 0 记录、阈值 1、单次 6，与计划 todo 5 的占位默认一致）
 		List<ItemIO> ioItems = ItemIOCache.getAll();
 		List<RowData> rows = new ArrayList<>(stats.size());
 		for (IoItemDeriver.IoItemStat stat : stats) {
 			int index = ItemIOCache.findByKey(ioItems, stat.item(), isInput);
 			ItemIO entry = index >= 0
 					? new ItemIO(ioItems.get(index))
-					: new ItemIO(stat.item(), isInput, DEFAULT_X, DEFAULT_Y, DEFAULT_Z, DEFAULT_THRESHOLD,
-							DEFAULT_TAKE_AMOUNT);
+					: new ItemIO(stat.item(), isInput, List.of(), DEFAULT_THRESHOLD, DEFAULT_TAKE_AMOUNT);
 			rows.add(new RowData(stat.item(), stat, entry, isInput));
 		}
 		return rows;
@@ -208,8 +204,19 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		return wrappers;
 	}
 
+	/**
+	 * 按行返回动态高度：派生行高度 = 头部 + 记录数×记录行 + 底部（记录数 = 该行条目位置记录数，0 记录 = 40）； 非派生行（空态提示）返回固定
+	 * ENTRY_HEIGHT。基类 createListEntryWidgetIfSpace 逐条取本方法高度并顺序累计 y
+	 * 定位，滚动条按条目索引，天然支持可变高行。
+	 */
 	@Override
 	protected int getBrowserEntryHeightFor(ConfigOptionWrapper entry) {
+		String name = entry.getConfig() != null ? entry.getConfig().getName() : null;
+		if (name != null && name.startsWith(ItemIOEntryWidget.ROW_NAME_PREFIX)) {
+			// 占位配置名 = ROW_NAME_PREFIX + 行下标，按下标取行数据后按位置记录数计算行高
+			int index = Integer.parseInt(name.substring(ItemIOEntryWidget.ROW_NAME_PREFIX.length()));
+			return ItemIOEntryWidget.heightFor(rowData.get(index).entry().getLocations().size());
+		}
 		return ENTRY_HEIGHT;
 	}
 
@@ -220,9 +227,11 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		if (name != null && name.startsWith(ItemIOEntryWidget.ROW_NAME_PREFIX)) {
 			// 派生行：委托 ItemIOEntryWidget 渲染；提交（保存）后仅刷新本列表（不重建宿主屏，避免焦点丢失）
 			RowData row = rowData.get(listIndex);
-			ItemIOEntryWidget widget = new ItemIOEntryWidget(x, y, this.browserEntryWidth, ENTRY_HEIGHT,
-					this.maxLabelWidth, this.configWidth, wrapper, listIndex, (IKeybindConfigGui) this.parent, this,
-					row.item(), row.isInput(), row.entry(), row.stat(), this::refreshEntries);
+			// 行高取动态高度（与基类 createListEntryWidgetIfSpace 的空间判定一致，随记录数变化）
+			ItemIOEntryWidget widget = new ItemIOEntryWidget(x, y, this.browserEntryWidth,
+					this.getBrowserEntryHeightFor(wrapper), this.maxLabelWidth, this.configWidth, wrapper, listIndex,
+					(IKeybindConfigGui) this.parent, this, row.item(), row.isInput(), row.entry(), row.stat(),
+					this::refreshEntries);
 			// 两阶段初始化：基类构造函数在 super() 链中调用 addConfigOption 时本控件字段尚未赋值（仅缓存参数），
 			// 构造完成后在此重放行布局，避免解引用 null 字段的 NPE
 			widget.initRowLayout();

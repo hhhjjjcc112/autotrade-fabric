@@ -5,6 +5,7 @@ import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.IoItemDeriver;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
+import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
 import com.github.sebseb7.autotrade.trade.data.TradePairCache;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
@@ -37,16 +38,17 @@ import net.minecraft.registry.Registries;
  */
 public class ContainerIOScheduler {
 
-	/** 容器 IO 候选：物品 IO 条目 + 方向 + 距离（MOVING 模式饥饿评分用；距离 ≤ CONTAINER_REACH 格） */
-	public record ContainerCandidate(ItemIO io, boolean isInput, double distance) {
-		/** 条目级饥饿标识：物品 + 坐标 + 方向（同容器不同物品 = 不同 key，独立记账；消除共享键翻倍/恒选首个缺陷） */
+	/** 容器 IO 候选：物品 IO 条目 + 位置记录 + 方向 + 距离（MOVING 模式饥饿评分用；距离 ≤ CONTAINER_REACH 格） */
+	public record ContainerCandidate(ItemIO io, ItemIOLocation loc, boolean isInput, double distance) {
+		/** 条目级饥饿标识：物品 + 维度/坐标 + 方向（同容器不同物品 = 不同 key，独立记账；键含维度与位置，dim 空 = 空串段，格式稳定） */
 		public String ioKey() {
-			return io.getItem() + "#" + io.getX() + "," + io.getY() + "," + io.getZ() + "#" + isInput;
+			return io.getItem() + "#" + loc.getDimension() + "," + loc.getX() + "," + loc.getY() + "," + loc.getZ()
+					+ "#" + isInput;
 		}
 
-		/** 容器身份键（坐标+方向）：L2 检查器排除同容器条目、CONFIG 失败冷却用 */
+		/** 容器身份键（维度+坐标+方向）：L2 检查器排除同容器条目、CONFIG 失败冷却用 */
 		public String containerKey() {
-			return io.getX() + "," + io.getY() + "," + io.getZ() + "#" + isInput;
+			return loc.getDimension() + "," + loc.getX() + "," + loc.getY() + "," + loc.getZ() + "#" + isInput;
 		}
 	}
 
@@ -92,8 +94,8 @@ public class ContainerIOScheduler {
 	}
 
 	/**
-	 * 全量扫描：收集所有 ≤ CONTAINER_REACH 格需要 IO 的容器候选（输入/输出各条目为独立候选），MOVING 饥饿评分用；背包计数 map
-	 * 按 TTL 复用，条目循环无条件执行
+	 * 全量扫描：收集所有 ≤ CONTAINER_REACH 格需要 IO 的容器候选（输入/输出各位置记录为独立候选），MOVING 饥饿评分用；背包计数
+	 * map 按 TTL 复用，双层循环无条件执行
 	 */
 	private List<ContainerCandidate> scanPendingContainers(MinecraftClient mc) {
 		// 派生活动物品集：输入集 = enabled 交易对 giveItem ∪ giveItem2，输出集 = getItem
@@ -113,13 +115,10 @@ public class ContainerIOScheduler {
 			cachedAtTick = now;
 		}
 		List<ContainerCandidate> result = new ArrayList<>();
+		// 外层循环：条目级过滤（行级总开关 + 活动物品集命中），内层循环：位置记录级过滤（记录开关 + 占位 + 维度 + 距离 + 阈值）
 		for (ItemIO io : entries) {
 			// 条目级启用开关：禁用的条目不参与任何容器 IO（在方向命中检查之前）
 			if (!io.isEnabled()) {
-				continue;
-			}
-			// 占位坐标 0 0 0 的条目不触发容器 IO
-			if (io.getX() == 0 && io.getY() == 0 && io.getZ() == 0) {
 				continue;
 			}
 			boolean isInput = io.isInput();
@@ -127,18 +126,35 @@ public class ContainerIOScheduler {
 			if (isInput ? !inputItems.contains(io.getItem()) : !outputItems.contains(io.getItem())) {
 				continue;
 			}
-			// 距离只算一次：同时用于可及检查与候选距离（替代旧 needsContainerIO 内的重复计算）
-			double distance = ContainerIOHelper.containerDistance(mc, io);
-			if (distance > Configs.Generic.CONTAINER_REACH.getIntegerValue()) {
-				continue;
+			// 内层循环：该条目下每条启用位置记录独立成候选（同一物品多个容器 = 多个候选，各自距离/维度过滤）
+			for (ItemIOLocation loc : io.getLocations()) {
+				// 位置记录级启用开关：关闭的位置不参与容器 IO
+				if (!loc.isEnabled()) {
+					continue;
+				}
+				// 占位坐标 0 0 0 的位置记录不触发容器 IO
+				if (loc.getX() == 0 && loc.getY() == 0 && loc.getZ() == 0) {
+					continue;
+				}
+				// 维度过滤：记录指定维度且与当前维度不符时跳过（空串 = 任意维度，恒通过；currentDimensionId 返回 null 时 equals
+				// 天然不匹配）
+				if (!loc.getDimension().isEmpty()
+						&& !loc.getDimension().equals(ContainerIOHelper.currentDimensionId(mc))) {
+					continue;
+				}
+				// 距离只算一次：同时用于可及检查与候选距离（替代旧 needsContainerIO 内的重复计算）
+				double distance = ContainerIOHelper.containerDistance(mc, loc);
+				if (distance > Configs.Generic.CONTAINER_REACH.getIntegerValue()) {
+					continue;
+				}
+				// 阈值判定内联：输入（从容器取货）槽位数不超过阈值时补货；输出（向容器出货）槽位数达到阈值时清出
+				int slots = cachedSlotCounts.getOrDefault(io.getItem(), 0);
+				boolean needed = isInput ? (slots <= io.getThreshold()) : (slots >= io.getThreshold());
+				if (!needed) {
+					continue;
+				}
+				result.add(new ContainerCandidate(io, loc, isInput, distance));
 			}
-			// 阈值判定内联：输入（从容器取货）槽位数不超过阈值时补货；输出（向容器出货）槽位数达到阈值时清出
-			int slots = cachedSlotCounts.getOrDefault(io.getItem(), 0);
-			boolean needed = isInput ? (slots <= io.getThreshold()) : (slots >= io.getThreshold());
-			if (!needed) {
-				continue;
-			}
-			result.add(new ContainerCandidate(io, isInput, distance));
 		}
 		return result;
 	}
@@ -184,8 +200,9 @@ public class ContainerIOScheduler {
 		if (candidate == null) {
 			return false;
 		}
-		starter.accept(new ContainerIOTask(new ContainerIOTask.IOIntent(candidate.io(), candidate.isInput()),
-				competitorChecker));
+		// 意图携带位置记录（loc）：开箱坐标取自候选位置记录，与条目坐标解耦
+		starter.accept(new ContainerIOTask(
+				new ContainerIOTask.IOIntent(candidate.io(), candidate.loc(), candidate.isInput()), competitorChecker));
 		logIOStart(candidate);
 		return true;
 	}
