@@ -32,9 +32,9 @@ import net.minecraft.util.math.BlockPos;
 
 /**
  * 物品 IO 派生行控件：渲染单个 (item, 方向) 的 IO 配置行，可变高度行布局（行高 = 20 + 20×记录数）： 头部行 = 条目级
- * [开/关] 状态文本（最左）+ 物品预览 icon + 「启用 X · 禁用 Y」计数标签（放不下跳过）+ 行级「启用/禁用」 总开关按钮 + 右侧
- * [阈值] 输入框 + [每次拿取] 输入框（仅输入方向）右对齐 + [添加容器] 按钮（行尾）； 记录行 i = [序号][记录级 开/关][维度
- * 标签][维度 文本框（留空 = 任意维度）][坐标 文本框][抓取容器 按钮][启用/禁用 按钮][✕ 删除 按钮]（stat
+ * [开/关] 状态文本（最左）+ 物品预览 icon + 「开 X · 关 Y」计数标签（放不下跳过）+ 行级「启用/禁用」 总开关按钮 + 右侧 [阈值]
+ * 输入框 + [每次拿取] 输入框（仅输入方向）右对齐 + [添加容器] 按钮（行尾）； 记录行 i = [序号][记录级 开/关][维度 标签][维度
+ * 文本框（留空 = 任意维度）][坐标 文本框][抓取容器 按钮][启用/禁用 按钮][✕ 删除 按钮]（stat
  * 由选项卡层填入，本控件只负责渲染）。阈值/每次拿取以组为单位（1 组 = 1 槽位）。
  *
  * <p>
@@ -136,6 +136,9 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 	private static final String ADD_LOCATION_KEY = "autotrade.gui.item_io.add_location";
 	/** 添加容器按钮悬浮提示翻译键 */
 	private static final String ADD_LOCATION_TIP_KEY = "autotrade.gui.item_io.add_location_tip";
+	/** 启停按钮显示文本翻译键（按钮显示「点击后执行的动作」，悬浮补当前状态；头部行总开关与记录行共用） */
+	private static final String TOGGLE_ON_LABEL = "autotrade.gui.item_io.enabled";
+	private static final String TOGGLE_OFF_LABEL = "autotrade.gui.item_io.disabled";
 	/** 非法维度提示翻译键（非空且无法解析为 Identifier 时提示并恢复原值） */
 	private static final String INVALID_DIMENSION_KEY = "autotrade.message.invalid_dimension";
 	/** 计数标签正常色（有启用交易对使用该物品时） */
@@ -312,7 +315,6 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 		int iconEndX = cx + 22;
 		// 字段文本标签：阈值两个方向都显示；每次拿取仅输入方向（输出方向无此概念，见 ContainerIOTask
 		// transferLimit：输出固定 999 全量搬运，不读 takeAmount）；标签用简写，悬浮显示完整说明
-		int numW = Math.min(60, Math.max(40, (rightEdge - iconEndX) * 12 / 100));
 		String thresholdLabel = StringUtils.translate(THRESHOLD_SHORT_KEY);
 		int threshLabelW = this.getStringWidth(thresholdLabel);
 		String takeAmountLabel = null;
@@ -322,29 +324,46 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 			takeLabelW = this.getStringWidth(takeAmountLabel);
 		}
 		// 右侧块（右对齐到行尾）：[阈值 标签+输入框] + [每次拿取 标签+输入框]（每次拿取仅输入行）+ [添加容器 按钮]
-		// 阈值/每次拿取以组为单位（1 组 = 1 槽位）
+		// 阈值/每次拿取以组为单位（1 组 = 1 槽位）；右段宽度按行宽比例分配（40%..60%），下限为内容最小宽
 		String addLabelText = StringUtils.translate(ADD_LOCATION_KEY);
-		int addW = Math.min(64, Math.max(50, this.getStringWidth(addLabelText) + 10));
-		int takeBlockW = takeAmountLabel != null ? takeLabelW + 2 + numW : 0;
-		int rightBlockW = threshLabelW + 2 + numW + takeBlockW + gap + addW;
+		int addW = Math.min(60, Math.max(50, this.getStringWidth(addLabelText) + 10));
+		// 内容最小宽：阈值块（标签+2+numW 下限 40）+ 每次拿取块（仅输入行）+ 添加按钮
+		int minRightW = (threshLabelW + 2 + 40) + (isInput ? (takeLabelW + 2 + 40 + gap) : 0) + gap + addW;
+		// 右段按行宽比例分配并钳制 [40%, 60%]，下限为内容最小宽（窄窗口下右段不压缩到内容以下）
+		int rightBlockW = Math.max(minRightW, Math.min(this.width * 40 / 100, this.width * 60 / 100));
 		int blockX = rightEdge - rightBlockW;
-		// 统计文本：位于图标之后、右侧块之前，放得下才渲染（X=0 时高亮提示「当前不生效」）
+		// 数量输入框宽：右段内扣除标签与按钮后均分（输入行 2 个、输出行 1 个），钳制 [40, 60]
+		int numW = (rightBlockW - (threshLabelW + 2) - (isInput ? takeLabelW + 2 + gap : 0) - gap - addW)
+				/ (isInput ? 2 : 1);
+		numW = Math.min(60, Math.max(40, numW));
+		// 统计文本：位于图标之后、右侧块之前；启停按钮优先，统计文本让位（含统计放不下 toggleW 时统计不渲染）
 		int statsEndX = iconEndX;
+		int toggleW = Math
+				.min(Math.max(this.getStringWidth(TOGGLE_ON_LABEL), this.getStringWidth(TOGGLE_OFF_LABEL)) + 8, 44);
+		boolean renderStats = false;
+		String statsText = null;
+		boolean statsInactive = false;
 		if (stat != null) {
-			String statsText = StringUtils.translate(STATS_KEY, stat.enabledCount(), stat.disabledCount());
-			boolean inactive = stat.enabledCount() == 0;
-			if (iconEndX + this.getStringWidth(statsText) + gap <= blockX) {
-				this.addWidget(new CountLabelWidget(iconEndX, y + 6, statsText, inactive));
-				statsEndX = iconEndX + this.getStringWidth(statsText);
+			statsText = StringUtils.translate(STATS_KEY, stat.enabledCount(), stat.disabledCount());
+			statsInactive = stat.enabledCount() == 0;
+			int statsW = this.getStringWidth(statsText);
+			// 先按「含统计」判断中段是否放得下 toggleW：放不下则统计让位（不渲染，statsEndX 保持 iconEndX）
+			if (iconEndX + statsW + gap <= blockX && toggleW <= blockX - (iconEndX + statsW) - gap) {
+				renderStats = true;
+				statsEndX = iconEndX + statsW;
 			}
 		}
+		// 中段可用宽（统计已渲染则从统计文本之后起算，否则从图标之后起算）
+		int midAvailable = blockX - statsEndX - gap;
+		toggleW = Math.max(30, Math.min(toggleW, midAvailable));
+		if (renderStats) {
+			this.addWidget(new CountLabelWidget(iconEndX, y + 6, statsText, statsInactive));
+		}
 
-		// 行级「启用/禁用」总开关按钮（统计文本之后）：宽度按剩余空间钳制，防止与右侧块重叠，
+		// 行级「启用/禁用」总开关按钮（统计文本之后）：宽度按两态文本中最宽者 + 边距自适应，
+		// 44px 硬上限；中段放不下时统计文本让位，极端窄窗口下按钮紧贴右段（下限 30）；
 		// 按钮显示「点击后执行的动作」（条目当前启用时显示「禁用」、禁用时显示「启用」），hover 补当前状态
-		int toggleW = Math.min(70, Math.max(40, (blockX - statsEndX) * 14 / 100));
-		toggleW = Math.min(toggleW, Math.max(40, blockX - statsEndX - gap));
-		String toggleLabel = StringUtils
-				.translate(entry.isEnabled() ? "autotrade.gui.item_io.disabled" : "autotrade.gui.item_io.enabled");
+		String toggleLabel = StringUtils.translate(entry.isEnabled() ? TOGGLE_OFF_LABEL : TOGGLE_ON_LABEL);
 		String toggleTipKey = entry.isEnabled() ? TOGGLE_BTN_TIP_ON_KEY : TOGGLE_BTN_TIP_OFF_KEY;
 		ButtonGeneric toggleBtn = new ButtonGeneric(statsEndX + gap, y, toggleW, 20, toggleLabel);
 		toggleBtn.setHoverStrings(toggleTipKey);
@@ -393,16 +412,22 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 		});
 
 		// ── 记录行 i（y+20+20i）：[序号][记录级 开/关][维度 简写标签+文本框][坐标 文本框][抓取容器][启用/禁用][✕ 删除] ──
-		// 宽度按可用宽度比例计算并钳制（沿用旧第二行 row2AvailableW 比例手法），坐标框吃剩余宽度，
-		// 小窗口下保证不溢出滚动条区域；序号 + 记录级状态文本使记录状态与头部条目级状态错位（层级从属视觉）
+		// 按钮组（抓取/启停/删除）整体右对齐到行尾：右对齐锚定行尾使删除按钮永不超出右边界
+		// （根治左对齐流式布局下 ✕ 出界）；弹性区（维度框 + 坐标框）吃「前缀到按钮组」剩余宽度，
+		// 维度框 55% / 坐标框 45%（坐标框吃剩余，保证和 = flexW - gap）；
+		// 序号 + 记录级状态文本使记录状态与头部条目级状态错位（层级从属视觉）
 		List<ItemIOLocation> locations = entry.getLocations();
-		int recordRowW = rightEdge - (x + 2);
 		String dimLabel = StringUtils.translate(DIMENSION_SHORT_KEY);
 		int dimLabelW = this.getStringWidth(dimLabel);
-		int dimW = Math.min(80, Math.max(40, recordRowW * 14 / 100));
-		int grabW = Math.min(90, Math.max(50, recordRowW * 18 / 100));
-		int recToggleW = Math.min(70, Math.max(40, recordRowW * 14 / 100));
-		int delW = Math.min(32, Math.max(18, recordRowW * 6 / 100));
+		// 按钮组（右对齐）内各按钮宽度按各自文本自适应 + 硬上限：宽度贴合内容（Grab/✕ 短、Disable 长），
+		// 不强制等宽以免短文本按钮出现大段空白；上限防英文长文本撑爆行宽（Grab 40 / 启停 44 / ✕ 24）
+		int grabW = Math.min(40, this.getStringWidth(StringUtils.translate(GRAB_CONTAINER_SHORT_KEY)) + 6);
+		int recToggleW = Math.min(44,
+				Math.max(this.getStringWidth(TOGGLE_ON_LABEL), this.getStringWidth(TOGGLE_OFF_LABEL)) + 6);
+		int delW = Math.min(24, this.getStringWidth(StringUtils.translate(DELETE_KEY)) + 6);
+		// 按钮组右对齐：组左端 = 行尾 - 组宽（3 个按钮 + 2 个间隙）
+		int btnGroupW = grabW + gap + recToggleW + gap + delW;
+		int btnX = rightEdge - btnGroupW;
 		for (int i = 0; i < locations.size(); i++) {
 			ItemIOLocation loc = locations.get(i);
 			int rowY = y + HEADER_HEIGHT + i * RECORD_HEIGHT;
@@ -426,6 +451,39 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 			// 维度标签（简写 + 悬浮完整说明）+ 文本框：留空 = 任意维度（兼容旧配置），非空必须为可解析的维度 id，Enter/失焦提交
 			this.addWidget(new HoverLabelWidget(rc, rowY + 6, dimLabel, 0xFFFFFFFF, DIMENSION_TIP_KEY));
 			rc += dimLabelW + 2;
+
+			// 弹性区：维度框 55% / 坐标框 45%（坐标框吃剩余，保证和 = flexW - gap）；下限保护
+			// dimW ≥ 40、coordW ≥ 60（或 flexW < 140 提前触发收缩），不满足则收缩按钮组
+			// 行级局部副本：收缩只影响当前行，不污染其他记录行
+			int rowGrabW = grabW;
+			int rowToggleW = recToggleW;
+			int rowDelW = delW;
+			int rowBtnX = btnX;
+			int flexW = rowBtnX - rc;
+			int dimW = flexW * 55 / 100;
+			int coordW = flexW - dimW - gap;
+			if (dimW < 40 || coordW < 60 || flexW < 140) {
+				// 收缩路径：按 ✕(下限14) → 抓取(下限24) → 启停(下限30) 顺序收缩按钮组（保文本完整），组右端仍锚定行尾
+				int deficit = Math.max(0, Math.max(60 - coordW, 40 - dimW));
+				int delShrink = Math.min(rowDelW - 14, deficit);
+				rowDelW -= delShrink;
+				deficit -= delShrink;
+				int grabShrink = Math.min(rowGrabW - 24, deficit);
+				rowGrabW -= grabShrink;
+				deficit -= grabShrink;
+				rowToggleW = Math.max(30, rowToggleW - deficit);
+				int rowBtnGroupW = rowGrabW + gap + rowToggleW + gap + rowDelW;
+				rowBtnX = rightEdge - rowBtnGroupW;
+				// 收缩后重算弹性区并重新分配
+				flexW = rowBtnX - rc;
+				dimW = flexW * 55 / 100;
+				coordW = flexW - dimW - gap;
+				// 收缩后 coordW 仍 < 60（极端窄窗口）：维度框先保 40，坐标框尽力吃剩余（下限 4，避免负宽）
+				if (coordW < 60) {
+					dimW = Math.min(40, flexW);
+					coordW = Math.max(4, flexW - dimW - gap);
+				}
+			}
 			GuiTextFieldGeneric dimField = this.createTextField(rc, rowY + 1, dimW - 4, 17);
 			dimField.setMaxLength(64);
 			dimField.setText(loc.getDimension());
@@ -434,21 +492,20 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 			registerField(dimField);
 			rc += dimW + gap;
 
-			// 坐标文本框：吃剩余宽度（下限 60，修复旧 max(120) 在窄窗口下整体溢出的缺陷），
+			// 坐标文本框：吃「前缀（序号/状态/维度）到按钮组」剩余宽度（下限 60）；极端窄窗口下按钮组
+			// 收缩（行级局部计算，不影响其他记录行），组右端仍锚定行尾；
 			// ConfigCoordinate 校验语义，Enter/失焦提交（输入期间不保存不重建）
-			int coordW = Math.max(60, recordRowW - (numTextW + gap + recStatusW + gap + dimLabelW + 2 + dimW + gap
-					+ grabW + gap + recToggleW + gap + delW));
 			GuiTextFieldGeneric coordField = this.createTextField(rc, rowY + 1, coordW - 4, 17);
 			coordField.setMaxLength(48);
 			coordField.setText(String.format("%d %d %d", loc.getX(), loc.getY(), loc.getZ()));
 			committedCoordTexts.add(coordField.getText());
 			recordCoordFields.add(coordField);
 			registerField(coordField);
-			rc += coordW + gap;
 
+			// 按钮组（右对齐到行尾）：[抓取容器][启用/禁用][✕ 删除]，组内等宽 rowBtnW，组左端 rowBtnX
 			// 抓取容器按钮（简写 + 悬浮完整说明）：写入玩家脚下方块坐标 + 当前维度（world 非空才写维度），即时生效并保存
 			final int idx = i;
-			ButtonGeneric grabBtn = new ButtonGeneric(rc, rowY, grabW, 20,
+			ButtonGeneric grabBtn = new ButtonGeneric(rowBtnX, rowY, rowGrabW, 20,
 					StringUtils.translate(GRAB_CONTAINER_SHORT_KEY));
 			grabBtn.setHoverStrings(GRAB_CONTAINER_TIP_KEY);
 			this.addButton(grabBtn, (button, mouseButton) -> {
@@ -468,12 +525,11 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 				InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, "autotrade.message.item_io_container_set",
 						dim, pos.getX(), pos.getY(), pos.getZ());
 			});
-			rc += grabW + gap;
 
 			// 记录启用/禁用按钮（hover 补当前状态与 AND 语义）：写入该记录 enabled（与行级总开关 AND 生效），即时生效并保存
-			String recToggleLabel = StringUtils
-					.translate(loc.isEnabled() ? "autotrade.gui.item_io.disabled" : "autotrade.gui.item_io.enabled");
-			ButtonGeneric recToggleBtn = new ButtonGeneric(rc, rowY, recToggleW, 20, recToggleLabel);
+			String recToggleLabel = StringUtils.translate(loc.isEnabled() ? TOGGLE_OFF_LABEL : TOGGLE_ON_LABEL);
+			ButtonGeneric recToggleBtn = new ButtonGeneric(rowBtnX + rowGrabW + gap, rowY, rowToggleW, 20,
+					recToggleLabel);
 			recToggleBtn.setHoverStrings(loc.isEnabled() ? REC_TOGGLE_BTN_TIP_ON_KEY : REC_TOGGLE_BTN_TIP_OFF_KEY);
 			this.addButton(recToggleBtn, (button, mouseButton) -> {
 				ItemIOLocation target = entry.getLocations().get(idx);
@@ -482,10 +538,10 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 				if (onCommit != null)
 					onCommit.run();
 			});
-			rc += recToggleW + gap;
 
 			// 删除按钮（✕，悬浮说明）：点击即删除该记录并保存（无确认弹窗，与行级按钮即时生效风格一致）
-			ButtonGeneric delBtn = new ButtonGeneric(rc, rowY, delW, 20, StringUtils.translate(DELETE_KEY));
+			ButtonGeneric delBtn = new ButtonGeneric(rowBtnX + rowGrabW + gap + rowToggleW + gap, rowY, rowDelW, 20,
+					StringUtils.translate(DELETE_KEY));
 			delBtn.setHoverStrings(DELETE_TIP_KEY);
 			this.addButton(delBtn, (button, mouseButton) -> {
 				entry.getLocations().remove(idx);
@@ -733,7 +789,7 @@ public class ItemIOEntryWidget extends WidgetConfigOption {
 	}
 
 	/**
-	 * 计数标签控件：渲染「启用 X · 禁用 Y」；X=0（无启用交易对使用该物品，当前不生效）时用高亮色并附悬浮提示
+	 * 计数标签控件：渲染「开 X · 关 Y」（启用/禁用记录数）；X=0（无启用交易对使用该物品，当前不生效）时用高亮色并附悬浮提示
 	 */
 	private class CountLabelWidget extends WidgetBase {
 		private final String text;
