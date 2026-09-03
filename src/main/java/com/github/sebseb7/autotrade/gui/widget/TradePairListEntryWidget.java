@@ -153,12 +153,13 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 				cx += getCountWidth + 6;
 			}
 
-			// 右侧固定块（从右往左排布）：[删除] [编辑] [启用]，3 个按钮等宽；按钮宽度按可用宽度压缩并钳制
+			// 右侧固定块（从右往左排布）：[删除] [编辑] [启用]，3 个按钮等宽；按钮宽度按可用宽度压缩并钳制（文案已缩短为 On/Off，上限 40、下限
+			// 32）
 			int gap = 4;
 			// 行右边缘 = 控件绝对 x + 行宽（addConfigOption 收到的是绝对屏幕坐标，不能用 this.width 当右边界）
 			int rightX = (this.x + this.width) - 4;
 			int availableW = rightX - cx - gap;
-			int btnW = Math.min(46, Math.max(36, (availableW - 2 * gap) / 3));
+			int btnW = Math.min(40, Math.max(32, (availableW - 2 * gap) / 3));
 
 			int removeX = rightX - btnW;
 			int editX = removeX - gap - btnW;
