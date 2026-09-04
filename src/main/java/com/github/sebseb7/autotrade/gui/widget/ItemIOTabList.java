@@ -30,14 +30,23 @@ import java.util.List;
  * </p>
  *
  * <p>
+ * 方案 B（拆分可变高行为固定高条目）：每个物品展开为 1 个头部占位 + locations.size() 个记录占位，全部固定 20px
+ * 行高（{@link ItemIOBaseWidget#HEADER_HEIGHT}/{@link ItemIOBaseWidget#RECORD_HEIGHT}）。旧实现把单个物品渲染为
+ * 一条可变高行（20 + 20×记录数），记录数过多时行高超过列表视口，malilib
+ * {@code WidgetListBase.createListEntryWidgetIfSpace} 的空间判定（usedHeight + height
+ * &gt; usableHeight 返回 null） 会拒绝该条目并 break 整列表，导致列表整页空白；拆分后空间判定永不拒绝条目，根治空白问题。
+ * </p>
+ *
+ * <p>
  * 本控件自给自足：行数据与条目列表由本类构建（覆写 {@link #getAllEntries}），父屏只需在 createListWidget
- * 中实例化并传入方向；每次列表刷新都会重新派生（交易对/条目变化无需缓存同步）。 行渲染委托 {@link ItemIOEntryWidget}（含
+ * 中实例化并传入方向；每次列表刷新都会重新派生（交易对/条目变化无需缓存同步）。 行渲染委托
+ * {@link ItemIOHeaderWidget}（头部行）/ {@link ItemIORecordWidget}（单条记录行）（含
  * Enter/失焦提交机制）。
  * </p>
  */
 public class ItemIOTabList extends WidgetListConfigOptions {
-	/** 空态提示行高（0 记录派生行高由 getBrowserEntryHeightFor 按 heightFor 动态计算，与空态行解耦） */
-	public static final int ENTRY_HEIGHT = ItemIOEntryWidget.ENTRY_HEIGHT;
+	/** 空态提示行高（固定 40；派生行全部固定 20px，与空态行解耦） */
+	public static final int ENTRY_HEIGHT = 40;
 	/** 未命中已保存条目时占位条目的默认值：无位置记录（0 记录）、阈值 1、单次 6、启用 */
 	private static final int DEFAULT_THRESHOLD = 1;
 	private static final int DEFAULT_TAKE_AMOUNT = 6;
@@ -55,7 +64,7 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 	private boolean applyingPendingModifications;
 	/** 重建前聚焦文本框的定位身份（行物品编码串 + 字段引用：种类 + 记录下标），重建后恢复焦点；null = 无聚焦 */
 	private String focusRowItem;
-	private ItemIOEntryWidget.FieldRef focusFieldRef;
+	private ItemIOBaseWidget.FieldRef focusFieldRef;
 
 	/**
 	 * @param isInput
@@ -118,8 +127,8 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		this.focusRowItem = null;
 		this.focusFieldRef = null;
 		for (WidgetConfigOption widget : this.listWidgets) {
-			if (widget instanceof ItemIOEntryWidget ioWidget) {
-				ItemIOEntryWidget.FieldRef ref = ioWidget.getFocusedFieldRef();
+			if (widget instanceof ItemIOBaseWidget ioWidget) {
+				ItemIOBaseWidget.FieldRef ref = ioWidget.getFocusedFieldRef();
 				if (ref != null) {
 					this.focusRowItem = ioWidget.getItem();
 					this.focusFieldRef = ref;
@@ -129,15 +138,18 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		}
 	}
 
-	/** 重建后按（行物品, 字段引用）恢复聚焦文本框；行已不存在时静默跳过（记录下标越界时控件内已静默回落） */
+	/**
+	 * 重建后按（行物品, 字段引用）恢复聚焦文本框；行已不存在时静默跳过（记录下标越界时控件内已静默回落）。 同物品展开为头部 +
+	 * 多条记录控件：逐个尝试匹配控件的 focusField（不匹配的字段种类/越界记录下标在控件内 静默跳过），保证记录字段能落到对应记录控件上（D2
+	 * 修复在拆分后的等价实现）。
+	 */
 	private void restoreFocusState() {
 		if (this.focusRowItem == null || this.focusFieldRef == null) {
 			return;
 		}
 		for (WidgetConfigOption widget : this.listWidgets) {
-			if (widget instanceof ItemIOEntryWidget ioWidget && ioWidget.getItem().equals(this.focusRowItem)) {
+			if (widget instanceof ItemIOBaseWidget ioWidget && ioWidget.getItem().equals(this.focusRowItem)) {
 				ioWidget.focusField(this.focusFieldRef);
-				return;
 			}
 		}
 	}
@@ -173,19 +185,22 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 	}
 
 	/**
-	 * 将指定物品的行滚动到可视区顶部（供交易对页点击图标跳转定位；行不存在时静默跳过）。 滚动条值 = 行下标；先抬高 maxValue 再
+	 * 将指定物品的行滚动到可视区顶部（供交易对页点击图标跳转定位；行不存在时静默跳过）。 滚动条值 = 展开后的条目下标 （头部行 + 记录行独立条目）：遍历
+	 * rowData 累计偏移（每物品 1 个头部 + locations.size() 个记录）， 命中物品后先抬高 maxValue 再
 	 * setValue，避免首次绘制前被默认 maxValue 钳制（与 GuiConfigs.pendingScrollRestore 手法一致）
 	 */
 	public void scrollToItem(String item) {
-		for (int i = 0; i < rowData.size(); i++) {
-			if (rowData.get(i).item().equals(item)) {
+		int rowOffset = 0;
+		for (RowData row : rowData) {
+			if (row.item().equals(item)) {
 				GuiScrollBar sb = this.getScrollbar();
 				if (sb != null) {
-					sb.setMaxValue(i);
-					sb.setValue(i);
+					sb.setMaxValue(rowOffset);
+					sb.setValue(rowOffset);
 				}
 				return;
 			}
+			rowOffset += 1 + row.entry().getLocations().size();
 		}
 	}
 
@@ -197,25 +212,32 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 			// 空态：派生集为空（无交易对或该方向无物品）时渲染提示行（正式键 autotrade.gui.item_io.empty）
 			return ImmutableList.of(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.item_io.empty")));
 		}
+		// 每个物品展开为 1 个头部占位 + locations.size() 个记录占位（全部固定 20px 行高，
+		// 根治旧可变高行超过视口导致列表整页空白的问题）
 		List<ConfigOptionWrapper> wrappers = new ArrayList<>(rowData.size());
 		for (int i = 0; i < rowData.size(); i++) {
-			wrappers.add(new ConfigOptionWrapper(new ConfigString(ItemIOEntryWidget.ROW_NAME_PREFIX + i, "", "")));
+			wrappers.add(new ConfigOptionWrapper(new ConfigString(ItemIOBaseWidget.HEADER_NAME_PREFIX + i, "", "")));
+			int recordCount = rowData.get(i).entry().getLocations().size();
+			for (int j = 0; j < recordCount; j++) {
+				wrappers.add(new ConfigOptionWrapper(
+						new ConfigString(ItemIOBaseWidget.RECORD_NAME_PREFIX + i + "_" + j, "", "")));
+			}
 		}
 		return wrappers;
 	}
 
 	/**
-	 * 按行返回动态高度：派生行高度 = 头部 + 记录数×记录行 + 底部（记录数 = 该行条目位置记录数，0 记录 = 40）； 非派生行（空态提示）返回固定
-	 * ENTRY_HEIGHT。基类 createListEntryWidgetIfSpace 逐条取本方法高度并顺序累计 y
-	 * 定位，滚动条按条目索引，天然支持可变高行。
+	 * 按占位配置名返回固定行高：头部行/记录行各 20px（与控件常量一致），空态提示行返回 ENTRY_HEIGHT。 基类
+	 * createListEntryWidgetIfSpace 逐条取本方法高度并顺序累计 y 定位，滚动条按展开后的条目索引。
 	 */
 	@Override
 	protected int getBrowserEntryHeightFor(ConfigOptionWrapper entry) {
 		String name = entry.getConfig() != null ? entry.getConfig().getName() : null;
-		if (name != null && name.startsWith(ItemIOEntryWidget.ROW_NAME_PREFIX)) {
-			// 占位配置名 = ROW_NAME_PREFIX + 行下标，按下标取行数据后按位置记录数计算行高
-			int index = Integer.parseInt(name.substring(ItemIOEntryWidget.ROW_NAME_PREFIX.length()));
-			return ItemIOEntryWidget.heightFor(rowData.get(index).entry().getLocations().size());
+		if (name != null && name.startsWith(ItemIOBaseWidget.HEADER_NAME_PREFIX)) {
+			return ItemIOBaseWidget.HEADER_HEIGHT;
+		}
+		if (name != null && name.startsWith(ItemIOBaseWidget.RECORD_NAME_PREFIX)) {
+			return ItemIOBaseWidget.RECORD_HEIGHT;
 		}
 		return ENTRY_HEIGHT;
 	}
@@ -224,14 +246,31 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 	protected WidgetConfigOption createListEntryWidget(int x, int y, int listIndex, boolean isOdd,
 			ConfigOptionWrapper wrapper) {
 		String name = wrapper.getConfig() != null ? wrapper.getConfig().getName() : null;
-		if (name != null && name.startsWith(ItemIOEntryWidget.ROW_NAME_PREFIX)) {
-			// 派生行：委托 ItemIOEntryWidget 渲染；提交（保存）后仅刷新本列表（不重建宿主屏，避免焦点丢失）
-			RowData row = rowData.get(listIndex);
-			// 行高取动态高度（与基类 createListEntryWidgetIfSpace 的空间判定一致，随记录数变化）
-			ItemIOEntryWidget widget = new ItemIOEntryWidget(x, y, this.browserEntryWidth,
-					this.getBrowserEntryHeightFor(wrapper), this.maxLabelWidth, this.configWidth, wrapper, listIndex,
+		if (name != null && name.startsWith(ItemIOBaseWidget.HEADER_NAME_PREFIX)) {
+			// 头部行：占位名 = HEADER_NAME_PREFIX + 行下标（listIndex 是展开后的条目下标，不能直接用作行下标）
+			int i = Integer.parseInt(name.substring(ItemIOBaseWidget.HEADER_NAME_PREFIX.length()));
+			RowData row = rowData.get(i);
+			ItemIOHeaderWidget widget = new ItemIOHeaderWidget(x, y, this.browserEntryWidth,
+					ItemIOBaseWidget.HEADER_HEIGHT, this.maxLabelWidth, this.configWidth, wrapper, listIndex,
 					(IKeybindConfigGui) this.parent, this, row.item(), row.isInput(), row.entry(), row.stat(),
 					this::refreshEntries);
+			// 两阶段初始化：基类构造函数在 super() 链中调用 addConfigOption 时本控件字段尚未赋值（仅缓存参数），
+			// 构造完成后在此重放行布局，避免解引用 null 字段的 NPE
+			widget.initRowLayout();
+			return widget;
+		}
+		if (name != null && name.startsWith(ItemIOBaseWidget.RECORD_NAME_PREFIX)) {
+			// 记录行：占位名 = RECORD_NAME_PREFIX + 行下标 + "_" + 记录下标（listIndex 是展开后的条目下标，
+			// 不能直接用作行下标/记录下标）
+			String suffix = name.substring(ItemIOBaseWidget.RECORD_NAME_PREFIX.length());
+			int sep = suffix.indexOf('_');
+			int i = Integer.parseInt(suffix.substring(0, sep));
+			int j = Integer.parseInt(suffix.substring(sep + 1));
+			RowData row = rowData.get(i);
+			ItemIORecordWidget widget = new ItemIORecordWidget(x, y, this.browserEntryWidth,
+					ItemIOBaseWidget.RECORD_HEIGHT, this.maxLabelWidth, this.configWidth, wrapper, listIndex,
+					(IKeybindConfigGui) this.parent, this, row.item(), row.isInput(), row.entry(), row.stat(),
+					this::refreshEntries, j);
 			// 两阶段初始化：基类构造函数在 super() 链中调用 addConfigOption 时本控件字段尚未赋值（仅缓存参数），
 			// 构造完成后在此重放行布局，避免解引用 null 字段的 NPE
 			widget.initRowLayout();
