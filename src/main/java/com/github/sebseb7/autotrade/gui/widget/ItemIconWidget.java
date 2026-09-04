@@ -1,6 +1,5 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import fi.dy.masa.malilib.gui.widgets.WidgetBase;
 import java.util.List;
 import net.minecraft.client.MinecraftClient;
@@ -28,16 +27,7 @@ public class ItemIconWidget extends WidgetBase {
 	@Override
 	public void render(int mouseX, int mouseY, boolean selected, DrawContext ctx) {
 		if (!stack.isEmpty()) {
-			// 关闭深度测试绘制物品图标：drawItem 默认在 z=150 绘制并写入深度缓冲，而 malilib 的
-			// MalilibDrawContext 冲刷时不会像原版那样关闭深度测试——后续绘制的弹出消息（InfoUtils，
-			// drawGuiMessages 在 render 最后一步）会被图标的深度挡住（图标压在消息之上）。
-			// 临时关闭深度测试后图标不读写深度，消息可正常盖在图标之上（图层修正）。
-			RenderSystem.disableDepthTest();
-			try {
-				ctx.drawItem(stack, getX() + 1, getY() + 1);
-			} finally {
-				RenderSystem.enableDepthTest();
-			}
+			ctx.drawItem(stack, getX() + 1, getY() + 1);
 		}
 	}
 
