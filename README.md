@@ -28,7 +28,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 - **三种交易模式**：STATIC（静止）、MOVING（移动）、VOID（虚空无限交易），详见下文
 - **自动容器补货/出货**：按物品配置（ItemIO 条目），交易间隙自动与附近的箱子/漏斗等容器交互
 - **交易对（Trade Pair）**：在村民交易界面用热键添加想要执行的交易组合，在设置页「交易对」选项卡中集中管理（列表 + 行内编辑，无弹窗）
-- **物品/容器定位**：用**命名物品展示框**指定买卖物品；容器坐标在设置页「IO输入 / IO输出」选项卡中配置——条目由交易对数据自动派生，同一物品只需配置一次坐标
+- **物品/容器定位**：用**命名物品展示框**指定买卖物品；容器坐标在设置页「IO输入 / IO输出」选项卡中配置——条目由交易对数据自动派生，同一物品只需配置一次坐标；也可按「抓取容器坐标」热键：自动打开设置页并进入抓取模式（记录行的「抓取」按钮变为闪动的「保存」按钮，「+ 添加」按钮同样闪动，点击即新增记录并立即把脚下容器坐标保存到该记录），关闭设置页则放弃
 - **中英文双语**界面（i18n）
 - **Mod Menu** 支持；设置界面默认热键 **Right-Shift+T**（打不开设置时可装 Mod Menu https://modrinth.com/mod/modmenu）
 - **调试 HUD**：设置页「通用」选项卡开启 Debug HUD 后，屏幕角落显示半透明调试面板（启停/模式/机器/任务状态、会话与累计成交数、容器 IO 计数、模式特有数据），位置可选四角（默认左上）；打开交易/容器界面时面板被界面盖住（预期行为）
@@ -84,7 +84,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 | Void | `Void Teleport Timeout` | 开窗后等待村民消失（玩家传送完成）的超时（tick） |
 | Void | `Void Return Type` / `Void Return Pos` | 交易后传送玩家的返回触发块类型与坐标（陷阱箱/按钮/拉杆） |
 | Void | `Void Return Dimension` | 回程触发方块所在维度（registry id，如 minecraft:overworld；默认留空 = 任意维度） |
-| Hotkeys | `Toggle Trading` / `Open GUI Settings` / `Add Trade Pair` | 开关交易 / 打开设置 / 添加交易对 |
+| Hotkeys | `Toggle Trading` / `Open GUI Settings` / `Add Trade Pair` / `Grab Container Coordinate` | 开关交易 / 打开设置 / 添加交易对 / 抓取容器坐标 |
 
 ## 设置界面
 

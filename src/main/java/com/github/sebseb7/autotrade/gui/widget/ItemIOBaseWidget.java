@@ -7,11 +7,14 @@ import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase.ConfigOptionWrapper;
 import fi.dy.masa.malilib.gui.GuiTextFieldGeneric;
+import fi.dy.masa.malilib.gui.LeftRight;
+import fi.dy.masa.malilib.gui.button.ButtonGeneric;
 import fi.dy.masa.malilib.gui.interfaces.IKeybindConfigGui;
 import fi.dy.masa.malilib.gui.widgets.WidgetBase;
 import fi.dy.masa.malilib.gui.widgets.WidgetConfigOption;
 import fi.dy.masa.malilib.gui.widgets.WidgetListConfigOptionsBase;
 import fi.dy.masa.malilib.gui.wrappers.TextFieldWrapper;
+import fi.dy.masa.malilib.render.RenderUtils;
 import fi.dy.masa.malilib.util.KeyCodes;
 import fi.dy.masa.malilib.util.StringUtils;
 import java.util.ArrayList;
@@ -125,6 +128,10 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	protected static final String GRAB_CONTAINER_SHORT_KEY = "autotrade.gui.item_io.grab_container_short";
 	/** 抓取容器按钮悬浮完整说明翻译键 */
 	protected static final String GRAB_CONTAINER_TIP_KEY = "autotrade.gui.item_io.grab_container_tip";
+	/** 抓取模式下「保存」按钮简写翻译键（抓取热键按下后，抓取按钮变为保存按钮） */
+	protected static final String GRAB_SAVE_SHORT_KEY = "autotrade.gui.item_io.grab_container_save_short";
+	/** 抓取模式下「保存」按钮悬浮完整说明翻译键 */
+	protected static final String GRAB_SAVE_TIP_KEY = "autotrade.gui.item_io.grab_container_save_tip";
 	/** 记录行删除按钮翻译键（✕，点击即删除该记录并保存，无确认弹窗） */
 	protected static final String DELETE_KEY = "autotrade.gui.item_io.delete";
 	/** 删除按钮悬浮提示翻译键 */
@@ -481,6 +488,55 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 				}
 			}
 			super.postRenderHovered(mouseX, mouseY, selected, drawContext);
+		}
+	}
+
+	/**
+	 * 抓取模式下的闪动按钮（记录行「保存」按钮与头部行「+ 添加」按钮共用）：文本色按 ~250ms 周期在琥珀/橙之间交替闪动， 其余渲染与
+	 * ButtonGeneric 完全一致（复制其 render 全量逻辑，仅文本色行不同）
+	 */
+	protected static class FlashingButton extends ButtonGeneric {
+		FlashingButton(int x, int y, int width, int height, String label) {
+			super(x, y, width, height, label);
+		}
+
+		@Override
+		public void render(int mouseX, int mouseY, boolean selected, DrawContext drawContext) {
+			// 复制 ButtonGeneric.render 全量逻辑，仅文本色行改为闪动色（琥珀 0xFFD070 / 橙 0xFF8A00 交替）
+			if (this.visible) {
+				this.hovered = mouseX >= this.x && mouseY >= this.y && mouseX < this.x + this.width
+						&& mouseY < this.y + this.height;
+				RenderUtils.color(1f, 1f, 1f, 1f);
+				if (this.renderDefaultBackground) {
+					drawContext.drawGuiTexture(this.getTexture(this.hovered), this.x, this.y, this.width, this.height);
+				}
+				if (this.icon != null) {
+					int offset = this.renderDefaultBackground ? 4 : 0;
+					int x = this.alignment == LeftRight.LEFT
+							? this.x + offset
+							: this.x + this.width - this.icon.getWidth() - offset;
+					int y = this.y + (this.height - this.icon.getHeight()) / 2;
+					int u = this.icon.getU() + this.getTextureOffset(this.hovered) * this.icon.getWidth();
+					this.bindTexture(this.icon.getTexture());
+					RenderUtils.drawTexturedRect(x, y, u, this.icon.getV(), this.icon.getWidth(),
+							this.icon.getHeight());
+				}
+				if (org.apache.commons.lang3.StringUtils.isBlank(this.displayString) == false) {
+					int y = this.y + (this.height - 8) / 2;
+					// 闪动文本色：250ms 周期琥珀/橙交替（仅此一行与 ButtonGeneric 不同）
+					int color = (System.currentTimeMillis() / 250) % 2 == 0 ? 0xFFD070 : 0xFF8A00;
+					if (this.textCentered) {
+						this.drawCenteredStringWithShadow(this.x + this.width / 2, y, color, this.displayString,
+								drawContext);
+					} else {
+						int x = this.x + 6;
+						if (this.icon != null && this.alignment == LeftRight.LEFT) {
+							x += this.icon.getWidth() + 2;
+						}
+						this.drawStringWithShadow(x, y, color, this.displayString, drawContext);
+					}
+				}
+			}
 		}
 	}
 }

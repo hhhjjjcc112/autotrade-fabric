@@ -1,6 +1,7 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
 import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
+import com.github.sebseb7.autotrade.gui.GuiConfigs;
 import com.github.sebseb7.autotrade.trade.data.IoItemDeriver;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
@@ -117,7 +118,10 @@ public class ItemIORecordWidget extends ItemIOBaseWidget {
 		int dimLabelW = this.getStringWidth(dimLabel);
 		// 按钮组（右对齐）内各按钮宽度按各自文本自适应 + 硬上限：宽度贴合内容（Grab/✕ 短、Disable 长），
 		// 不强制等宽以免短文本按钮出现大段空白；上限防英文长文本撑爆行宽（Grab 40 / 启停 44 / ✕ 24）
-		int grabW = Math.min(40, this.getStringWidth(StringUtils.translate(GRAB_CONTAINER_SHORT_KEY)) + 6);
+		// 抓取模式：抓取热键按下后本行抓取按钮变为「保存」按钮（标签/悬浮/点击语义均切换）
+		boolean grabMode = this.host instanceof GuiConfigs gc && gc.isGrabMode();
+		String grabLabel = StringUtils.translate(grabMode ? GRAB_SAVE_SHORT_KEY : GRAB_CONTAINER_SHORT_KEY);
+		int grabW = Math.min(40, this.getStringWidth(grabLabel) + 6);
 		int recToggleW = Math.min(44,
 				Math.max(this.getStringWidth(TOGGLE_ON_LABEL), this.getStringWidth(TOGGLE_OFF_LABEL)) + 6);
 		int delW = Math.min(24, this.getStringWidth(StringUtils.translate(DELETE_KEY)) + 6);
@@ -191,12 +195,37 @@ public class ItemIORecordWidget extends ItemIOBaseWidget {
 		registerField(coordField);
 
 		// 按钮组（右对齐到行尾）：[抓取容器][启用/禁用][✕ 删除]，组内等宽 rowBtnW，组左端 rowBtnX
-		// 抓取容器按钮（简写 + 悬浮完整说明）：写入玩家脚下方块坐标 + 当前维度（world 非空才写维度），即时生效并保存
+		// 抓取容器按钮（简写 + 悬浮完整说明）：写入玩家脚下方块坐标 + 当前维度（world 非空才写维度），即时生效并保存；
+		// 抓取模式下变为闪动的「保存」按钮（FlashingButton，基类共享）：点击把热键抓取的待保存坐标/维度写入本记录并结束模式
 		final int idx = recordIndex;
-		ButtonGeneric grabBtn = new ButtonGeneric(rowBtnX, y, rowGrabW, 20,
-				StringUtils.translate(GRAB_CONTAINER_SHORT_KEY));
-		grabBtn.setHoverStrings(GRAB_CONTAINER_TIP_KEY);
+		ButtonGeneric grabBtn = grabMode
+				? new FlashingButton(rowBtnX, y, rowGrabW, 20, grabLabel)
+				: new ButtonGeneric(rowBtnX, y, rowGrabW, 20, grabLabel);
+		grabBtn.setHoverStrings(grabMode ? GRAB_SAVE_TIP_KEY : GRAB_CONTAINER_TIP_KEY);
 		this.addButton(grabBtn, (button, mouseButton) -> {
+			// 抓取模式：把热键抓取的待保存坐标/维度写入本记录，结束模式并提示成功
+			if (host instanceof GuiConfigs gc && gc.isGrabMode()) {
+				BlockPos pending = gc.getPendingGrabPos();
+				if (pending == null) {
+					InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
+							"autotrade.message.grab_container_failed");
+					return;
+				}
+				ItemIOLocation target = entry.getLocations().get(idx);
+				target.setX(pending.getX());
+				target.setY(pending.getY());
+				target.setZ(pending.getZ());
+				String dim = gc.getPendingGrabDim();
+				if (dim != null)
+					target.setDimension(dim);
+				gc.exitGrabMode();
+				saveEntry();
+				if (onCommit != null)
+					onCommit.run();
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, "autotrade.message.item_io_container_set",
+						dim, pending.getX(), pending.getY(), pending.getZ());
+				return;
+			}
 			BlockPos pos = grabFootBlockPos();
 			if (pos == null)
 				return;

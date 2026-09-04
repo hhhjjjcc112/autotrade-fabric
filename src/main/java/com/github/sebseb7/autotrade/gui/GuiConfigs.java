@@ -25,9 +25,20 @@ import fi.dy.masa.malilib.util.StringUtils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import net.minecraft.util.math.BlockPos;
 
 public class GuiConfigs extends GuiConfigsBase {
 	private static ConfigGuiTab tab = ConfigGuiTab.GENERIC;
+
+	/** 当前设置页选项卡（静态跨实例记忆；供热键回调等外部读取） */
+	public static ConfigGuiTab getTab() {
+		return tab;
+	}
+
+	/** 设置当前设置页选项卡（静态跨实例记忆；供热键回调等外部写入） */
+	public static void setTab(ConfigGuiTab tab) {
+		GuiConfigs.tab = tab;
+	}
 	/**
 	 * 屏幕重建后待恢复的纵向滚动条位置（-1 = 不恢复）。同页刷新路径（启停/删除/新增交易对、编辑屏返回） 在重建前记录旧位置，initGui
 	 * 中消费恢复；切选项卡前由 ButtonListener 清空（保持重置行为）。
@@ -35,9 +46,54 @@ public class GuiConfigs extends GuiConfigsBase {
 	private static int pendingScrollRestore = -1;
 	/** 切到 IO 页后待滚动定位的目标行物品编码串；null = 无跳转目标 */
 	private static String pendingIoJumpItem = null;
+	/** 抓取模式标记：玩家站在容器上按下抓取热键后置 true，直到点击保存按钮写入记录行或关闭 GUI 放弃 */
+	private boolean grabMode;
+	/** 抓取模式下待写入记录行的容器坐标（玩家脚下方块）；null = 未进入抓取模式 */
+	private BlockPos pendingGrabPos;
+	/** 抓取模式下待写入记录行的容器维度（registry id）；null = 未进入抓取模式 */
+	private String pendingGrabDim;
 
 	public GuiConfigs() {
 		super(10, 50, Reference.MOD_ID, null, "autotrade.gui.title.configs");
+	}
+
+	/** 进入抓取模式：记录玩家脚下容器坐标与当前维度，等待用户点击保存按钮写入记录行 */
+	public void enterGrabMode(BlockPos pos, String dim) {
+		this.grabMode = true;
+		this.pendingGrabPos = pos;
+		this.pendingGrabDim = dim;
+	}
+
+	/** 退出抓取模式：清空全部抓取状态（保存按钮写入后或关闭 GUI 时调用） */
+	public void exitGrabMode() {
+		this.grabMode = false;
+		this.pendingGrabPos = null;
+		this.pendingGrabDim = null;
+	}
+
+	/** 是否处于抓取模式（热键已按下、尚未保存或放弃） */
+	public boolean isGrabMode() {
+		return this.grabMode;
+	}
+
+	/** 抓取模式下待写入记录行的容器坐标；非抓取模式返回 null */
+	public BlockPos getPendingGrabPos() {
+		return this.pendingGrabPos;
+	}
+
+	/** 抓取模式下待写入记录行的容器维度；非抓取模式返回 null */
+	public String getPendingGrabDim() {
+		return this.pendingGrabDim;
+	}
+
+	/**
+	 * 关闭 GUI 即放弃未保存的抓取（覆盖全部关闭路径：Esc/切屏/打开其他界面，MinecraftClient.setScreen 均会调用
+	 * removed）
+	 */
+	@Override
+	public void removed() {
+		this.exitGrabMode();
+		super.removed();
 	}
 
 	@Override

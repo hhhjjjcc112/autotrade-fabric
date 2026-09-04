@@ -1,5 +1,6 @@
 package com.github.sebseb7.autotrade.gui.widget;
 
+import com.github.sebseb7.autotrade.gui.GuiConfigs;
 import com.github.sebseb7.autotrade.trade.data.IoItemDeriver;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
@@ -8,12 +9,15 @@ import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase.ConfigOptionWrapper;
 import fi.dy.masa.malilib.gui.GuiTextFieldGeneric;
+import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
 import fi.dy.masa.malilib.gui.interfaces.IKeybindConfigGui;
 import fi.dy.masa.malilib.gui.widgets.WidgetListConfigOptionsBase;
+import fi.dy.masa.malilib.util.InfoUtils;
 import fi.dy.masa.malilib.util.StringUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.ItemStack;
+import net.minecraft.util.math.BlockPos;
 
 /**
  * 物品 IO 头部行控件（固定高 20px，方案 B 拆分后的头部条目）：渲染单个 (item, 方向) 的条目级头部行 —— [开/关]
@@ -194,10 +198,33 @@ public class ItemIOHeaderWidget extends ItemIOBaseWidget {
 		}
 		cx += gap;
 
+		// 抓取模式下「+ 添加」按钮与保存按钮同样闪动，提示当前处于抓取模式
+		boolean grabMode = this.host instanceof GuiConfigs gc && gc.isGrabMode();
 		// 添加容器按钮（头部行行尾，原底部行按钮上移）：新增一条记录（维度 = 当前维度，坐标 0 0 0 占位，不触发 IO），即时生效并保存
-		ButtonGeneric addBtn = new ButtonGeneric(cx, y, addW, 20, addLabelText);
+		ButtonGeneric addBtn = grabMode
+				? new FlashingButton(cx, y, addW, 20, addLabelText)
+				: new ButtonGeneric(cx, y, addW, 20, addLabelText);
 		addBtn.setHoverStrings(ADD_LOCATION_TIP_KEY);
 		this.addButton(addBtn, (button, mouseButton) -> {
+			// 抓取模式：新增记录行并立即把热键抓取的待保存坐标/维度写入该记录（等价于保存按钮），随后结束抓取模式
+			if (host instanceof GuiConfigs gc && gc.isGrabMode()) {
+				BlockPos pending = gc.getPendingGrabPos();
+				if (pending == null) {
+					InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING,
+							"autotrade.message.grab_container_failed");
+					return;
+				}
+				String pendingDim = gc.getPendingGrabDim();
+				entry.getLocations().add(new ItemIOLocation(pendingDim != null ? pendingDim : "", pending.getX(),
+						pending.getY(), pending.getZ(), true));
+				gc.exitGrabMode();
+				saveEntry();
+				if (onCommit != null)
+					onCommit.run();
+				InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, "autotrade.message.item_io_container_set",
+						pendingDim, pending.getX(), pending.getY(), pending.getZ());
+				return;
+			}
 			String dim = ContainerIOHelper.currentDimensionId(MinecraftClient.getInstance());
 			entry.getLocations().add(new ItemIOLocation(dim != null ? dim : "", 0, 0, 0, true));
 			saveEntry();

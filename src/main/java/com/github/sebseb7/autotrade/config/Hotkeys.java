@@ -11,7 +11,9 @@ public class Hotkeys {
 			"Open the settings GUI");
 	public static final ConfigHotkey ADD_TRADE_PAIR_KEY = new ConfigHotkey("addTradePair", "",
 			"Press while hovering over a trade in the villager screen to add it as a trade pair");
+	public static final ConfigHotkey GRAB_CONTAINER_COORDINATE = new ConfigHotkey("grabContainerCoordinate", "",
+			"Press while standing on a container to open the IO page in grab mode; grab buttons become save buttons");
 
 	public static final List<ConfigHotkey> HOTKEY_LIST = ImmutableList.of(TOGGLE_KEY, OPEN_GUI_SETTINGS,
-			ADD_TRADE_PAIR_KEY);
+			ADD_TRADE_PAIR_KEY, GRAB_CONTAINER_COORDINATE);
 }
