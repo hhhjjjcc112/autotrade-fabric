@@ -1,7 +1,10 @@
 package com.github.sebseb7.autotrade.trade.helper;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.passive.VillagerEntity;
@@ -55,5 +58,38 @@ public final class VillagerHelper {
 			nearest = Math.min(nearest, e.getPos().distanceTo(mc.player.getPos()));
 		}
 		return nearest;
+	}
+
+	/**
+	 * 根据实体 UUID 查找对应实体；玩家或世界缺失时返回 null。不缓存，每次实时遍历。
+	 */
+	public static Entity findByUuid(MinecraftClient mc, UUID uuid) {
+		// 玩家或世界缺失时无法遍历，返回 null
+		if (mc.player == null || mc.world == null) {
+			return null;
+		}
+		// 实时遍历世界中所有实体，按 UUID 精确匹配
+		for (Entity e : mc.world.getEntities()) {
+			if (e.getUuid().equals(uuid)) {
+				return e;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * 构建「实体 UUID → 实体」映射表；玩家或世界缺失时返回空表。不缓存，每次实时构建。
+	 */
+	public static Map<UUID, Entity> buildUuidEntityMap(MinecraftClient mc) {
+		// 玩家或世界缺失时返回空映射
+		if (mc.player == null || mc.world == null) {
+			return java.util.Collections.emptyMap();
+		}
+		// 单次遍历构建映射（MC 保证实体 UUID 唯一，重复时后写覆盖）
+		Map<UUID, Entity> map = new HashMap<>();
+		for (Entity e : mc.world.getEntities()) {
+			map.put(e.getUuid(), e);
+		}
+		return map;
 	}
 }
