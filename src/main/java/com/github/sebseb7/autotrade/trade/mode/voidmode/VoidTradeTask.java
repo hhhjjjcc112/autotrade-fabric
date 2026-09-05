@@ -1,6 +1,7 @@
 package com.github.sebseb7.autotrade.trade.mode.voidmode;
 
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
+import java.util.UUID;
 
 /**
  * VOID 模式会话：单村民直链 FSM。 虚空交易针对**同一个村民**反复卸载-加载（加载交互 → 玩家传送卸载 → 交易 → 传回重载 →
@@ -10,7 +11,7 @@ import com.github.sebseb7.autotrade.trade.task.TradeTask;
  */
 public class VoidTradeTask extends TradeTask {
 
-	public VoidTradeTask(int villagerActiveId) {
+	public VoidTradeTask(UUID villagerActiveId) {
 		super(villagerActiveId);
 	}
 

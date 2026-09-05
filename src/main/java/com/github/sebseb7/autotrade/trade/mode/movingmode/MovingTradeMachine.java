@@ -19,6 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
@@ -67,12 +68,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	private static final int CONFIG_FAIL_COOLDOWN = 100;
 
 	/**
-	 * 已处理村民记录（交易完成或超时均标记；背包满时不标记），由 findUnprocessedVillagers 做失效清理。 HashSet：村民 id
+	 * 已处理村民记录（交易完成或超时均标记；背包满时不标记），由 findUnprocessedVillagers 做失效清理。 HashSet：村民 UUID
 	 * 无重复、contains 是每 tick 热路径（候选收集），集合无序不影响后续显式距离排序（tie-break 用）
 	 */
-	private final Set<Integer> processedVillagers = new HashSet<>();
-	/** 当前派发给会话的目标村民 id（任务结束钩子标记已处理用，完成与强杀统一） */
-	private int dispatchedVillagerId = 0;
+	private final Set<UUID> processedVillagers = new HashSet<>();
+	/** 当前派发给会话的目标村民 UUID（任务结束钩子标记已处理用，完成与强杀统一；null = 未派发） */
+	private UUID dispatchedVillagerId;
 	/**
 	 * 当前派发给会话的目标容器条目 ioKey（容器检查器查自身饥饿用；与 dispatchedVillagerId
 	 * 对称——excludedContainerKey 是 containerKey 格式（x,y,z#isInput），而饥饿记账键是 ioKey
@@ -80,11 +81,11 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	 */
 	private String dispatchedContainerIoKey = "";
 
-	/** 饥饿记账统一键：村民 = 实体 id，容器 = 条目 ioKey（item#x,y,z#isInput） */
+	/** 饥饿记账统一键：村民 = UUID，容器 = 条目 ioKey（item#x,y,z#isInput） */
 	private sealed interface StarvationKey permits VillagerKey, ContainerKey {
 	}
-	/** 村民饥饿键：实体 id */
-	private record VillagerKey(int entityId) implements StarvationKey {
+	/** 村民饥饿键：UUID */
+	private record VillagerKey(UUID uuid) implements StarvationKey {
 	}
 	/** 容器饥饿键：条目级 ioKey（跨条目实例稳定；同容器不同物品独立记账，消除共享键翻倍/恒选首个缺陷） */
 	private record ContainerKey(String ioKey) implements StarvationKey {
@@ -133,7 +134,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 				if (v.getPos().distanceTo(mc.player.getPos()) > range) {
 					continue;
 				}
-				int h = starvation.getOrDefault(new VillagerKey(v.getId()), 0);
+				int h = starvation.getOrDefault(new VillagerKey(v.getUuid()), 0);
 				if (h >= hintThreshold && h > myHunger) {
 					return true;
 				}
@@ -156,13 +157,13 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			int hintThreshold = Configs.Moving.MOVING_STARVATION_HINT_THRESHOLD.getIntegerValue();
 			double range = Configs.Moving.MOVING_INTERACT_RANGE.getDoubleValue();
 			for (Entity v : findUnprocessedVillagers(mc)) {
-				if (v.getId() == dispatchedVillagerId) { // 排除自己（防自抢）
+				if (v.getUuid().equals(dispatchedVillagerId)) { // 排除自己（防自抢）
 					continue;
 				}
 				if (v.getPos().distanceTo(mc.player.getPos()) > range) { // 候选内（确定可服务）
 					continue;
 				}
-				int h = starvation.getOrDefault(new VillagerKey(v.getId()), 0);
+				int h = starvation.getOrDefault(new VillagerKey(v.getUuid()), 0);
 				if (h >= hintThreshold && h > myHunger) { // 严格大于（防互抢）
 					return true;
 				}
@@ -256,7 +257,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			}
 		}
 		for (Entity v : findUnprocessedVillagers(mc)) {
-			seenKeys.add(new VillagerKey(v.getId()));
+			seenKeys.add(new VillagerKey(v.getUuid()));
 		}
 	}
 
@@ -280,7 +281,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		// 饥饿阈值提示：scanRange 内 hunger ≥ 阈值且未提示过 → 一次性提示（hintedKeys 防刷屏；服务完成清除后可再提示）
 		int hintThreshold = Configs.Moving.MOVING_STARVATION_HINT_THRESHOLD.getIntegerValue();
 		for (Entity v : findUnprocessedVillagers(mc)) {
-			VillagerKey k = new VillagerKey(v.getId());
+			VillagerKey k = new VillagerKey(v.getUuid());
 			int h = starvation.getOrDefault(k, 0);
 			if (h >= hintThreshold && hintedKeys.add(k)) {
 				InfoUtils.showGuiOrInGameMessage(Message.MessageType.INFO, "autotrade.message.moving.starvation_hint",
@@ -310,7 +311,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			if (dist > interactRange) {
 				continue; // 候选限交互距离（远处村民只记账不派发——交互必失败的结构性错过根治）
 			}
-			candidates.add(new Candidate(new VillagerKey(v.getId()), 0, dist, null, v));
+			candidates.add(new Candidate(new VillagerKey(v.getUuid()), 0, dist, null, v));
 		}
 
 		// 本 tick 候选键集合（离窗差集用）
@@ -370,9 +371,9 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			dispatchedContainerIoKey = k.ioKey(); // 记录当前容器条目 ioKey（检查器查自身饥饿用）
 			containerIOScheduler.startCandidate(best.container(), this::setTaskIfEmpty);
 		} else {
-			dispatchedVillagerId = ((VillagerKey) best.key()).entityId();
+			dispatchedVillagerId = ((VillagerKey) best.key()).uuid();
 			setTaskIfEmpty(new MovingTradeTask(dispatchedVillagerId, villagerCompetitorChecker));
-			AutoTrade.logger.info("[MovingMode] IDLE → TRADE_SESSION (villager id={})", dispatchedVillagerId);
+			AutoTrade.logger.info("[MovingMode] IDLE → TRADE_SESSION (villager uuid={})", dispatchedVillagerId);
 		}
 		lastServedTick.put(best.key(), mc.world.getTime());
 	}
@@ -394,15 +395,16 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			return List.of();
 		}
 		double range = scanRange();
-		// 清理失效处理记录（消失 或 离开 范围乘数×扫描范围）
-		processedVillagers.removeIf(id -> {
-			Entity e = mc.world.getEntityById(id);
+		// 清理失效处理记录（消失 或 离开 范围乘数×扫描范围）：单次遍历构建 UUID → 实体 映射后一次 removeIf
+		Map<UUID, Entity> loaded = VillagerHelper.buildUuidEntityMap(mc);
+		processedVillagers.removeIf(uuid -> {
+			Entity e = loaded.get(uuid);
 			return e == null || e.getPos().distanceTo(mc.player.getPos()) > range;
 		});
 		// 收集未处理村民并按距离升序（复用集合）
 		unprocessedVillagers.clear();
 		for (Entity e : VillagerHelper.findNearby(mc, range)) {
-			if (!processedVillagers.contains(e.getId())) {
+			if (!processedVillagers.contains(e.getUuid())) {
 				unprocessedVillagers.add(e);
 			}
 		}
@@ -433,7 +435,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	public void reset() {
 		super.reset();
 		processedVillagers.clear();
-		dispatchedVillagerId = 0;
+		dispatchedVillagerId = null;
 		dispatchedContainerIoKey = "";
 		starvation.clear();
 		seenKeys.clear();

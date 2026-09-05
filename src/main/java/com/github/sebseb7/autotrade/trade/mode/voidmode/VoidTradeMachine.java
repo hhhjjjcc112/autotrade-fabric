@@ -68,8 +68,8 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		// 无零进度冷却——启动条件本身保证「启动即有村民」，零进度仅剩 1-tick 竞态且不产生忙循环）
 		double range = Configs.Generic.VILLAGER_SCAN_RANGE.getIntegerValue();
 		for (Entity e : VillagerHelper.findNearby(mc, range)) {
-			setTaskIfEmpty(new VoidTradeTask(e.getId()));
-			AutoTrade.logger.info("[VoidMode] IDLE → TRADE_SESSION (villager id={})", e.getId());
+			setTaskIfEmpty(new VoidTradeTask(e.getUuid()));
+			AutoTrade.logger.info("[VoidMode] IDLE → TRADE_SESSION (villager id={})", e.getUuid());
 			return;
 		}
 	}

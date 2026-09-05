@@ -3,10 +3,12 @@ package com.github.sebseb7.autotrade.trade.task;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.executor.TradeExecutor;
+import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.helper.VillagerInteractHelper;
 import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
+import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
 import net.minecraft.entity.Entity;
@@ -17,7 +19,7 @@ import net.minecraft.village.TradeOffer;
 import net.minecraft.village.TradeOfferList;
 
 /**
- * 交易会话抽象基类：单村民直链有限状态机（FSM）。 目标村民由机器层选中后通过构造器注入（{@link #TradeTask(int)}）， 会话随后沿
+ * 交易会话抽象基类：单村民直链有限状态机（FSM）。 目标村民由机器层选中后通过构造器注入（{@link #TradeTask(UUID)}）， 会话随后沿
  * INTERACTING（右键交互）→ WAITING_FOR_SCREEN（等待界面出现）→ TRADING（执行匹配交易）→
  * CLOSING_SCREEN（关闭界面）→ 结束 的直链推进，处理完单个村民即结束（返回 {@link TaskResult#SUCCEEDED}
  * 或失败结果）， 由机器层决定下一目标或进入冷却。 各模式的差异（void 延迟策略）由子类覆写的抽象策略方法提供；标记/冷却节奏由机器层
@@ -29,8 +31,8 @@ public abstract class TradeTask extends Task {
 		INTERACTING, WAITING_FOR_SCREEN, TRADING, CLOSING_SCREEN
 	}
 
-	/** 当前目标村民实体 id（由机器层选中后通过构造器锁定传入，本会话不再自行扫描重选） */
-	private final int villagerActive;
+	/** 当前目标村民实体 UUID（由机器层选中后通过构造器锁定传入，本会话不再自行扫描重选） */
+	private final UUID villagerActive;
 	/** 安全点让位检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无让位检查点，行为零变化） */
 	private final CompetitorChecker competitorChecker;
 	/** 本次会话是否因安全点让位提前结束（机器层据此不标记已处理、饥饿不 +1） */
@@ -48,7 +50,7 @@ public abstract class TradeTask extends Task {
 	private boolean inventoryBlocked = false;
 
 	/** 锁定本会话要处理的目标村民（由机器层在派发前调用，修复「机器层评分选 A、会话内部重扫可能取到 B」的竞态） */
-	public TradeTask(int villagerActiveId) {
+	public TradeTask(UUID villagerActiveId) {
 		this(villagerActiveId, null);
 	}
 
@@ -56,7 +58,7 @@ public abstract class TradeTask extends Task {
 	 * 锁定目标村民 + 注入安全点让位检查器（MOVING 机器层注入；STATIC/VOID 走单参构造器 = null，无让位检查点）。
 	 * 检查器见候选内更饿目标时，本会话在 tick() 入口检查点提前关窗让位（已执行交易保留）
 	 */
-	public TradeTask(int villagerActiveId, CompetitorChecker competitorChecker) {
+	public TradeTask(UUID villagerActiveId, CompetitorChecker competitorChecker) {
 		this.villagerActive = villagerActiveId;
 		this.competitorChecker = competitorChecker;
 	}
@@ -92,7 +94,7 @@ public abstract class TradeTask extends Task {
 			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
-		Entity entity = mc.world.getEntityById(villagerActive);
+		Entity entity = VillagerHelper.findByUuid(mc, villagerActive);
 		boolean tradable = entity instanceof VillagerEntity || entity instanceof WanderingTraderEntity;
 		if (tradable) {
 			// 看向村民并右键交互，触发交易界面打开
@@ -134,7 +136,7 @@ public abstract class TradeTask extends Task {
 
 			// VOID：窗口已开但须等玩家传送完成（村民实体消失 = 服务端已处理传送）再交易；
 			// 村民尚未卸载时交易，次数会被正常同步，无限交易失效
-			Entity entity = mc.world.getEntityById(villagerActive);
+			Entity entity = VillagerHelper.findByUuid(mc, villagerActive);
 			if (entity == null) {
 				// 村民已消失（= 服务端已处理玩家传送）→ 先递减卸载缓冲（覆盖服务端区块异步卸载窗口，防次数持久化），
 				// 缓冲为 0 时立即交易（行为见 TRADE_MODES.md §二）

@@ -9,6 +9,7 @@ import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 
@@ -20,16 +21,16 @@ import net.minecraft.entity.Entity;
  */
 public class StaticTradeMachine extends AbstractTradeMachine {
 
-	/** 本轮交易名单（扫描到的村民 id，按扫描顺序） */
-	private final List<Integer> targetVillagers = new ArrayList<>();
+	/** 本轮交易名单（扫描到的村民 UUID，按扫描顺序） */
+	private final List<UUID> targetVillagers = new ArrayList<>();
 	/** 本轮已处理村民（派发完成或超时，均标记；背包满时不标记） */
-	private final List<Integer> processedVillagers = new ArrayList<>();
+	private final List<UUID> processedVillagers = new ArrayList<>();
 	/** 名单遍历游标 */
 	private int targetIndex = 0;
 	/** 本轮名单是否已扫描（冷却期间置 false，冷却结束重新扫描建名单） */
 	private boolean scanned = false;
-	/** 当前派发给会话的目标村民 id（任务结束钩子标记已处理用（完成与强杀统一）） */
-	private int dispatchedVillagerId = 0;
+	/** 当前派发给会话的目标村民 UUID（任务结束钩子标记已处理用（完成与强杀统一）） */
+	private UUID dispatchedVillagerId = null;
 
 	private int tradeCooldown = 0;
 	private int containerIOCooldown;
@@ -114,9 +115,9 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 			}
 			// 按名单顺序派发下一个未处理村民（实体已消失的跳过，不标记）
 			while (targetIndex < targetVillagers.size()) {
-				int id = targetVillagers.get(targetIndex++);
+				UUID id = targetVillagers.get(targetIndex++);
 				if (!processedVillagers.contains(id)) {
-					Entity e = mc.world.getEntityById(id);
+					Entity e = VillagerHelper.findByUuid(mc, id);
 					if (e != null) {
 						dispatchedVillagerId = id;
 						setTaskIfEmpty(new StaticTradeTask(id));
@@ -147,7 +148,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 	private void scanVillagers(MinecraftClient mc) {
 		double range = Configs.Generic.VILLAGER_SCAN_RANGE.getIntegerValue();
 		for (Entity e : VillagerHelper.findNearby(mc, range)) {
-			targetVillagers.add(e.getId());
+			targetVillagers.add(e.getUuid());
 		}
 	}
 
@@ -158,7 +159,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		processedVillagers.clear();
 		targetIndex = 0;
 		scanned = false;
-		dispatchedVillagerId = 0;
+		dispatchedVillagerId = null;
 		tradeCooldown = 0;
 		containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
 	}
@@ -183,8 +184,8 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		return containerIOCooldown;
 	}
 
-	/** 返回当前派发的目标村民 id（HUD 只读展示用） */
-	public int getDispatchedVillagerId() {
+	/** 返回当前派发的目标村民 UUID（HUD 只读展示用；无调用者，HUD 预留） */
+	public UUID getDispatchedVillagerId() {
 		return dispatchedVillagerId;
 	}
 }
