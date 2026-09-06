@@ -113,6 +113,7 @@
     "config.name.idlescaninterval": "Scan Interval",
     "config.name.containerreach": "Reach",
     "config.name.outputmovecap": "Move Cap",
+    "config.name.tradecachettl": "Cache TTL",
 
     "config.name.tradeinterval": "Trade Interval",
     "config.name.movingrangemultiplier": "Range Multiplier",
@@ -151,6 +152,7 @@
     "config.comment.idlescaninterval": "Ticks to reuse the container IO scan result before rescanning (lower = fresher container detection, higher = less CPU). Finishing any task always rescans immediately.",
     "config.comment.containerreach": "Max distance in blocks to a container for container IO to trigger (the server ignores clicks beyond ~4.5 blocks, so higher values may not work).",
     "config.comment.outputmovecap": "Maximum item stacks moved in a single output container-IO operation (999 = move all matching stacks)",
+    "config.comment.tradecachettl": "Villagers with no executable matching offer skip screen-opening for this long before their trades are re-checked (3000 ticks = 2.5 min; 0 = disable the cache entirely). Matched villagers are never skipped (re-learned each session)",
 
     "config.comment.tradeinterval": "Min ticks between trade rounds in static mode (100 ticks = 5 seconds)",
     "config.comment.movingrangemultiplier": "Multiplier applied to the villager scan range in moving mode (used for both the scan radius and the processed-villager invalidation threshold); 1.5 = 1.5x the base range",
@@ -183,5 +185,6 @@
     "autotrade.debug.io": "IO: in %d | out %d",
     "autotrade.debug.static_line": "Static: %d/%d villagers | trade %dt | io %dt",
     "autotrade.debug.moving_line": "Moving: %d processed | %d starving",
-    "autotrade.debug.void_line": "Void: return trigger %s"
+    "autotrade.debug.void_line": "Void: return trigger %s",
+    "autotrade.debug.cache_line": "Cache: %d entries | %d skips"
 }

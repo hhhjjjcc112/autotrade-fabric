@@ -53,6 +53,9 @@ public class Configs implements IConfigHandler {
 		/** 输出操作单次搬运的最大组数（999 = 全部匹配物品）；防极端场景同 tick 点击风暴 */
 		public static final ConfigInteger OUTPUT_MOVE_CAP = new ConfigInteger("outputMoveCap", 999, 1, 9999,
 				"Maximum item stacks moved in a single output container-IO operation (999 = move all matching stacks)");
+		/** 9.8 村民交易缓存：已知无可执行匹配交易的村民跳过开窗的复查间隔（tick）；0 = 完全禁用缓存 */
+		public static final ConfigInteger TRADE_CACHE_TTL = new ConfigInteger("tradeCacheTtl", 3000, 0, 36000,
+				"Ticks a villager with no executable matching offer is skipped before re-checking its trades (3000 ticks = 2.5 min; 0 = disable the cache entirely)");
 
 		public static final ConfigJsonArray TRADE_PAIRS = new ConfigJsonArray("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
@@ -60,7 +63,7 @@ public class Configs implements IConfigHandler {
 				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
 				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT, DEBUG_HUD, DEBUG_HUD_POSITION,
-				IDLE_SCAN_INTERVAL, CONTAINER_REACH, OUTPUT_MOVE_CAP);
+				IDLE_SCAN_INTERVAL, CONTAINER_REACH, OUTPUT_MOVE_CAP, TRADE_CACHE_TTL);
 	}
 
 	/** 静止交易设置页：仅静止模式生效的选项 */
