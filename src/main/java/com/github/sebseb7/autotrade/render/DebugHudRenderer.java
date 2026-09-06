@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.render;
 
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.runtime.AutoTradeClientTick;
+import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.machine.TradingMachine;
@@ -64,8 +65,8 @@ public class DebugHudRenderer implements IRenderer {
 	}
 
 	/**
-	 * 组装调试面板文本行（最多 7 行）：标题 / 开关与模式 / 机器状态 / 当前任务 / 会话与累计成交 / IO 计数 / 模式特有行。 mod
-	 * 关闭（机器为 null）时只返回前两行，不显示机器与计数信息。
+	 * 组装调试面板文本行（最多 8 行）：标题 / 开关与模式 / 机器状态 / 当前任务 / 会话与累计成交 / IO 计数 / 缓存统计 / 模式特有行。
+	 * mod 关闭（机器为 null）时只返回前两行，不显示机器与计数信息。
 	 */
 	private List<String> buildLines(MinecraftClient mc) {
 		List<String> lines = new ArrayList<>();
@@ -105,6 +106,11 @@ public class DebugHudRenderer implements IRenderer {
 				TradeStats.getInstance().getTotalTrades()));
 		lines.add(StringUtils.translate("autotrade.debug.io", TradeStats.getInstance().getIoInputOps(),
 				TradeStats.getInstance().getIoOutputOps()));
+
+		// 9.8 缓存统计：条目数 / 自清空以来的实际跳过次数（HUD 只读展示；渲染线程安全——size 与跳过计数均为只读，见
+		// VillagerTradeCache ConcurrentHashMap/volatile）
+		lines.add(StringUtils.translate("autotrade.debug.cache_line", VillagerTradeCache.size(),
+				VillagerTradeCache.getSkipCount()));
 
 		// 模式特有行：三种模式互斥，只取其一（依次判断）
 		if (am instanceof StaticTradeMachine sm) {
