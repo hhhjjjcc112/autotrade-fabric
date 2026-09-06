@@ -33,4 +33,9 @@ public class TradeExecutor {
 	public boolean isInventoryBlocked() {
 		return strategy.isInventoryBlocked();
 	}
+
+	/** 本会话是否见过至少一个可执行 offer（会话级 OR 锁存，供缓存层区分未命中与无数据） */
+	public boolean hasSessionHadExecutable() {
+		return strategy.hasSessionHadExecutable();
+	}
 }

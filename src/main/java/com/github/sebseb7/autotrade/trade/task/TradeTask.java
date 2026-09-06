@@ -48,6 +48,15 @@ public abstract class TradeTask extends Task {
 	private int unloadDelay = 0;
 	/** 本次会话是否因背包空间不足提前结束（由 executor 在 TRADING 结束时同步） */
 	private boolean inventoryBlocked = false;
+	/**
+	 * 本会话是否进入 TRADING 并至少调用过一次执行器（“已扫描”判定；executor 内部 cleanupResidualResult 失败 /
+	 * 交易对为空等提前返回也计为已扫描、按未命中学习，由 TTL 自愈）
+	 */
+	private boolean sessionScanned = false;
+	/** 本会话是否见过至少一个可执行交易 */
+	private boolean sessionMatched = false;
+	/** 学习 tick（TTL 起点） */
+	private long sessionMatchedTick = 0;
 
 	/** 锁定本会话要处理的目标村民（由机器层在派发前调用，修复「机器层评分选 A、会话内部重扫可能取到 B」的竞态） */
 	public TradeTask(UUID villagerActiveId) {
@@ -201,6 +210,8 @@ public abstract class TradeTask extends Task {
 			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
 		}
 
+		// 到达此处说明玩家/世界就绪且当前界面为交易界面：标记本会话已扫描
+		sessionScanned = true;
 		boolean hasMoreWork = executor.handleMerchantScreenTick(mc, screen);
 		if (!hasMoreWork) {
 			// 同步「背包空间不足」标志：由 executor 判断是正常无匹配还是结果放不下
@@ -218,6 +229,9 @@ public abstract class TradeTask extends Task {
 		}
 		// 单村民直链下完成后无条件结束会话，机器层 onTaskEnded 负责标记/冷却决策（背包满时不标记，下轮重试该村民）
 		AutoTrade.logger.info("[TradeTask] CLOSING_SCREEN → SUCCEEDED");
+		// 9.8 会话末捕获命中信息（正常结束/让位统一路径；executor 的会话级 OR 信号在此读取为最终结果）
+		sessionMatched = executor.hasSessionHadExecutable();
+		sessionMatchedTick = mc.world.getTime();
 		return TaskResult.SUCCEEDED;
 	}
 
@@ -229,6 +243,26 @@ public abstract class TradeTask extends Task {
 	/** 本次会话是否因安全点让位提前结束（机器层据此不标记已处理、饥饿不 +1；正常路径与强杀路径均查询） */
 	public boolean isYielded() {
 		return yielded;
+	}
+
+	/** 本会话锁定的目标村民 UUID（学习缓存键用） */
+	public UUID getVillagerUuid() {
+		return villagerActive;
+	}
+
+	/** 本会话是否进入 TRADING 并调用过执行器（未进入则学习器忽略） */
+	public boolean isSessionScanned() {
+		return sessionScanned;
+	}
+
+	/** 本会话是否见过至少一个可执行交易 */
+	public boolean isSessionMatched() {
+		return sessionMatched;
+	}
+
+	/** 学习 tick（TTL 起点） */
+	public long getSessionMatchedTick() {
+		return sessionMatchedTick;
 	}
 
 	/** 返回当前任务状态枚举（HUD 只读展示用） */

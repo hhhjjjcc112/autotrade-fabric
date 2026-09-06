@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.trade.mode.movingmode;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
+import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
@@ -405,6 +406,14 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		unprocessedVillagers.clear();
 		for (Entity e : VillagerHelper.findNearby(mc, range)) {
 			if (!processedVillagers.contains(e.getUuid())) {
+				// 9.8 缓存：TTL 内已知不匹配的村民不进候选——统一漏斗过滤（L1
+				// 记账/饥饿提示/让位检查/候选收集全走本方法，一处过滤全局一致，防饥饿记账与提示被不匹配村民污染）
+				// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
+				// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
+				if (VillagerTradeCache.isNotMatch(e.getUuid(), mc.world.getTime())) {
+					VillagerTradeCache.recordSkip();
+					continue;
+				}
 				unprocessedVillagers.add(e);
 			}
 		}

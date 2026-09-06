@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.trade.machine;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
+import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.stats.TradeStats;
 import com.github.sebseb7.autotrade.trade.task.Task;
@@ -131,6 +132,12 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	 *            任务最后一次 tick 返回的结果（成功或失败）
 	 */
 	protected void onTaskEnded(Task task, TaskResult result) {
+		// 9.8 村民交易缓存：仅「确已扫描」的会话写入学习结果——未进入 TRADING 的会话（开窗失败/传送超时/让位于 tick 入口）天然被
+		// sessionScanned 排除；result.isSucceeded() 为双保险（TradeTask 从 CLOSING_SCREEN 恒返回
+		// SUCCEEDED）
+		if (task instanceof TradeTask ts && result.isSucceeded() && ts.isSessionScanned()) {
+			VillagerTradeCache.learn(ts.getVillagerUuid(), ts.isSessionMatched(), ts.getSessionMatchedTick());
+		}
 		// 统计：仅记录成功完成的容器 IO（失败/超时/强杀不计入调试计数）
 		if (task instanceof ContainerIOTask op && result.isSucceeded()) {
 			TradeStats.getInstance().recordIoOp(op.isInputOp());

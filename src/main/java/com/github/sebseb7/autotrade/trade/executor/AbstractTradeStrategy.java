@@ -35,6 +35,8 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 
 	/** 本次会话是否因背包空间不足/结果滞留而阻塞（供会话层决定提前结束并触发容器 IO） */
 	protected boolean inventoryBlocked = false;
+	/** 会话级命中信号：本会话任一 tick 见过非空可执行 offer 列表即锁存 true，整个会话保持（仅声明处初始化，每 tick 不重置） */
+	private boolean sessionHadExecutable = false;
 
 	// 会话内 pairs 预解码缓存：以配置串引用为失效信号（malilib getStringValue 返回字段引用；GUI 保存/加载
 	// 必产生新 String → 引用不等 → 重建数组）。引用相等时每 tick 复用数组，免去 offers×pairs 循环内 Gson 解析
@@ -494,6 +496,8 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	 */
 	public boolean handleMerchantScreenTick(MinecraftClient mc, MerchantScreen screen) {
 		// 重置会话状态（executor 跨会话复用，避免上一会话的 blocked 泄漏）
+		// 注：上行“跨会话复用”说法已过时——executor 实际按会话创建（见 TradeTask.java:41，每 TradeTask
+		// 一个实例），此处重置仅为每 tick 快照语义；sessionHadExecutable 不在此重置（会话级 OR 锁存）
 		inventoryBlocked = false;
 		// 玩家或世界为空（如退出世界/传送中）时无法继续交易，等待下个 tick
 		if (mc.player == null || mc.world == null) {
@@ -531,6 +535,11 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		// 第 3 步：预扫描可执行交易项（开屏 isDisabled() 过滤已耗尽的 offer；饿死候选标志随扫描携带）。
 		// 列表为每 tick 快照——成本消耗导致的过期由单轮结果确认兜底（轮到时 autofill 无货 → 槽 2 空 → DONE 移出）
 		List<OfferState> active = scanExecutableOffers(handler, cachedParsedPairs, mc.player);
+		// 会话级 OR 锁存：任一 tick 见过非空可执行列表即为命中，整个会话保持（每 tick 不重置）
+		// 注：cleanupResidualResult 失败 / pairs 为空的提前返回路径跳过此处，该会话记为未命中（TTL 自愈，罕见路径）
+		if (!active.isEmpty()) {
+			sessionHadExecutable = true;
+		}
 		if (active.isEmpty()) {
 			// 无任何可执行交易项：移出输入成本后结束会话（下轮会话重试）
 			moveOutInputCosts(mc, handler);
@@ -1123,6 +1132,11 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	/** 上次交易扫描是否因背包空间不足而跳过全部匹配交易（会话层据此提前结束并触发容器 IO） */
 	public boolean isInventoryBlocked() {
 		return inventoryBlocked;
+	}
+
+	/** 本会话是否见过至少一个可执行 offer（会话级 OR 锁存，供缓存层区分未命中与无数据） */
+	public boolean hasSessionHadExecutable() {
+		return sessionHadExecutable;
 	}
 
 	// 交易项剩余次数/耗尽状态抽象：两策略的差异点（非 use = 快照推导记账；use = 直接读 offer.getUses()）。

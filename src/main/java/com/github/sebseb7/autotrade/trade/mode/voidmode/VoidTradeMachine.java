@@ -5,6 +5,7 @@ import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
+import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
@@ -68,6 +69,13 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		// 无零进度冷却——启动条件本身保证「启动即有村民」，零进度仅剩 1-tick 竞态且不产生忙循环）
 		double range = Configs.Generic.VILLAGER_SCAN_RANGE.getIntegerValue();
 		for (Entity e : VillagerHelper.findNearby(mc, range)) {
+			// 9.8 缓存：TTL 内已知不匹配 → 跳过取下一村民（全不匹配时自然落空，不产生忙循环）
+			// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
+			// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
+			if (VillagerTradeCache.isNotMatch(e.getUuid(), mc.world.getTime())) {
+				VillagerTradeCache.recordSkip();
+				continue;
+			}
 			setTaskIfEmpty(new VoidTradeTask(e.getUuid()));
 			AutoTrade.logger.info("[VoidMode] IDLE → TRADE_SESSION (villager id={})", e.getUuid());
 			return;

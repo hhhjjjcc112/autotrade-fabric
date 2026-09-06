@@ -8,4 +8,6 @@ interface TradeStrategy {
 	boolean handleMerchantScreenTick(MinecraftClient mc, MerchantScreen screen);
 
 	boolean isInventoryBlocked();
+
+	boolean hasSessionHadExecutable();
 }

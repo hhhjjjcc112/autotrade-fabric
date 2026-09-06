@@ -2,12 +2,14 @@ package com.github.sebseb7.autotrade.trade.mode.staticmode;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
+import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
@@ -110,6 +112,8 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 				targetVillagers.clear();
 				processedVillagers.clear();
 				scanVillagers(mc);
+				// 9.8 附加收益：名单按缓存状态重排——已知命中的村民优先服务（未被未知/不匹配村民阻塞；不命中的派发时跳过）
+				targetVillagers.sort(Comparator.comparingInt(id -> VillagerTradeCache.isMatch(id) ? 0 : 1));
 				targetIndex = 0;
 				scanned = true;
 			}
@@ -117,6 +121,11 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 			while (targetIndex < targetVillagers.size()) {
 				UUID id = targetVillagers.get(targetIndex++);
 				if (!processedVillagers.contains(id)) {
+					// 9.8 缓存：TTL 内已知不匹配 → 跳过不开窗（不标记已处理——缓存为唯一事实源，TTL 到期自动复查）
+					if (VillagerTradeCache.isNotMatch(id, mc.world.getTime())) {
+						VillagerTradeCache.recordSkip();
+						continue;
+					}
 					Entity e = VillagerHelper.findByUuid(mc, id);
 					if (e != null) {
 						dispatchedVillagerId = id;
@@ -145,6 +154,8 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 	}
 
 	// 扫描范围内全部村民/流浪商人建立本轮名单（与现状 StaticTradeTask 首扫逻辑一致）
+	// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
+	// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
 	private void scanVillagers(MinecraftClient mc) {
 		double range = Configs.Generic.VILLAGER_SCAN_RANGE.getIntegerValue();
 		for (Entity e : VillagerHelper.findNearby(mc, range)) {
