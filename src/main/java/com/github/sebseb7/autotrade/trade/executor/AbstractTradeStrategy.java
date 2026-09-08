@@ -13,9 +13,7 @@ import java.util.List;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.ItemStack;
-import net.minecraft.nbt.NbtCompound;
 import net.minecraft.network.packet.c2s.play.SelectMerchantTradeC2SPacket;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.MerchantScreenHandler;
@@ -31,7 +29,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	 * 各补充源槽差值、二分拆半收尾溢出均以该值为界；单成本超过 → 回退空间封顶 QUICK_MOVE（仍防饿死）， 双成本超过 → 撤销 +
 	 * CAPACITY_SKIP（永不回退，见 exactTradeNDual/undoOrSkip）。
 	 */
-	private static final int EXACT_N_MAX_RIGHT_CLICKS = 8;
+	static final int EXACT_N_MAX_RIGHT_CLICKS = 8;
 
 	/** 本次会话是否因背包空间不足/结果滞留而阻塞（供会话层决定提前结束并触发容器 IO） */
 	protected boolean inventoryBlocked = false;
@@ -49,442 +47,30 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	 */
 	protected abstract OfferState createOffer(TradeOffer offer, int index, boolean starvationCandidate);
 
-	// ---- 静态匹配辅助方法 ----
-
-	// 点击指定槽位 QUICK_MOVE，并使用点击后的本地槽位状态继续判断结果。
-	private static void quickMoveSlot(MinecraftClient mc, MerchantScreenHandler handler, Slot slot) {
-		clickSlot(mc, handler, slot.id, 0, SlotActionType.QUICK_MOVE);
-	}
-
-	// 点击指定槽位，支持 PICKUP 和 QUICK_MOVE；点击异常只记录日志，不中断当前处理。
-	private static void clickSlot(MinecraftClient mc, MerchantScreenHandler handler, int slotId, int button,
-			SlotActionType type) {
-		try {
-			mc.interactionManager.clickSlot(handler.syncId, slotId, button, type, mc.player);
-		} catch (Exception e) {
-			AutoTrade.logger.warn("[AutoTrade] 槽 {} 点击失败 (button={}, type={})", slotId, button, type, e);
-		}
-	}
-
-	// 计算装填完成后背包对交易结果的可用容量；此时槽 0/1 中的装填成本不计入背包容量。
+	// ---- 容量数学（纯函数）：公式/常量整体平移至 CapacityModel（见其 javadoc，未来供
+	// capacity_model_sim.py 引用），此处仅保留同签名委托，调用点零改动 ----
 	private static int calculateResultCapacity(MerchantScreenHandler handler, ItemStack result) {
-		boolean stackable = result.getMaxCount() > 1;
-		int emptySlots = 0;
-		int mergeSpace = 0;
-		for (int i = 3; i < 39; i++) {
-			ItemStack stack = handler.getSlot(i).getStack();
-			if (stack.isEmpty()) {
-				// 空槽按个计数：可堆叠结果每个空槽可容纳 result.getMaxCount() 个（返回时相乘）；不可堆叠结果每笔交易需 1 个空槽
-				emptySlots += 1;
-			} else if (stackable && stack.isOf(result.getItem()) && ItemStack.canCombine(stack, result)) {
-				// 同物品同 NBT 的未满堆叠：计入可合并空间（与 insertItem 的 canCombine 判定一致）
-				mergeSpace += stack.getMaxCount() - stack.getCount();
-			}
-		}
-		return stackable ? emptySlots * result.getMaxCount() + mergeSpace : emptySlots;
+		return CapacityModel.calculateResultCapacity(handler, result);
 	}
 
-	// 计算本次点击可使用的整批笔数：inputBatch = min(floor(槽0/costA), floor(槽1/costB))。
 	private static int computeInputBatch(MerchantScreenHandler handler, TradeOffer offer) {
-		ItemStack costA = offer.getAdjustedFirstBuyItem();
-		ItemStack costB = offer.getSecondBuyItem();
-		int trades = Integer.MAX_VALUE;
-		// 第一成本槽：槽内数量整除单笔成本取整
-		if (!costA.isEmpty()) {
-			trades = Math.min(trades, handler.getSlot(0).getStack().getCount() / costA.getCount());
-		}
-		// 第二成本槽（仅双成本 offer 存在；单成本时 costB 为 EMPTY，判空防 0/0 除零）
-		if (!costB.isEmpty()) {
-			trades = Math.min(trades, handler.getSlot(1).getStack().getCount() / costB.getCount());
-		}
-		// 防御：成本槽为空时整除结果为 0，clamp 到非负
-		return Math.max(0, trades);
+		return CapacityModel.computeInputBatch(handler, offer);
 	}
 
-	// 预留「本次点击后槽 0/1 剩余成本回背包」所需空间：cost==result 按物品数精确占用结果容量，否则按量级化比较占用 1 个空槽
 	private static int calculateLeftoverReservation(MerchantScreenHandler handler, TradeOffer offer, int trades) {
-		ItemStack result = offer.getSellItem();
-		int reservation = 0;
-		// 逐输入槽处理剩余成本（槽 0 = 第一成本，槽 1 = 第二成本）
-		for (int i = 0; i < 2; i++) {
-			ItemStack cost = (i == 0 ? offer.getAdjustedFirstBuyItem() : offer.getSecondBuyItem());
-			if (cost.isEmpty())
-				continue;
-			// 本次点击消耗 trades 笔后槽内剩余的成本数量
-			int leftover = handler.getSlot(i).getStack().getCount() - trades * cost.getCount();
-			if (leftover <= 0)
-				continue;
-			if (cost.isOf(result.getItem()) && ItemStack.canCombine(cost, result)) {
-				// 成本与结果同物品：剩余成本并入结果堆叠，按物品数精确扣结果容量
-				reservation += leftover;
-			} else {
-				// 成本 ≠ 结果：统计 3-38 中可并入成本物品的未满堆叠空间（逐槽累加可合并数量，量级化）
-				int costMerge = costMergeSpace(handler, cost);
-				// 剩余成本无法全部并入成本堆叠 → 需占 1 个空槽（该空槽本可装 result.getMaxCount() 个结果；不可堆叠结果为 1）
-				if (leftover > costMerge) {
-					reservation += result.getMaxCount();
-				}
-			}
-		}
-		return reservation;
+		return CapacityModel.calculateLeftoverReservation(handler, offer, trades);
 	}
 
-	// 统计 3-38 中可并入成本物品（canCombine）的未满堆叠空间之和（量级化：剩余成本无法全部并入
-	// 成本堆叠 → 调用方需占 1 个空槽）
 	private static int costMergeSpace(MerchantScreenHandler handler, ItemStack cost) {
-		int costMerge = 0;
-		for (int j = 3; j < 39; j++) {
-			ItemStack s = handler.getSlot(j).getStack();
-			if (!s.isEmpty() && ItemStack.canCombine(s, cost)) {
-				costMerge += s.getMaxCount() - s.getCount();
-			}
-		}
-		return costMerge;
+		return CapacityModel.costMergeSpace(handler, cost);
 	}
 
-	// 判断本次有效整批是否能放入背包：所需结果数量不超过扣除剩余成本占位后的容量。
-	// 判定用 trades = effectiveBatch（有效整批，由调用方计算并传入——含 uses 剩余次数封顶）；
-	// exact-N 判定预留 = 0（输入精确消耗），由调用方另行计算 affordable
 	private static boolean canFitEffectiveBatch(MerchantScreenHandler handler, TradeOffer offer, int effectiveBatch) {
-		// 防御性守卫：正常流程已保证槽 2 有结果 ⟹ 输入够 1 笔 ⟹ effectiveBatch≥1，双保险（等价于原 inputBatch 守卫）
-		if (effectiveBatch <= 0) {
-			return false;
-		}
-		// 有效整批全部结果所需容量（long 防溢出）——effectiveBatch 已按剩余次数封顶，不再按整批高估
-		long need = (long) effectiveBatch * offer.getSellItem().getCount();
-		// 结果可容纳量（无占位版，post-autofill 状态下槽 0/1 成本已移出 3-38）
-		int capacity = calculateResultCapacity(handler, offer.getSellItem());
-		// 预留本次点击后槽 0/1 剩余成本回背包所占用的容量。
-		int reservation = calculateLeftoverReservation(handler, offer, effectiveBatch);
-		// 可容纳量扣除预留后仍 ≥ 所需 → 有效整批可容纳（QUICK_MOVE；每次中间 insertItem 完整插入，无部分插入丢失）
-		return capacity - reservation >= need;
+		return CapacityModel.canFitEffectiveBatch(handler, offer, effectiveBatch);
 	}
 
-	// 容量不足候选门：autofillBatch × sellCount > 36 × resultMaxCount。
-	// 候选表示自动装填得到的整批结果超过空背包理论容量，需要尝试 exact-N；双成本交易走 exactTradeNDual
-	// （双成本 exact-N，不再回退 QUICK_MOVE——候选门公式本身不变，仅双成本路径出口变更）。
 	private static boolean isStarvationCandidate(TradeOffer offer) {
-		// autofill 单输入槽最大填充量对应的整批笔数：可堆叠 = maxCount/costCount（珍珠等 16、绿宝石 64），
-		// 不可堆叠（maxCount=1）→ 1 笔；36 × resultMaxCount = 空背包理论最大容量（槽 3-38 共 36 槽）
-		int costCount = offer.getAdjustedFirstBuyItem().getCount();
-		int costMaxCount = offer.getAdjustedFirstBuyItem().getMaxCount();
-		int autofillBatch = costMaxCount > 1 ? costMaxCount / costCount : 1;
-		int sellCount = offer.getSellItem().getCount();
-		int resultMaxCount = offer.getSellItem().getMaxCount();
-		return autofillBatch * sellCount > 36 * resultMaxCount;
-	}
-
-	// 判定候选 offer 是否可由该交易对执行：匹配（doesOfferMatchPair，失败且 offer 实际有第二成本但交易对
-	// 未配置 give2 时打降级警告日志）+ 单笔成本不超 limit + 背包有全部成本。
-	// 所有拒绝路径均打诊断日志（不再静默——give2 严格匹配/limit/成本不足的失败此前对用户不可见）。
-	// @return true = 可执行（调用方记入快照并结束内层交易对循环）
-	private static boolean isOfferExecutableForPair(TradeOffer candidate, ParsedPair pair, int pairIndex,
-			PlayerEntity player) {
-		// 成本/产出物品与交易对不一致 → 不可执行（按原因细分日志：双成本 offer 未配 give2 / 双成本配置仍不匹配）
-		if (!doesOfferMatchPair(candidate, pair)) {
-			boolean offerHasSecondCost = !candidate.getSecondBuyItem().isEmpty();
-			if (offerHasSecondCost && !pair.hasGive2()) {
-				// 交易项有第二成本但交易对未配置 give2 时，严格匹配会拒绝该交易项并记录提示。
-				AutoTrade.logger.info(
-						"[AutoTrade] pair #{} no longer matches (offer has 2nd cost), configure give2 to match",
-						pairIndex);
-			} else if (offerHasSecondCost && pair.hasGive2()) {
-				// 双成本交易对仍不匹配：give/give2/get 物品不一致，或产出 NBT 已变化
-				// （如附魔书交易在村民补货后随机生成新附魔 → 需重新捕获该交易）
-				AutoTrade.logger.info(
-						"[AutoTrade] pair #{} no longer matches (give/give2/get mismatch or NBT changed), re-capture the trade",
-						pairIndex);
-			} else {
-				AutoTrade.logger.info("[AutoTrade] pair #{} no longer matches offer (give/get mismatch)", pairIndex);
-			}
-			return false;
-		}
-		// 单笔成本超过交易对上限（防止大额成本交易被无限执行）→ 不可执行。
-		// 用原始（未调价）第一成本对比——demand/specialPrice 波动造成的涨价不会让已捕获的交易对失效；
-		// 只有「匹配到基础价格更高的其他交易」才被拒绝（修复：价格随 demand 上涨后交易对静默失效的 bug，
-		// 图书管理员附魔书交易 priceMultiplier=0.2，demand≥1 即涨价 6+，超过捕获时的 limit 32）
-		int baseCost = candidate.getOriginalFirstBuyItem().getCount();
-		if (baseCost > pair.limit()) {
-			AutoTrade.logger.info("[AutoTrade] pair #{} offer skipped: base cost {} > limit {}", pairIndex, baseCost,
-					pair.limit());
-			return false;
-		}
-		// 背包成本不足 → 不可执行（adjusted 价格随 demand 上涨时，此处按调整后价格检查实际支付能力）
-		if (!playerHasMerchantCosts(player, candidate)) {
-			AutoTrade.logger.info("[AutoTrade] pair #{} offer skipped: insufficient costs in inventory", pairIndex);
-			return false;
-		}
-		return true;
-	}
-
-	// 装填指定 offer：setRecipeIndex + switchTo + select 包（顺序同现主循环；setRecipeIndex 不可省略，
-	// 缺省时非 0 号交易本地结果槽可能不生成）
-	private static void refillOffer(MinecraftClient mc, MerchantScreenHandler handler, OfferState target) {
-		// 真实索引：setRecipeIndex（服务端当前 offer）与发包必须用真实索引；
-		// switchTo 内部读 getRecipes()（ItemScroller 下为重排列表）→ 须用可见索引取到正确装填物品
-		int realIndex = target.index;
-		int visibleIndex = ItemScrollerTradeCompat.getVisibleIndex(handler, realIndex, target.offer);
-		handler.setRecipeIndex(realIndex);
-		handler.switchTo(visibleIndex);
-		if (mc.getNetworkHandler() != null) {
-			mc.getNetworkHandler().sendPacket(new SelectMerchantTradeC2SPacket(realIndex));
-		}
-	}
-
-	// 统计槽 3-38 中与卖品同物品同 NBT（可合并）的物品总数（同 tick 本地增量计数用快照——
-	// 插入只会合并进 canCombine 堆叠或新空槽，差值即本次插入量；预存堆叠前后不变自动抵消）
-	private static int countSellItemsInInventory(MerchantScreenHandler handler, ItemStack result) {
-		int total = 0;
-		for (int i = 3; i < 39; i++) {
-			ItemStack s = handler.getSlot(i).getStack();
-			if (!s.isEmpty() && s.isOf(result.getItem()) && ItemStack.canCombine(s, result)) {
-				total += s.getCount();
-			}
-		}
-		return total;
-	}
-
-	// exact-N 成本源槽选择：优先选「数量 ≥ M 且 |S−M| 最小」的堆叠（下限 M——选中 S < M 会导致
-	// 实际成交 < N 的低效）；无 ≥ M 者 → 选数量最大堆叠（成交 < N 但有进展、无溢出，接受）。
-	// @return 选中的源槽；无任何可合并成本堆叠时为 null（调用方走守卫回退）
-	private static Slot selectCostSourceSlot(MerchantScreenHandler handler, ItemStack cost, int m) {
-		Slot source = null;
-		int bestDiff = Integer.MAX_VALUE;
-		int maxCount = -1;
-		for (int i = 3; i < 39; i++) {
-			ItemStack s = handler.getSlot(i).getStack();
-			if (s.isEmpty() || !s.isOf(cost.getItem()) || !ItemStack.canCombine(s, cost)) {
-				continue;
-			}
-			if (s.getCount() >= m) {
-				// 第一遍：S ≥ M 且 |S−M| 最小
-				int diff = Math.abs(s.getCount() - m);
-				if (diff < bestDiff) {
-					bestDiff = diff;
-					source = handler.getSlot(i);
-				}
-			} else if (source == null && s.getCount() > maxCount) {
-				// 第二遍（仅当尚无 ≥M 候选）：数量最大堆叠兜底
-				maxCount = s.getCount();
-				source = handler.getSlot(i);
-			}
-		}
-		return source;
-	}
-
-	// 二分拆半：把输入槽（槽 0/1）数量从 S 精确降到 keep（计划 D3）。多余 S−keep 放回背包可合并槽 B，光标净空。
-	// 前置：光标为空；B = 与成本可合并的背包槽（未满，优先）或任一空槽（调用方 selectMergeOrEmptySlot 保证）。
-	// 不变量：目标槽为「待拆分堆叠」，B 累积「已拆出多余」，光标空。
-	// 阶段 1 每轮：光标空 + 右键槽 = 取半 ceil((cur+1)/2)（PICKUP 单笔语义，F5）→ 槽剩 floor(cur/2)；
-	// 左键 B = 光标全部并入 → 光标空。轮数 ≤ log2(64) ≈ 6（S=64 时），点击数从 O(S−M) 降到 O(log S)。
-	// 收尾（放回法）：溢出 ≤ 右键预算(8) → PICKUP 槽（光标 = cur、槽 = 0）→ 右键 B × overflow（光标每次
-	// 放回 1 → 光标 = keep）→ PICKUP 槽（光标 keep 放回 → 槽 = keep ✓）。
-	// 阶段 2 回补：取半过头（槽 < keep）→ 每轮 B 取半到光标、右键槽放回 1 个（槽 +1）、左键 B 清光标；
-	// 循环上限 = keep − 当前量（每轮至少 +1，有界）。
-	// 违反后果：光标残留（B 槽空间不足等极端情况）→ 后续点击语义改变（光标非空时右键 = 放回而非取半）
-	// → 返回 false，调用方撤销 + CAPACITY_SKIP（防静默错交易）。
-	// @return true = 槽数量精确等于 keep 且光标净空；false = 失败（调用方走 undoFill + CAPACITY_SKIP）
-	private static boolean splitSlotExact(MinecraftClient mc, MerchantScreenHandler handler, int slotIndex, int keep,
-			Slot b) {
-		// 前置守卫：B 槽缺失 → 失败（防御——调用方 selectMergeOrEmptySlot 已保证非 null）
-		if (b == null) {
-			return false;
-		}
-		Slot target = handler.getSlot(slotIndex);
-		// 已满足（含 s < keep 的情况由调用方补充源槽）→ 无需点击
-		if (target.getStack().getCount() <= keep) {
-			return true;
-		}
-		// 阶段 1：二分拆半，直到槽数量 ≤ keep 或进入收尾路径
-		while (target.getStack().getCount() > keep) {
-			int cur = target.getStack().getCount();
-			int overflow = cur - keep;
-			// 收尾（放回法）：溢出 ≤ 右键预算 → 放回 finish，返回前校验光标净空 + 槽 = keep
-			if (overflow <= EXACT_N_MAX_RIGHT_CLICKS) {
-				clickSlot(mc, handler, slotIndex, 0, SlotActionType.PICKUP);
-				for (int i = 0; i < overflow; i++) {
-					clickSlot(mc, handler, b.id, 1, SlotActionType.PICKUP);
-				}
-				clickSlot(mc, handler, slotIndex, 0, SlotActionType.PICKUP);
-				return handler.getCursorStack().isEmpty() && target.getStack().getCount() == keep;
-			}
-			// 光标空 + 右键 = 取半 ceil((cur+1)/2) → 槽剩 floor(cur/2)
-			clickSlot(mc, handler, slotIndex, 1, SlotActionType.PICKUP);
-			// 光标全部并入 B（光标净空，维持不变量）
-			clickSlot(mc, handler, b.id, 0, SlotActionType.PICKUP);
-		}
-		// 阶段 2：回补（取半过头：槽 < keep）——每轮从 B 取半、右键槽放回 1 个、左键 B 清光标；
-		// 循环上限 = keep − 当前量（每轮至少 +1，有界；B 累积的溢出 ≥ 差值，正常一轮不缺货）
-		int rounds = keep - target.getStack().getCount();
-		while (target.getStack().getCount() < keep && rounds-- > 0) {
-			clickSlot(mc, handler, b.id, 1, SlotActionType.PICKUP);
-			clickSlot(mc, handler, slotIndex, 1, SlotActionType.PICKUP);
-			clickSlot(mc, handler, b.id, 0, SlotActionType.PICKUP);
-		}
-		// 不变量校验：光标净空 + 槽数量精确 = keep（B 满等极端导致的光标残留 → 失败，调用方撤销）
-		return handler.getCursorStack().isEmpty() && target.getStack().getCount() == keep;
-	}
-
-	// 选择拆分/回补用的背包槽 B（计划 D3）：3-38 中与 cost 可合并且未满的槽（优先），否则任一空槽。
-	// 前置：无（调用方每次使用前重选，避免跨槽状态）。@return B 槽；无可合并槽且无空槽 → null
-	// （调用方走撤销 + CAPACITY_SKIP——无 B 则拆分产物无处安放，光标无法净空）
-	private static Slot selectMergeOrEmptySlot(MerchantScreenHandler handler, ItemStack cost) {
-		Slot empty = null;
-		for (int i = 3; i < 39; i++) {
-			ItemStack s = handler.getSlot(i).getStack();
-			if (s.isEmpty()) {
-				// 记下第一个空槽兜底（可合并槽优先——成本合并回收，避免空槽被拆分产物占满）
-				if (empty == null) {
-					empty = handler.getSlot(i);
-				}
-			} else if (ItemStack.canCombine(s, cost) && s.getCount() < s.getMaxCount()) {
-				// 可合并且未满：直接返回（拆分产物可并入，光标可净空）
-				return handler.getSlot(i);
-			}
-		}
-		return empty;
-	}
-
-	// 双成本补充源槽选择（exactTradeNDual 用）：同 selectCostSourceSlot 的选源规则，但排除给定槽 id
-	// （B1/B2/已用补充源槽——避免破坏已累积的拆分产物或重复取货）。
-	// 规则：优先「数量 ≥ need 且 |S−need| 最小」的堆叠（下限 need——选中 S < need 会导致实际成交 < n 的
-	// 低效）；无 ≥ need 者 → 数量最大堆叠兜底（成交 < n 但有进展、无溢出，接受）。
-	// @return 选中的源槽；无任何可合并成本堆叠时为 null（调用方走撤销 + CAPACITY_SKIP）
-	private static Slot selectCostSourceSlotExcluding(MerchantScreenHandler handler, ItemStack cost, int need,
-			int... excludeSlotIds) {
-		Slot source = null;
-		int bestDiff = Integer.MAX_VALUE;
-		int maxCount = -1;
-		for (int i = 3; i < 39; i++) {
-			// 排除已使用的槽（B 槽/已用补充源槽——避免破坏已累积的拆分产物或重复取货）
-			boolean excluded = false;
-			for (int id : excludeSlotIds) {
-				if (id == i) {
-					excluded = true;
-					break;
-				}
-			}
-			if (excluded) {
-				continue;
-			}
-			ItemStack s = handler.getSlot(i).getStack();
-			if (s.isEmpty() || !s.isOf(cost.getItem()) || !ItemStack.canCombine(s, cost)) {
-				continue;
-			}
-			if (s.getCount() >= need) {
-				// 第一遍：S ≥ need 且 |S−need| 最小
-				int diff = Math.abs(s.getCount() - need);
-				if (diff < bestDiff) {
-					bestDiff = diff;
-					source = handler.getSlot(i);
-				}
-			} else if (source == null && s.getCount() > maxCount) {
-				// 第二遍（仅当尚无 ≥need 候选）：数量最大堆叠兜底
-				maxCount = s.getCount();
-				source = handler.getSlot(i);
-			}
-		}
-		return source;
-	}
-
-	// 撤销手动 fill（计划 D5）：恢复交易前的安全状态——光标净空、槽 0/1 无残余（成本回背包）。
-	// 步骤：① 光标有物品 → 左键放入背包可合并槽/空槽（无可用槽或放不下 → false）；
-	// ② QUICK_MOVE 出槽 0 → 仍残留 ? false；③ QUICK_MOVE 出槽 1 → 仍残留 ? false。
-	// 违反后果：撤销失败（背包真满，物品放不回）→ 保留现场 → STUCK（D5 守卫 6，真异常）；
-	// 槽 2 预览在槽 0/1 清空后由 updateOffers 自动清除（F4：matchesBuyItems 不成立）→ 退出后无滞留物。
-	// @return true = 已恢复；false = 撤销失败（调用方按 STUCK 处理）
-	private static boolean undoFill(MinecraftClient mc, MerchantScreenHandler handler) {
-		// ① 光标净空断言
-		ItemStack cursor = handler.getCursorStack();
-		if (!cursor.isEmpty()) {
-			Slot deposit = selectMergeOrEmptySlot(handler, cursor);
-			if (deposit == null) {
-				return false;
-			}
-			clickSlot(mc, handler, deposit.id, 0, SlotActionType.PICKUP);
-			// 槽空间不足放不下全部 → 光标仍残留 → 失败
-			if (!handler.getCursorStack().isEmpty()) {
-				return false;
-			}
-		}
-		// ② QUICK_MOVE 出槽 0 → 仍残留 → 失败（背包满）
-		Slot slot0 = handler.getSlot(0);
-		if (slot0.hasStack()) {
-			quickMoveSlot(mc, handler, slot0);
-			if (slot0.hasStack()) {
-				return false;
-			}
-		}
-		// ③ QUICK_MOVE 出槽 1 → 仍残留 → 失败（背包满）
-		Slot slot1 = handler.getSlot(1);
-		if (slot1.hasStack()) {
-			quickMoveSlot(mc, handler, slot1);
-			if (slot1.hasStack()) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	// 判断交易与交易对是否匹配：成本物品等于 giveItem 且产出物品等于 getItem（预解码版本，循环内零 Gson）
-	private static boolean doesOfferMatchPair(TradeOffer offer, ParsedPair pair) {
-		ItemStack costA = offer.getAdjustedFirstBuyItem();
-		ItemStack costB = offer.getSecondBuyItem();
-		boolean resultMatch = ItemStringHelper.matches(offer.getSellItem(), pair.get());
-		if (pair.hasGive2()) {
-			return resultMatch && ItemStringHelper.matches(costA, pair.give())
-					&& ItemStringHelper.matches(costB, pair.give2());
-		}
-		return resultMatch && costB.isEmpty() && ItemStringHelper.matches(costA, pair.give());
-	}
-
-	// 检查玩家背包是否足以支付该交易的全部成本槽（第一/第二成本物品）
-	private static boolean playerHasMerchantCosts(PlayerEntity player, TradeOffer offer) {
-		ItemStack costA = offer.getAdjustedFirstBuyItem();
-		if (!costA.isEmpty() && !hasEnoughCostItems(player, costA)) {
-			return false;
-		}
-		ItemStack costB = offer.getSecondBuyItem();
-		if (!costB.isEmpty() && !hasEnoughCostItems(player, costB)) {
-			return false;
-		}
-		return true;
-	}
-
-	// 统计背包中与 required 精确匹配（含 NBT）的物品总数是否达到所需数量
-	private static boolean hasEnoughCostItems(PlayerEntity player, ItemStack required) {
-		int need = required.getCount();
-		int have = 0;
-		PlayerInventory inv = player.getInventory();
-		for (int s = 0; s < inv.size(); s++) {
-			ItemStack stack = inv.getStack(s);
-			if (stacksMatchExact(stack, required)) {
-				have += stack.getCount();
-				if (have >= need) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
-	// 精确匹配两个物品栈：同物品且 NBT 完全相等（与 ItemStack.canCombine 的 NBT 语义一致）
-	private static boolean stacksMatchExact(ItemStack a, ItemStack b) {
-		if (a.isEmpty() || b.isEmpty()) {
-			return false;
-		}
-		if (!a.isOf(b.getItem())) {
-			return false;
-		}
-		NbtCompound tagA = a.getNbt();
-		NbtCompound tagB = b.getNbt();
-		if (tagA == null && tagB == null) {
-			return true;
-		}
-		if (tagA == null || tagB == null) {
-			return false;
-		}
-		return tagA.equals(tagB);
+		return CapacityModel.isStarvationCandidate(offer);
 	}
 
 	/**
@@ -669,7 +255,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		if (slot2.hasStack()) {
 			AutoTrade.logger.info("[AutoTrade] 清理遗留交易结果: {}x{}", slot2.getStack().getCount(),
 					Registries.ITEM.getId(slot2.getStack().getItem()));
-			quickMoveSlot(mc, handler, slot2);
+			FillHelpers.quickMoveSlot(mc, handler, slot2);
 			// 本地模拟同步执行（clickSlot 本地模拟），点击返回后本地槽状态已更新；仍滞留 = 背包无空间
 			if (slot2.hasStack()) {
 				AutoTrade.logger.info("[AutoTrade] 遗留交易结果无法移入背包（背包已满）");
@@ -692,7 +278,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	private boolean moveOutInputSlot(MinecraftClient mc, MerchantScreenHandler handler, int slotIndex) {
 		Slot slot = handler.getSlot(slotIndex);
 		if (slot.hasStack()) {
-			quickMoveSlot(mc, handler, slot);
+			FillHelpers.quickMoveSlot(mc, handler, slot);
 			if (slot.hasStack()) {
 				AutoTrade.logger.info("[AutoTrade] 成本物品无法移回背包，标记背包阻塞");
 				inventoryBlocked = true;
@@ -706,7 +292,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	// costB.isEmpty() 单成本分支语义对齐）；hasGive2 用原始串判空白（与旧 doesOfferMatchPair 分支条件逐字
 	// 一致——非法 give2 串仍走双成本分支并匹配失败，不能以 parse 结果判分支）；enabled/limit 供扫描循环与
 	// 价格限制直接使用
-	private record ParsedPair(ItemStringHelper.ParsedItem give, ItemStringHelper.ParsedItem give2,
+	record ParsedPair(ItemStringHelper.ParsedItem give, ItemStringHelper.ParsedItem give2,
 			ItemStringHelper.ParsedItem get, boolean hasGive2, boolean enabled, int limit) {
 	}
 
@@ -743,7 +329,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 				// 未启用的交易对跳过
 				if (!pair.enabled())
 					continue;
-				if (isOfferExecutableForPair(candidate, pair, pairIndex, player)) {
+				if (OfferGuards.isOfferExecutableForPair(candidate, pair, pairIndex, player)) {
 					// 检查全部通过：记入快照列表（携带饿死候选标志）并结束内层交易对循环。
 					// 快照「初始剩余次数」= maxUses − getUses()（非裸 getUses()——裸 uses 对新 offer 为 0，
 					// 避免把新交易项的 uses 误当成已使用次数，导致剩余次数被计算为 0。
@@ -793,7 +379,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		BatchResult outcome = BatchResult.DONE;
 		// 1) 装填：setRecipeIndex + switchTo + select 包（顺序同现主循环；setRecipeIndex 不可省略，
 		// 缺省时非 0 号交易本地结果槽可能不生成）
-		refillOffer(mc, handler, target);
+		FillHelpers.refillOffer(mc, handler, target);
 		// 2) 槽 2 canCombine(卖品) 校验：失败 → DONE（耗尽/没货/装填失败/switchTo 提前 return
 		// 的兜底，均表现为不匹配）。耗尽由扫描时 isDisabled()（开屏服务端同步真值）覆盖：本出口仅结束
 		// 该 offer 处理，下轮窗口重开时服务端重新同步 offers → isDisabled() 自然过滤，无需会话级标记集合
@@ -944,10 +530,10 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	// @return 本次点击实际成交笔数
 	private int tradeClick(MinecraftClient mc, MerchantScreenHandler handler, Slot slot2, ItemStack result) {
 		// 点击前快照（槽 3-38 卖品总数）
-		int before = countSellItemsInInventory(handler, result);
-		quickMoveSlot(mc, handler, slot2);
+		int before = FillHelpers.countSellItemsInInventory(handler, result);
+		FillHelpers.quickMoveSlot(mc, handler, slot2);
 		// 点击后立即再快照：差值 / sellCount = 同 tick 本地增量成交笔数
-		return (countSellItemsInInventory(handler, result) - before) / result.getCount();
+		return (FillHelpers.countSellItemsInInventory(handler, result) - before) / result.getCount();
 	}
 
 	// exact-N 守卫回退助手：先重新装填交易项（槽 0/1 残余成本放回并
@@ -985,7 +571,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		Slot slot0 = handler.getSlot(0);
 		// a) QUICK_MOVE 槽 0（autofill 整组移回背包）；失败（槽 0 移出后仍有物品）→ 回退空间封顶 QUICK_MOVE
 		if (slot0.hasStack()) {
-			quickMoveSlot(mc, handler, slot0);
+			FillHelpers.quickMoveSlot(mc, handler, slot0);
 			if (slot0.hasStack()) {
 				AutoTrade.logger.info("[AutoTrade] exact-N 守卫（a 失败：槽 0 移出后仍有物品）offer {}: 回退空间封顶 QUICK_MOVE",
 						offerIndex);
@@ -994,7 +580,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		}
 		// b) 找成本源槽：优先「数量 ≥ M 且 |S−M| 最小」，否则使用数量最大堆叠；无成本堆叠
 		// （防御性：输入槽已 autofill 过，正常不可达）→ 回退空间封顶 QUICK_MOVE
-		Slot source = selectCostSourceSlot(handler, cost, m);
+		Slot source = FillHelpers.selectCostSourceSlot(handler, cost, m);
 		if (source == null) {
 			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（无成本源堆叠）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
 			return quickMoveFallback(mc, handler, offer, offerIndex, slot2, result);
@@ -1008,12 +594,12 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		}
 		// c) PICKUP 拿起源堆叠整组 → 右键源槽 (S−M) 次（每次放下 1 包，剩余 S−M 包留在光标）→
 		// d) 点击槽 0 放置 M（光标剩余 S−M 包被放回源槽）
-		clickSlot(mc, handler, source.id, 0, SlotActionType.PICKUP);
+		FillHelpers.clickSlot(mc, handler, source.id, 0, SlotActionType.PICKUP);
 		int rightClicks = Math.max(0, s - m);
 		for (int k = 0; k < rightClicks; k++) {
-			clickSlot(mc, handler, source.id, 1, SlotActionType.PICKUP);
+			FillHelpers.clickSlot(mc, handler, source.id, 1, SlotActionType.PICKUP);
 		}
-		clickSlot(mc, handler, slot0.id, 0, SlotActionType.PICKUP);
+		FillHelpers.clickSlot(mc, handler, slot0.id, 0, SlotActionType.PICKUP);
 		// e) 槽 2 canCombine(卖品) 校验：失败（耗尽/错配/装填异常）→ 回退空间封顶 QUICK_MOVE
 		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {
 			AutoTrade.logger.info("[AutoTrade] exact-N 守卫（e 失败：槽 2 不匹配）offer {}: 回退空间封顶 QUICK_MOVE", offerIndex);
@@ -1028,7 +614,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	// （真异常，保留现场由关窗 offerOrDrop 兜底）。@return CAPACITY_SKIP / STUCK 的
 	// BatchOutcome（tradesDone = 0）
 	private BatchOutcome undoOrSkip(MinecraftClient mc, MerchantScreenHandler handler) {
-		if (!undoFill(mc, handler)) {
+		if (!FillHelpers.undoFill(mc, handler)) {
 			AutoTrade.logger.info("[AutoTrade] 双成本 exact-N 撤销失败（背包满），按 STUCK 结束会话");
 			return new BatchOutcome(BatchResult.STUCK, 0, false);
 		}
@@ -1061,20 +647,20 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		int s2 = handler.getSlot(1).getStack().getCount();
 		// ① 槽 0：S1 → M1
 		// B1 = 拆分/回补用的背包槽（与 costA 可合并且未满，否则空槽）；两者皆无 → 守卫 2 → 撤销
-		Slot b1 = selectMergeOrEmptySlot(handler, costA);
+		Slot b1 = FillHelpers.selectMergeOrEmptySlot(handler, costA);
 		if (b1 == null) {
 			return undoOrSkip(mc, handler);
 		}
 		Slot srcA = null; // 槽 0 补充源槽（仅 S1 < M1 时使用，槽 1 排除时引用）
 		if (s1 >= m1) {
 			// S1 ≥ M1：二分拆半 S1 → M1（多余回背包槽 B1，光标净空）
-			if (!splitSlotExact(mc, handler, 0, m1, b1)) {
+			if (!FillHelpers.splitSlotExact(mc, handler, 0, m1, b1)) {
 				// 守卫 3：拆分失败（内部不变量破坏）→ 撤销
 				return undoOrSkip(mc, handler);
 			}
 		} else {
 			// S1 < M1：从背包源槽补充 (M1−S1)（排除 B1——避免破坏已累积的拆分产物）
-			srcA = selectCostSourceSlotExcluding(handler, costA, m1 - s1, b1.id);
+			srcA = FillHelpers.selectCostSourceSlotExcluding(handler, costA, m1 - s1, b1.id);
 			if (srcA == null) {
 				// 守卫 4a：无可用补充源槽 → 撤销
 				return undoOrSkip(mc, handler);
@@ -1084,26 +670,26 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 			if (back > EXACT_N_MAX_RIGHT_CLICKS) {
 				return undoOrSkip(mc, handler);
 			}
-			clickSlot(mc, handler, srcA.id, 0, SlotActionType.PICKUP); // 整组上光标
+			FillHelpers.clickSlot(mc, handler, srcA.id, 0, SlotActionType.PICKUP); // 整组上光标
 			for (int i = 0; i < back; i++) {
-				clickSlot(mc, handler, srcA.id, 1, SlotActionType.PICKUP); // 右键放回 1 个 × back
+				FillHelpers.clickSlot(mc, handler, srcA.id, 1, SlotActionType.PICKUP); // 右键放回 1 个 × back
 			}
-			clickSlot(mc, handler, 0, 0, SlotActionType.PICKUP); // 光标 (M1−S1) 并入槽 0 → 槽 0 = M1
+			FillHelpers.clickSlot(mc, handler, 0, 0, SlotActionType.PICKUP); // 光标 (M1−S1) 并入槽 0 → 槽 0 = M1
 		}
 		// ② 槽 1：S2 → M2（对称；B2 不得与 B1 同槽——避免两路拆分产物互相污染）
-		Slot b2 = selectMergeOrEmptySlot(handler, costB);
+		Slot b2 = FillHelpers.selectMergeOrEmptySlot(handler, costB);
 		if (b2 == null || b2.id == b1.id) {
 			// 守卫 2：无可用槽 / 与 B1 冲突 → 撤销
 			return undoOrSkip(mc, handler);
 		}
 		if (s2 >= m2) {
-			if (!splitSlotExact(mc, handler, 1, m2, b2)) {
+			if (!FillHelpers.splitSlotExact(mc, handler, 1, m2, b2)) {
 				// 守卫 3（对称）：拆分失败 → 撤销
 				return undoOrSkip(mc, handler);
 			}
 		} else {
 			// 补充源槽排除已使用槽：b1、b2、srcA（槽 0 未走补充路径时 srcA 为 null → 传 -1 无匹配）
-			Slot srcB = selectCostSourceSlotExcluding(handler, costB, m2 - s2, b1.id, b2.id,
+			Slot srcB = FillHelpers.selectCostSourceSlotExcluding(handler, costB, m2 - s2, b1.id, b2.id,
 					srcA == null ? -1 : srcA.id);
 			if (srcB == null) {
 				// 守卫 4a（对称）：无可用补充源槽 → 撤销
@@ -1114,11 +700,11 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 			if (back > EXACT_N_MAX_RIGHT_CLICKS) {
 				return undoOrSkip(mc, handler);
 			}
-			clickSlot(mc, handler, srcB.id, 0, SlotActionType.PICKUP);
+			FillHelpers.clickSlot(mc, handler, srcB.id, 0, SlotActionType.PICKUP);
 			for (int i = 0; i < back; i++) {
-				clickSlot(mc, handler, srcB.id, 1, SlotActionType.PICKUP);
+				FillHelpers.clickSlot(mc, handler, srcB.id, 1, SlotActionType.PICKUP);
 			}
-			clickSlot(mc, handler, 1, 0, SlotActionType.PICKUP); // 光标 (M2−S2) 并入槽 1 → 槽 1 = M2
+			FillHelpers.clickSlot(mc, handler, 1, 0, SlotActionType.PICKUP); // 光标 (M2−S2) 并入槽 1 → 槽 1 = M2
 		}
 		// ③ 槽 2 canCombine 校验：两槽填满后 updateOffers 重新生成预览（F4）；失败 → 守卫 5 → 撤销
 		if (!slot2.hasStack() || !ItemStack.canCombine(slot2.getStack(), result)) {

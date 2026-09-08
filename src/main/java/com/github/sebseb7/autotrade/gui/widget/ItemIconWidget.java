@@ -50,10 +50,6 @@ public class ItemIconWidget extends WidgetBase {
 		super.postRenderHovered(mouseX, mouseY, selected, ctx);
 	}
 
-	public ItemStack getStack() {
-		return stack;
-	}
-
 	// 左键点击图标时触发回调（交易对页跳转 IO 页）；无回调或非左键时走默认处理
 	@Override
 	protected boolean onMouseClickedImpl(int mouseX, int mouseY, int mouseButton) {

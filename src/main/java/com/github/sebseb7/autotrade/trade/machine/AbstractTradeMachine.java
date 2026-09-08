@@ -3,6 +3,7 @@ package com.github.sebseb7.autotrade.trade.machine;
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.stats.TradeStats;
 import com.github.sebseb7.autotrade.trade.task.Task;
@@ -10,6 +11,7 @@ import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
+import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
@@ -97,14 +99,12 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	/**
 	 * 看门狗强杀当前任务：防御性关闭残留窗口（挡住下一轮交互/开箱）→ 经 {@link #onTaskInterrupted(Task)} 回调 →
 	 * 清空任务放行 tickIdle。 强杀时任务处于中途状态、isInventoryBlocked 等标志不可信，基类回调不设置/解除背包满暂停；
-	 * STATIC/MOVING 模式经各自私有 handleTaskEnded 统一标记任务结束（见后续任务），本基类不区分正常完成与强杀。
+	 * STATIC/MOVING 模式经其覆写的 onTaskInterrupted → 基类 handleTaskInterrupted 骨架统一标记任务结束
+	 * （见 handleTaskInterrupted），本基类不区分正常完成与强杀。
 	 */
 	private void forceAbortTask(MinecraftClient mc) {
 		// 残留窗口会挡住下一轮交互/开箱，先防御性关闭（与各任务 CLOSING 状态行为一致）
-		if (mc.currentScreen instanceof MerchantScreen || mc.currentScreen instanceof GenericContainerScreen
-				|| mc.currentScreen instanceof ShulkerBoxScreen) {
-			mc.currentScreen.close();
-		}
+		closeResidualScreen(mc);
 		AutoTrade.logger.warn("[ModeMachine] 任务运行超过 {} tick 未完成，看门狗强杀 ({}, state={})", taskTicks,
 				currentTask.getClass().getSimpleName(), getStateName());
 		onTaskInterrupted(currentTask);
@@ -112,6 +112,44 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		containerIOScheduler.invalidate();
 		currentTask = null;
 		taskTicks = 0;
+	}
+
+	/**
+	 * 防御性关闭残留的交互窗口（交易/通用容器/潜影盒）：命中即 close 并返回 true，否则返回 false。 残留窗口会挡住下一轮交互/开箱——
+	 * 看门狗强杀（{@link #forceAbortTask}）与 MOVING 让位路径的兜底关闭共用（HandledScreen.close()
+	 * 完整链路： 发 CloseHandledScreenC2SPacket + setScreen(null)；服务端
+	 * onCloseHandledScreen 不校验 syncId 无条件关 handler——1.20.4 源码核实，等效阻止窗口出现）。
+	 *
+	 * @param mc
+	 *            Minecraft 客户端实例
+	 * @return true = 检测到残留窗口并已关闭
+	 */
+	protected static boolean closeResidualScreen(MinecraftClient mc) {
+		if (mc.currentScreen instanceof MerchantScreen || mc.currentScreen instanceof GenericContainerScreen
+				|| mc.currentScreen instanceof ShulkerBoxScreen) {
+			mc.currentScreen.close();
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * 9.8 村民交易缓存判定：TTL 内已知不匹配 → 返回 true（并记录一次实际跳过，HUD 跳过计数）； 未知/命中/TTL 到期（需开窗复查）→
+	 * 返回 false。 三个模式的村民派发漏斗共用本方法，一处判定全局一致（跳过语义与 recordSkip 计数不变）。
+	 *
+	 * @param id
+	 *            村民 UUID
+	 * @param worldTime
+	 *            当前世界 tick（缓存 TTL 判定基准）
+	 * @return true = 缓存已知不匹配，应跳过该村民（已计跳过数）
+	 */
+	protected final boolean isCachedMiss(UUID id, long worldTime) {
+		// 缓存命中（TTL 内已知不匹配）→ 记录一次实际跳过并返回 true
+		if (VillagerTradeCache.isNotMatch(id, worldTime)) {
+			VillagerTradeCache.recordSkip();
+			return true;
+		}
+		return false;
 	}
 
 	/**
@@ -169,6 +207,82 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	 */
 	protected void onTaskInterrupted(Task task) {
 		// 默认无操作：中断时任务状态不可信，基类不触碰背包满暂停
+	}
+
+	/**
+	 * 结果是否为「背包空间不足失败」（blocked 判定谓词）：任务结束骨架的短路判断与子类日志重算共用同一谓词， 保证两处判定 同源一致（失败结果 +
+	 * reason == INVENTORY_BLOCKED）。
+	 *
+	 * @param result
+	 *            任务最后一次 tick 返回的结果
+	 * @return true = 会话因背包空间不足失败结束
+	 */
+	protected static boolean isInventoryBlockedResult(TaskResult result) {
+		return result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED;
+	}
+
+	/**
+	 * 任务结束统一收尾骨架（protected final）：由子类覆写的 onTaskEnded 内先调用本方法，再交 super.onTaskEnded
+	 * 同步基类暂停状态。 按任务类型分派到最小钩子——交易会话：让位短路（onVillagerYielded，默认空）→ 背包满短路 →
+	 * markVillagerProcessed 钩子；容器 IO：onContainerTaskEnded 钩子。 本方法为 final：子类只能经钩子
+	 * 定制收尾行为，不能改写分派骨架本身。
+	 *
+	 * @param task
+	 *            已结束的任务（TradeTask 或 ContainerIOTask）
+	 * @param result
+	 *            任务最后一次 tick 返回的结果
+	 */
+	protected final void handleTaskEnded(Task task, TaskResult result) {
+		if (task instanceof TradeTask ts) {
+			if (ts.isYielded()) {
+				// 安全点让位：不标记已处理、饥饿不 +1、seenKeys 保留（被让位 ≠ 错过；仅 MOVING 会 yield）
+				onVillagerYielded(ts);
+			} else if (!isInventoryBlockedResult(result)) {
+				// 标记该村民已处理（完成/超时统一；背包满失败短路不标记——保留记录，背包清空后下轮重试）
+				markVillagerProcessed(ts.getVillagerUuid());
+			}
+		} else if (task instanceof ContainerIOTask op) {
+			onContainerTaskEnded(op, result);
+		}
+	}
+
+	/**
+	 * 任务被看门狗强杀统一收尾骨架（protected final）：由子类覆写的 onTaskInterrupted 内先调用本方法，再交
+	 * super.onTaskInterrupted。 分支与 handleTaskEnded 同构——交易会话：让位短路 → 背包满短路（强杀无结果，改用任务
+	 * 访问器 isInventoryBlocked 判断，与正常结束的 result 判断等价）→ markVillagerProcessed 钩子；容器
+	 * IO：走独立钩子 onContainerTaskInterrupted（中断路径无 TaskResult 可判失败原因，故钩子无结果参数）。
+	 *
+	 * @param task
+	 *            被强杀的任务（TradeTask 或 ContainerIOTask）
+	 */
+	protected final void handleTaskInterrupted(Task task) {
+		if (task instanceof TradeTask ts) {
+			if (ts.isYielded()) {
+				// 安全点让位后被强杀：不得误标已处理、饥饿不 +1（与 handleTaskEnded 的让位分支等价）
+				onVillagerYielded(ts);
+			} else if (!ts.isInventoryBlocked()) {
+				// 标记该村民已处理（强杀不标记则村民永远"未处理"，看门狗每轮重派 → 无限循环活锁）
+				markVillagerProcessed(ts.getVillagerUuid());
+			}
+		} else if (task instanceof ContainerIOTask op) {
+			onContainerTaskInterrupted(op);
+		}
+	}
+
+	/** 让位钩子（默认空，非 abstract）：交易会话因安全点让位提前结束（正常结束与强杀路径均经骨架调用）； 仅 MOVING 注入检查器会让位 */
+	protected void onVillagerYielded(TradeTask task) {
+	}
+
+	/** 已处理标记钩子（默认空，非 abstract）：非让位、非背包满短路的会话结束时经骨架调用，参数为会话锁定的村民 UUID */
+	protected void markVillagerProcessed(UUID villagerId) {
+	}
+
+	/** 容器 IO 正常结束钩子（默认空，非 abstract）：任意结果（成功/失败）均调用，子类据此设置冷却/清理记账 */
+	protected void onContainerTaskEnded(ContainerIOTask op, TaskResult result) {
+	}
+
+	/** 容器 IO 被看门狗强杀钩子（默认空，非 abstract）：与正常结束钩子独立——中断路径无 TaskResult，子类按需清理 */
+	protected void onContainerTaskInterrupted(ContainerIOTask op) {
 	}
 
 	/**

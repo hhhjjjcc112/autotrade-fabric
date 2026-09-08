@@ -5,7 +5,7 @@ import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.executor.TradeExecutor;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.helper.VillagerInteractHelper;
-import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.CompetitorChecker;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
 import java.util.UUID;

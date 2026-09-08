@@ -1,6 +1,6 @@
-package com.github.sebseb7.autotrade.trade.mode.movingmode;
+package com.github.sebseb7.autotrade.trade.mode;
 
-import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.CompetitorChecker;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.UUID;
 

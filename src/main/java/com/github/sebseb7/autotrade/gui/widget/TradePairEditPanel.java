@@ -18,6 +18,7 @@ import net.minecraft.item.ItemStack;
 // 交易对行内编辑面板：维护 give/give2/get/limit/note 五个配置项与自动保存、
 // 主手抓取物品逻辑，保存走 TradePairCache.update（由旧独立编辑屏的编辑逻辑抽取而来）。
 // 宿主（独立屏或未来的选项卡）负责渲染 getConfigs() 与抓取按钮，并通过 onSaved 回调刷新视图。
+// 面板组件（非 WidgetBase 子类），位于 widget 包因属于列表行编辑 UI 家族
 public class TradePairEditPanel {
 	private final int pairIndex;
 	private final TradePair currentPair;
@@ -32,19 +33,11 @@ public class TradePairEditPanel {
 	private ConfigInteger limitConfig;
 	private ConfigString noteConfig;
 
-	public TradePairEditPanel(int pairIndex, TradePair currentPair) {
-		this(pairIndex, currentPair, null, null);
-	}
-
 	public TradePairEditPanel(int pairIndex, TradePair currentPair, Runnable onSaved, Runnable applyPendingHook) {
 		this.pairIndex = pairIndex;
 		this.currentPair = currentPair;
 		this.onSaved = onSaved;
 		this.applyPendingHook = applyPendingHook;
-	}
-
-	public int getPairIndex() {
-		return pairIndex;
 	}
 
 	// 从当前交易对数据重建五个配置项并挂自动保存（等价于原独立编辑屏 initGui 中的创建段；

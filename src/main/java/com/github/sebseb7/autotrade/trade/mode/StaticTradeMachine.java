@@ -1,9 +1,10 @@
-package com.github.sebseb7.autotrade.trade.mode.staticmode;
+package com.github.sebseb7.autotrade.trade.mode;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
@@ -31,7 +32,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 	private int targetIndex = 0;
 	/** 本轮名单是否已扫描（冷却期间置 false，冷却结束重新扫描建名单） */
 	private boolean scanned = false;
-	/** 当前派发给会话的目标村民 UUID（任务结束钩子标记已处理用（完成与强杀统一）） */
+	/** 当前派发给会话的目标村民 UUID（会话结束日志显示用；标记已处理经基类骨架钩子以会话锁定的 UUID 完成，与之一致） */
 	private UUID dispatchedVillagerId = null;
 
 	private int tradeCooldown = 0;
@@ -43,55 +44,57 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 任务正常结束回调：先经 handleTaskEnded 统一标记已处理/设置冷却，再交基类同步背包满暂停 （会话 blocked → 暂停交易；输出 IO
-	 * 完成 → 解除暂停）。
+	 * 任务正常结束回调：先经基类任务结束骨架统一标记已处理/设置冷却，再输出会话日志（仅交易会话）， 最后交基类同步背包满暂停 （会话 blocked →
+	 * 暂停交易；输出 IO 完成 → 解除暂停）。
 	 */
 	@Override
 	protected void onTaskEnded(Task task, TaskResult result) {
-		// 正常结束收尾：统一标记已处理/设置冷却
+		// 正常结束收尾：骨架按任务类型分派——村民会话 → markVillagerProcessed；容器 IO → onContainerTaskEnded
 		handleTaskEnded(task, result);
+		if (task instanceof TradeTask) {
+			// 会话结束日志仅 TradeTask 分支输出（容器 IO 结束不产生该行——与重构前一致）；
+			// blocked 值用基类谓词重算（与骨架内短路判断同源）
+			AutoTrade.logger.info("[StaticMode] Trade session done (villager={}, blocked={})", dispatchedVillagerId,
+					isInventoryBlockedResult(result));
+		}
 		// 基类同步背包满暂停状态（会话 blocked → 暂停交易；输出 IO 完成 → 解除暂停）
 		super.onTaskEnded(task, result);
 	}
 
 	/**
-	 * 任务被看门狗强杀（forceAbortTask）时的回调：与正常结束统一标记已处理—— 防止卡死村民反复重派的活锁
-	 * （强杀后不清除处理记录，则下一轮扫描会跳过该村民，不会无限重派同一卡死村民）。
+	 * 任务被看门狗强杀（forceAbortTask）时的回调：先经基类强杀骨架统一标记已处理，再输出会话日志（仅交易会话）， 最后交基类——
+	 * 防止卡死村民反复重派的活锁（强杀后不清除处理记录，则下一轮扫描会跳过该村民，不会无限重派同一卡死村民）。
 	 */
 	@Override
 	protected void onTaskInterrupted(Task task) {
+		// 骨架分派：村民会话 → markVillagerProcessed（背包满短路）；容器 IO →
+		// onContainerTaskInterrupted（设置冷却）
+		handleTaskInterrupted(task);
 		if (task instanceof TradeTask ts) {
-			// 强杀无结果，用保留的 isInventoryBlocked 访问器判断（与正常结束的 result 判断等价）
-			if (!ts.isInventoryBlocked()) {
-				processedVillagers.add(dispatchedVillagerId);
-			}
+			// 会话结束日志仅 TradeTask 分支输出（容器 IO 强杀不产生该行——与重构前一致）；
+			// 强杀无结果，blocked 用保留的 isInventoryBlocked 访问器判断（与正常结束的 result 判断等价）
 			AutoTrade.logger.info("[StaticMode] Trade session done (villager={}, blocked={})", dispatchedVillagerId,
 					ts.isInventoryBlocked());
-		} else {
-			// 容器 IO 结束 → 设置 IO 间隔冷却
-			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
 		}
 		super.onTaskInterrupted(task);
 	}
 
-	/**
-	 * 任务正常结束统一收尾（onTaskEnded 使用）：标记已处理/设置冷却。
-	 */
-	private void handleTaskEnded(Task task, TaskResult result) {
-		if (task instanceof TradeTask) {
-			// 背包满不标记（保留现状 inventoryBlocked 时不 add 的短路语义：保留记录，背包清空后下轮重试该村民）；
-			// 否则标记已处理（完成与超时路径均在此统一标记）。
-			// 交易冷却由 tickIdle 在「本轮名单耗尽」时统一设置（单村民派发制，会话间无冷却）
-			boolean blocked = result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED;
-			if (!blocked) {
-				processedVillagers.add(dispatchedVillagerId);
-			}
-			AutoTrade.logger.info("[StaticMode] Trade session done (villager={}, blocked={})", dispatchedVillagerId,
-					blocked);
-		} else {
-			// 容器 IO 结束 → 设置 IO 间隔冷却
-			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
-		}
+	/** 已处理标记钩子（基类骨架调用）：加入本轮已处理名单 */
+	@Override
+	protected void markVillagerProcessed(UUID villagerId) {
+		processedVillagers.add(villagerId);
+	}
+
+	/** 容器 IO 正常结束钩子（基类骨架调用）：设置 IO 间隔冷却（任意结果均设，与重构前一致） */
+	@Override
+	protected void onContainerTaskEnded(ContainerIOTask op, TaskResult result) {
+		containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
+	}
+
+	/** 容器 IO 被看门狗强杀钩子（基类骨架调用）：同样设置 IO 间隔冷却（看门狗强杀后不立即重试同一容器） */
+	@Override
+	protected void onContainerTaskInterrupted(ContainerIOTask op) {
+		containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
 	}
 
 	@Override
@@ -122,8 +125,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 				UUID id = targetVillagers.get(targetIndex++);
 				if (!processedVillagers.contains(id)) {
 					// 9.8 缓存：TTL 内已知不匹配 → 跳过不开窗（不标记已处理——缓存为唯一事实源，TTL 到期自动复查）
-					if (VillagerTradeCache.isNotMatch(id, mc.world.getTime())) {
-						VillagerTradeCache.recordSkip();
+					if (isCachedMiss(id, mc.world.getTime())) {
 						continue;
 					}
 					Entity e = VillagerHelper.findByUuid(mc, id);
@@ -195,7 +197,7 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		return containerIOCooldown;
 	}
 
-	/** 返回当前派发的目标村民 UUID（HUD 只读展示用；无调用者，HUD 预留） */
+	/** 返回当前派发的目标村民 UUID（HUD 只读展示用；HUD 预留，当前无调用者） */
 	public UUID getDispatchedVillagerId() {
 		return dispatchedVillagerId;
 	}

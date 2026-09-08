@@ -77,11 +77,6 @@ public class ItemIOTabList extends WidgetListConfigOptions {
 		this.browserEntryHeight = ENTRY_HEIGHT;
 	}
 
-	/** 本选项卡方向（供外部按方向过滤等使用） */
-	public boolean isInput() {
-		return isInput;
-	}
-
 	/**
 	 * 刷新列表行（提交回调用）：与基类 refreshEntries 不同，本方法不重建列表对象本身，只重建行控件
 	 * （派生数据可能变化：排序/占位/统计）。重建前后记录并恢复聚焦文本框，避免提交 （Enter/失焦/Tab/按钮）后焦点丢失（D2 缺陷修复核心）。

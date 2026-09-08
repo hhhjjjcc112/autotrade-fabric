@@ -2,7 +2,7 @@ package com.github.sebseb7.autotrade.trade.task;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.trade.mode.voidmode.ReturnTriggerType;
+import com.github.sebseb7.autotrade.trade.mode.ReturnTriggerType;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.ButtonBlock;
 import net.minecraft.block.LeverBlock;

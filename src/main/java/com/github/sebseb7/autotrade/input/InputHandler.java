@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.handler;
+package com.github.sebseb7.autotrade.input;
 
 import com.github.sebseb7.autotrade.Reference;
 import com.github.sebseb7.autotrade.config.Hotkeys;

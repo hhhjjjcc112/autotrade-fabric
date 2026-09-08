@@ -15,9 +15,10 @@ public class TradeExecutor {
 	public TradeExecutor() {
 		// 按配置选择执行策略：USE（默认，直接读 uses，依赖本地点击模拟保真度）/ OUTPUT_SLOT（可选，快照推导不读
 		// uses）；配置改动于下个会话（TradeTask 新建 executor 时）生效
-		this.strategy = ((ExecutorMode) Configs.Generic.TRADE_EXECUTOR_MODE.getOptionListValue()) == ExecutorMode.USE
-				? new UseBasedExecutorStrategy()
-				: new OutputSlotExecutorStrategy();
+		this.strategy = ((TradeExecutorMode) Configs.Generic.TRADE_EXECUTOR_MODE
+				.getOptionListValue()) == TradeExecutorMode.USE
+						? new UseBasedExecutorStrategy()
+						: new OutputSlotExecutorStrategy();
 	}
 
 	/**

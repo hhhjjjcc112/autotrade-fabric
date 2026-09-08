@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.trade.mode.voidmode;
+package com.github.sebseb7.autotrade.trade.mode;
 
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import java.util.UUID;

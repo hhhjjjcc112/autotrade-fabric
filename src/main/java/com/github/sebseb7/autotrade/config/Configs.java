@@ -5,9 +5,9 @@ import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
 import com.github.sebseb7.autotrade.config.options.ConfigJsonArray;
 import com.github.sebseb7.autotrade.config.options.ConfigOptionListValue;
 import com.github.sebseb7.autotrade.render.HudPosition;
-import com.github.sebseb7.autotrade.trade.executor.ExecutorMode;
+import com.github.sebseb7.autotrade.trade.executor.TradeExecutorMode;
+import com.github.sebseb7.autotrade.trade.mode.ReturnTriggerType;
 import com.github.sebseb7.autotrade.trade.mode.TradeMode;
-import com.github.sebseb7.autotrade.trade.mode.voidmode.ReturnTriggerType;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -32,7 +32,7 @@ public class Configs implements IConfigHandler {
 		public static final ConfigOptionListValue TRADE_MODE = new ConfigOptionListValue("tradeMode", TradeMode.VOID,
 				"Trade mode: Static Trade, Moving Trade, Void Trade");
 		public static final ConfigOptionListValue TRADE_EXECUTOR_MODE = new ConfigOptionListValue("tradeExecutorMode",
-				ExecutorMode.USE,
+				TradeExecutorMode.USE,
 				"Trade executor strategy: USE (default, reads offer.getUses() directly; simpler but relies on the local click simulation) or OUTPUT_SLOT (does not read offer uses; snapshot-based remaining)");
 		public static final ConfigInteger VILLAGER_SCAN_RANGE = new ConfigInteger("villagerScanRange", 4, 1, 10,
 				"Villager search radius (blocks)");

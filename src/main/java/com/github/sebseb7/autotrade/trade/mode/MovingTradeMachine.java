@@ -1,16 +1,14 @@
-package com.github.sebseb7.autotrade.trade.mode.movingmode;
+package com.github.sebseb7.autotrade.trade.mode;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
-import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.CompetitorChecker;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.ContainerCandidate;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
-import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
-import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
-import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
 import java.util.ArrayList;
@@ -22,9 +20,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
-import net.minecraft.client.gui.screen.ingame.MerchantScreen;
-import net.minecraft.client.gui.screen.ingame.ShulkerBoxScreen;
 import net.minecraft.entity.Entity;
 
 /**
@@ -73,7 +68,9 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	 * 无重复、contains 是每 tick 热路径（候选收集），集合无序不影响后续显式距离排序（tie-break 用）
 	 */
 	private final Set<UUID> processedVillagers = new HashSet<>();
-	/** 当前派发给会话的目标村民 UUID（任务结束钩子标记已处理用，完成与强杀统一；null = 未派发） */
+	/**
+	 * 当前派发给会话的目标村民 UUID（安全点让位检查器基准与派发记录；标记已处理由基类骨架钩子以会话锁定的 UUID 完成，与之一致；null = 未派发）
+	 */
 	private UUID dispatchedVillagerId;
 	/**
 	 * 当前派发给会话的目标容器条目 ioKey（容器检查器查自身饥饿用；与 dispatchedVillagerId
@@ -174,74 +171,58 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 任务正常结束回调：先经 handleTaskEnded 统一标记村民已处理/容器清饥饿/CONFIG 冷却记录，再交基类同步背包满暂停/传送超时告警/输出
-	 * IO 解除暂停。
+	 * 任务正常结束回调：先经基类任务结束骨架统一标记村民已处理/容器清饥饿/CONFIG 冷却记录，再交基类同步背包满暂停/传送超时告警/输出 IO 解除暂停。
 	 */
 	@Override
 	protected void onTaskEnded(Task task, TaskResult result) {
+		// 正常结束收尾：骨架按任务类型分派——村民会话 → markVillagerProcessed；容器 IO → onContainerTaskEnded
 		handleTaskEnded(task, result);
 		super.onTaskEnded(task, result);
 	}
 
 	/**
-	 * 任务被看门狗强杀时的回调：强杀与完成统一标记/清饥饿——防卡死村民每 TASK_TIMEOUT 周期被重派的活锁
-	 * （强杀不标记则村民永远"未处理"，看门狗每轮重派 → 无限循环）；随后交基类（基类中断回调默认无操作）。 强杀路径无结果可判
+	 * 任务被看门狗强杀时的回调：先经基类强杀骨架统一标记/清饥饿——防卡死村民每 TASK_TIMEOUT 周期被重派的活锁
+	 * （强杀不标记则村民永远"未处理"，看门狗每轮重派 → 无限循环），随后交基类（基类中断回调默认无操作）。 强杀路径无结果可判
 	 * CONFIG，不记录失败冷却（强杀时任务状态不可信）。
 	 */
 	@Override
 	protected void onTaskInterrupted(Task task) {
-		// 强杀路径无结果可用：用任务访问器判断（与现状 handleTaskEnded 强杀路径一致）
-		if (task instanceof TradeTask ts) {
-			if (ts.isYielded()) {
-				// 安全点让位后 CLOSING 阶段被强杀：不得误标已处理、饥饿不 +1（等价 handleTaskEnded 让位分支）
-			} else if (!ts.isInventoryBlocked()) {
-				// 标记该村民已处理并清除饥饿（强杀不标记则村民永远"未处理"，看门狗每轮重派 → 无限循环）；
-				// 背包满不标记（保留现状 inventoryBlocked 短路语义：保留记录，背包清空后由失效清理重试）
-				processedVillagers.add(dispatchedVillagerId);
-				starvation.remove(new VillagerKey(dispatchedVillagerId));
-				seenKeys.remove(new VillagerKey(dispatchedVillagerId));
-				hintedKeys.remove(new VillagerKey(dispatchedVillagerId));
-			}
-		} else if (task instanceof ContainerIOTask op) {
-			// 容器 IO 强杀也清饥饿 + 窗口快照移除——保持现状（无论完成还是强杀均视为该目标已执行一次，
-			// 饥饿记录才不会永不清理，防饿死回归）
-			starvation.remove(new ContainerKey(op.getIntent().ioKey()));
-			seenKeys.remove(new ContainerKey(op.getIntent().ioKey()));
-		}
+		// 骨架按任务类型分派：村民会话 → markVillagerProcessed（让位/背包满短路）；容器 IO →
+		// onContainerTaskInterrupted
+		handleTaskInterrupted(task);
 		super.onTaskInterrupted(task);
 	}
 
+	/** 已处理标记钩子（基类骨架调用）：村民标记已处理并清除饥饿/窗口快照/提示记录（完成与强杀统一走本钩子） */
+	@Override
+	protected void markVillagerProcessed(UUID villagerId) {
+		processedVillagers.add(villagerId);
+		starvation.remove(new VillagerKey(villagerId));
+		seenKeys.remove(new VillagerKey(villagerId));
+		hintedKeys.remove(new VillagerKey(villagerId));
+	}
+
 	/**
-	 * 任务正常结束统一收尾：村民标记已处理并清饥饿 / 容器清饥饿 + CONFIG 失败冷却。 容器 IO 任何结果（含失败）均清饥饿——保持现状
-	 * （无论完成还是失败均视为该目标已执行一次，饥饿记录才不会永不清理，防饿死回归）；CONFIG 失败（目标位置非容器/方块类型不符）
-	 * 额外冷却排除，防失败容器整轮忙循环。
+	 * 容器 IO 正常结束钩子（基类骨架调用）：清饥饿/窗口快照/提示记录（任何结果均清——防饿死回归） + 配置失败容器额外冷却排除 （失败清饥饿后该容器仍
+	 * pending 且 bonus 恒胜出，不冷却则整轮忙循环）
 	 */
-	private void handleTaskEnded(Task task, TaskResult result) {
-		if (task instanceof TradeTask ts) {
-			if (ts.isYielded()) {
-				// 安全点让位：不标记已处理、饥饿不 +1（被让位 ≠ 错过——保持原 hunger 公平参与下次评分；
-				// 旧实现「让位 +1」使 A=2→3 又抢回 B → 自抢/互抢死循环（P1/P2），已废弃）；
-				// seenKeys 保留（目标在范围内不离窗；出范围自然离窗 +1 记错过）
-			} else if (!(result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED)) {
-				// 标记该村民已处理并清除饥饿（完成与超时路径均在此统一标记）；
-				// 背包满失败不标记（等价现状 inventoryBlocked 短路语义：保留记录，背包清空后由失效清理重试）
-				processedVillagers.add(dispatchedVillagerId);
-				starvation.remove(new VillagerKey(dispatchedVillagerId));
-				seenKeys.remove(new VillagerKey(dispatchedVillagerId));
-				hintedKeys.remove(new VillagerKey(dispatchedVillagerId));
-			}
-		} else if (task instanceof ContainerIOTask op) {
-			// 容器 IO 完成 → 清饥饿记录 + 窗口快照移除（任何结果均清；村民选中执行后进 processedVillagers 并显式移除，语义等价）
-			starvation.remove(new ContainerKey(op.getIntent().ioKey()));
-			seenKeys.remove(new ContainerKey(op.getIntent().ioKey()));
-			hintedKeys.remove(new ContainerKey(op.getIntent().ioKey()));
-			// CONFIG 失败 → 冷却排除：失败清饥饿后该容器仍 pending（scanPendingContainers 不校验方块类型）且 bonus
-			// 恒胜出，
-			// 不冷却则整轮忙循环（独占运行位 + 弹窗刷屏）；冷却 CONFIG_FAIL_COOLDOWN tick 到期重试
-			if (result.isFailed() && result.reason() == TaskResult.FailReason.CONFIG) {
-				failedContainerCooldown.put(op.getIntent().containerKey(), lastWorldTick);
-			}
+	@Override
+	protected void onContainerTaskEnded(ContainerIOTask op, TaskResult result) {
+		starvation.remove(new ContainerKey(op.getIntent().ioKey()));
+		seenKeys.remove(new ContainerKey(op.getIntent().ioKey()));
+		hintedKeys.remove(new ContainerKey(op.getIntent().ioKey()));
+		if (result.isFailed() && result.reason() == TaskResult.FailReason.CONFIG) {
+			failedContainerCooldown.put(op.getIntent().containerKey(), lastWorldTick);
 		}
+	}
+
+	/**
+	 * 容器 IO 被看门狗强杀钩子（基类骨架调用）：清饥饿 + 窗口快照移除（仅两键移除——强杀路径无结果，不做失败判定，与重构前一致）
+	 */
+	@Override
+	protected void onContainerTaskInterrupted(ContainerIOTask op) {
+		starvation.remove(new ContainerKey(op.getIntent().ioKey()));
+		seenKeys.remove(new ContainerKey(op.getIntent().ioKey()));
 	}
 
 	/**
@@ -266,12 +247,8 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	protected void tickIdle(MinecraftClient mc) {
 		lastWorldTick = mc.world.getTime();
 		// 残留窗口兜底：让位/异常路径可能遗留「交互在途、窗口晚到」的窗口（任务已结束）→ 检测到即关闭
-		// （HandledScreen.close() 完整链路：发 CloseHandledScreenC2SPacket +
-		// setScreen(null)；服务端
-		// onCloseHandledScreen 不校验 syncId 无条件关 handler——1.20.4 源码核实，等效阻止窗口出现）
-		if (mc.currentScreen instanceof MerchantScreen || mc.currentScreen instanceof GenericContainerScreen
-				|| mc.currentScreen instanceof ShulkerBoxScreen) {
-			mc.currentScreen.close();
+		// （关闭链路说明见 closeResidualScreen——1.20.4 源码核实，等效阻止窗口出现）
+		if (closeResidualScreen(mc)) {
 			AutoTrade.logger.info("[MovingMode] 残留窗口兜底关闭 ({})", mc.currentScreen.getClass().getSimpleName());
 		}
 		// 背包满暂停：期间只做输出优先的容器 IO，不启动交易会话
@@ -410,8 +387,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 				// 记账/饥饿提示/让位检查/候选收集全走本方法，一处过滤全局一致，防饥饿记账与提示被不匹配村民污染）
 				// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
 				// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
-				if (VillagerTradeCache.isNotMatch(e.getUuid(), mc.world.getTime())) {
-					VillagerTradeCache.recordSkip();
+				if (isCachedMiss(e.getUuid(), mc.world.getTime())) {
 					continue;
 				}
 				unprocessedVillagers.add(e);

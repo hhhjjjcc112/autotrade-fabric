@@ -4,7 +4,6 @@ import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
-import com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.CompetitorChecker;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TaskResult.FailReason;
@@ -44,28 +43,25 @@ public class ContainerIOTask extends Task {
 	public record IOIntent(ItemIO io, ItemIOLocation loc, boolean isInput) {
 		/**
 		 * 条目级饥饿记账标识：物品 + 坐标 + 方向（跨条目实例稳定，同容器不同物品独立记账）； 格式单一实现在
-		 * ContainerCandidate，MOVING 饥饿记账依赖
+		 * IoKey/ContainerLocKey，MOVING 饥饿记账依赖
 		 */
 		public String ioKey() {
-			// 委托调度器 ContainerCandidate 的单一实现（ioKey 格式唯一出处，MOVING 饥饿记账依赖其稳定）
-			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, loc,
-					isInput, 0).ioKey();
+			return new IoKey(io.getItem(), ContainerLocKey.from(loc, isInput)).format();
 		}
 
 		/**
-		 * 容器身份键（坐标+方向）：L2 让位检查器排除同容器条目、CONFIG 失败冷却用； 委托 ContainerCandidate 单一实现
-		 * （直接传值不解析 ioKey 字符串——物品编码为 Gson JSON，NBT 可含任意字符，分隔符解析不可靠）
+		 * 容器身份键（坐标+方向）：L2 让位检查器排除同容器条目、CONFIG 失败冷却用； 格式单一实现在 ContainerLocKey （直接传值不解析
+		 * ioKey 字符串——物品编码为 Gson JSON，NBT 可含任意字符，分隔符解析不可靠）
 		 */
 		public String containerKey() {
-			return new com.github.sebseb7.autotrade.trade.machine.ContainerIOScheduler.ContainerCandidate(io, loc,
-					isInput, 0).containerKey();
+			return ContainerLocKey.from(loc, isInput).format();
 		}
 	}
 
 	private State state = State.OPENING;
 	private final IOIntent intent;
 	/** 安全点让位检查器（MOVING 注入；null = 不检查，STATIC/VOID 任务无让位检查点） */
-	private final CompetitorChecker competitorChecker;
+	private final ContainerIOScheduler.CompetitorChecker competitorChecker;
 	/** 本次会话是否因安全点让位提前结束（防重入守卫：yielded 后不再重复触发让位检查——竞争者持续存在时任务卡到看门狗强杀） */
 	private boolean yielded = false;
 	private int containerTimeout = 0;
@@ -77,7 +73,7 @@ public class ContainerIOTask extends Task {
 	}
 
 	/** 带让位检查器的构造（MOVING 注入；检查点见 tick() 入口——每 tick 一次，覆盖等待窗口/搬运循环全部状态） */
-	public ContainerIOTask(IOIntent intent, CompetitorChecker competitorChecker) {
+	public ContainerIOTask(IOIntent intent, ContainerIOScheduler.CompetitorChecker competitorChecker) {
 		this.intent = intent;
 		this.competitorChecker = competitorChecker;
 		// 输入操作按条目单次取放数量转移，输出操作一次性清空（OUTPUT_MOVE_CAP 上限）

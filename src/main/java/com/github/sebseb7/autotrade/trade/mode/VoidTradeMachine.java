@@ -1,11 +1,10 @@
-package com.github.sebseb7.autotrade.trade.mode.voidmode;
+package com.github.sebseb7.autotrade.trade.mode;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
-import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
@@ -72,8 +71,7 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 			// 9.8 缓存：TTL 内已知不匹配 → 跳过取下一村民（全不匹配时自然落空，不产生忙循环）
 			// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
 			// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
-			if (VillagerTradeCache.isNotMatch(e.getUuid(), mc.world.getTime())) {
-				VillagerTradeCache.recordSkip();
+			if (isCachedMiss(e.getUuid(), mc.world.getTime())) {
 				continue;
 			}
 			setTaskIfEmpty(new VoidTradeTask(e.getUuid()));
@@ -147,8 +145,8 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 	}
 
 	// 遍历全部 ItemIO 条目的位置记录，检查触发坐标是否与任一条启用记录容器坐标重叠（决策 4；空列表 = 无冲突）。
-	// 按维判定：仅统计启用记录（行级 io.isEnabled() 且记录级
-	// loc.isEnabled()——禁用即「我确认不需要这个容器」，禁用后冲突提示消失）；
+	// 按维判定：仅统计启用记录（行级 io.isEnabled() 且记录级 loc.isEnabled()——与 trade/io/ 的
+	// ContainerFilters 共用谓词语义一致，但该类包私有跨包不可引用，此处保留独立判定路径）；
 	// 同坐标 且（记录维度为空 = 任意维度，或与回程维度相同；回程维度空串时视为与任意记录同维）→ 冲突
 	private boolean hasTriggerPosConflict() {
 		BlockPos pos = parseReturnPos();
@@ -158,18 +156,26 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		String returnDim = Configs.Void.VOID_RETURN_DIM.getStringValue();
 		// 缓存访问器：仅遍历读取坐标，不改动条目
 		for (ItemIO io : ItemIOCache.getAll()) {
-			if (!io.isEnabled())
-				continue; // 行级禁用：不参与冲突判定
 			for (ItemIOLocation loc : io.getLocations()) {
-				if (!loc.isEnabled())
-					continue; // 记录级禁用：不参与冲突判定
-				if (loc.getX() == pos.getX() && loc.getY() == pos.getY() && loc.getZ() == pos.getZ()
-						&& (loc.getDimension().isEmpty() || returnDim.isEmpty()
-								|| loc.getDimension().equals(returnDim)))
+				// 行级/记录级启用合取：禁用即「我确认不需要这个容器」，禁用后冲突提示消失
+				if (!io.isEnabled() || !loc.isEnabled())
+					continue;
+				// 同坐标 + 按维关系命中（三方维度关系见 isTriggerPosOverlap）→ 冲突
+				if (isTriggerPosOverlap(loc, pos, returnDim))
 					return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * 位置记录与回程触发坐标是否重叠：同坐标 且（记录维度空 = 任意维度，或与回程维度相同；回程维度空串时视为与任意记录同维）。 注意：这是回程触发坐标与
+	 * IO 容器记录间的三方维度关系（记录维度 vs 回程维度，任一方空串 = 不设限）， 与扫描的「记录维度 vs
+	 * 玩家当前维度」两方过滤语义不同——本助手仅供冲突判定，禁止并入共享过滤谓词。
+	 */
+	private static boolean isTriggerPosOverlap(ItemIOLocation loc, BlockPos pos, String returnDim) {
+		return loc.getX() == pos.getX() && loc.getY() == pos.getY() && loc.getZ() == pos.getZ()
+				&& (loc.getDimension().isEmpty() || returnDim.isEmpty() || loc.getDimension().equals(returnDim));
 	}
 
 	@Override

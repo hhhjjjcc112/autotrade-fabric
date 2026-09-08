@@ -4,7 +4,7 @@ import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 
-/** 容器 IO 纯工具（距离计算 + 当前维度）；调度决策已上移 trade/machine/ContainerIOScheduler */
+/** 容器 IO 纯工具（距离计算 + 当前维度）；调度决策集中在 trade/io/ContainerIOScheduler */
 public final class ContainerIOHelper {
 
 	/** 计算位置记录坐标到玩家的距离（玩家缺失时返回最大值，调用方按不可达处理） */

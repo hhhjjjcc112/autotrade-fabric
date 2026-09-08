@@ -7,14 +7,12 @@ import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase.ConfigOptionWrapper;
 import fi.dy.masa.malilib.gui.GuiTextFieldGeneric;
-import fi.dy.masa.malilib.gui.LeftRight;
 import fi.dy.masa.malilib.gui.button.ButtonGeneric;
 import fi.dy.masa.malilib.gui.interfaces.IKeybindConfigGui;
 import fi.dy.masa.malilib.gui.widgets.WidgetBase;
 import fi.dy.masa.malilib.gui.widgets.WidgetConfigOption;
 import fi.dy.masa.malilib.gui.widgets.WidgetListConfigOptionsBase;
 import fi.dy.masa.malilib.gui.wrappers.TextFieldWrapper;
-import fi.dy.masa.malilib.render.RenderUtils;
 import fi.dy.masa.malilib.util.KeyCodes;
 import fi.dy.masa.malilib.util.StringUtils;
 import java.util.ArrayList;
@@ -51,9 +49,12 @@ import net.minecraft.util.math.BlockPos;
  * </p>
  */
 public abstract class ItemIOBaseWidget extends WidgetConfigOption {
-	/** 头部行高（状态文本/icon/统计/行级开关/数量块/添加按钮） */
+	/**
+	 * 头部行高（状态文本/icon/统计/行级开关/数量块/添加按钮）；与交易对列表行高
+	 * TradePairListConfigOptions.ENTRY_HEIGHT 同为 20（独立常量，值变更需同步）
+	 */
 	public static final int HEADER_HEIGHT = 20;
-	/** 单条位置记录行高（序号/状态/维度/坐标/抓取/启用禁用/删除） */
+	/** 单条位置记录行高（序号/状态/维度/坐标/抓取/启用禁用/删除）；同上，与 ENTRY_HEIGHT 同为 20 */
 	public static final int RECORD_HEIGHT = 20;
 	/**
 	 * 头部行占位配置名前缀：父列表用 {@code HEADER_NAME_PREFIX + i} 命名占位 ConfigString，
@@ -492,51 +493,32 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	}
 
 	/**
-	 * 抓取模式下的闪动按钮（记录行「保存」按钮与头部行「+ 添加」按钮共用）：文本色按 ~250ms 周期在琥珀/橙之间交替闪动， 其余渲染与
-	 * ButtonGeneric 完全一致（复制其 render 全量逻辑，仅文本色行不同）
+	 * 抓取模式下的闪动按钮（记录行「保存」按钮与头部行「+ 添加」按钮共用）：文本色按 ~250ms 周期在琥珀/橙之间交替闪动。 背景与图标渲染直接沿用父类
+	 * ButtonGeneric.render（各 MC 版本的 malilib 构件自带对应实现：1.20.1 用 widgets.png， 1.20.2+
+	 * 用独立 sprite），此处仅覆写文字绘制入口注入闪动色，故无需任何版本分支。
 	 */
 	protected static class FlashingButton extends ButtonGeneric {
 		FlashingButton(int x, int y, int width, int height, String label) {
 			super(x, y, width, height, label);
 		}
 
-		@Override
-		public void render(int mouseX, int mouseY, boolean selected, DrawContext drawContext) {
-			// 复制 ButtonGeneric.render 全量逻辑，仅文本色行改为闪动色（琥珀 0xFFD070 / 橙 0xFF8A00 交替）
-			if (this.visible) {
-				this.hovered = mouseX >= this.x && mouseY >= this.y && mouseX < this.x + this.width
-						&& mouseY < this.y + this.height;
-				RenderUtils.color(1f, 1f, 1f, 1f);
-				if (this.renderDefaultBackground) {
-					drawContext.drawGuiTexture(this.getTexture(this.hovered), this.x, this.y, this.width, this.height);
-				}
-				if (this.icon != null) {
-					int offset = this.renderDefaultBackground ? 4 : 0;
-					int x = this.alignment == LeftRight.LEFT
-							? this.x + offset
-							: this.x + this.width - this.icon.getWidth() - offset;
-					int y = this.y + (this.height - this.icon.getHeight()) / 2;
-					int u = this.icon.getU() + this.getTextureOffset(this.hovered) * this.icon.getWidth();
-					this.bindTexture(this.icon.getTexture());
-					RenderUtils.drawTexturedRect(x, y, u, this.icon.getV(), this.icon.getWidth(),
-							this.icon.getHeight());
-				}
-				if (org.apache.commons.lang3.StringUtils.isBlank(this.displayString) == false) {
-					int y = this.y + (this.height - 8) / 2;
-					// 闪动文本色：250ms 周期琥珀/橙交替（仅此一行与 ButtonGeneric 不同）
-					int color = (System.currentTimeMillis() / 250) % 2 == 0 ? 0xFFD070 : 0xFF8A00;
-					if (this.textCentered) {
-						this.drawCenteredStringWithShadow(this.x + this.width / 2, y, color, this.displayString,
-								drawContext);
-					} else {
-						int x = this.x + 6;
-						if (this.icon != null && this.alignment == LeftRight.LEFT) {
-							x += this.icon.getWidth() + 2;
-						}
-						this.drawStringWithShadow(x, y, color, this.displayString, drawContext);
-					}
-				}
+		// 闪动文本色：250ms 周期琥珀 0xFFD070 / 橙 0xFF8A00 交替；禁用时沿用父类传入色（灰）
+		private int flashingColor(int baseColor) {
+			if (!this.enabled) {
+				return baseColor;
 			}
+			return (System.currentTimeMillis() / 250) % 2 == 0 ? 0xFFD070 : 0xFF8A00;
+		}
+
+		// 父类 render 经这两个入口绘制全部文字（居中/左对齐各一处），覆写即注入闪动色
+		@Override
+		public void drawStringWithShadow(int x, int y, int color, String text, DrawContext drawContext) {
+			super.drawStringWithShadow(x, y, flashingColor(color), text, drawContext);
+		}
+
+		@Override
+		public void drawCenteredStringWithShadow(int x, int y, int color, String text, DrawContext drawContext) {
+			super.drawCenteredStringWithShadow(x, y, flashingColor(color), text, drawContext);
 		}
 	}
 }

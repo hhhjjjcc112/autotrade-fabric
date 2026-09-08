@@ -10,6 +10,8 @@ import fi.dy.masa.malilib.gui.widgets.WidgetListConfigOptions;
 // 所有组件压缩到一行：内容 + 压缩按钮组，视觉参数沿用 pairlistscreen-layout-refinement 成果；
 // 由旧独立列表屏的嵌套类抽取而来）
 public class TradePairListConfigOptions extends WidgetListConfigOptions {
+	// 单行行高 20（与 ItemIOBaseWidget.HEADER_HEIGHT/RECORD_HEIGHT 同为 20；两处独立常量，
+	// 不强行抽共用，值变更需同步）
 	private static final int ENTRY_HEIGHT = 20;
 
 	public TradePairListConfigOptions(int x, int y, int width, int height, int configWidth, float zLevel,

@@ -1,6 +1,5 @@
-package com.github.sebseb7.autotrade.trade.mode.voidmode;
+package com.github.sebseb7.autotrade.trade.mode;
 
-import com.github.sebseb7.autotrade.trade.mode.TradeMode;
 import fi.dy.masa.malilib.config.IConfigOptionListEntry;
 import fi.dy.masa.malilib.util.StringUtils;
 

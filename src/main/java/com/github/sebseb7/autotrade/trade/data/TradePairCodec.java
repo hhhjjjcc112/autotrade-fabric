@@ -1,8 +1,6 @@
 package com.github.sebseb7.autotrade.trade.data;
 
 import com.github.sebseb7.autotrade.AutoTrade;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -14,7 +12,6 @@ import java.util.List;
 
 /** 交易对 JSON 序列化/反序列化编解码器（缓存与增删改查职责已迁移至 {@link TradePairCache}） */
 public final class TradePairCodec {
-	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 	private static final Type PAIR_LIST_TYPE = new TypeToken<List<TradePairData>>() {
 	}.getType();
 
@@ -75,34 +72,27 @@ public final class TradePairCodec {
 					p.getGiveItem2(), p.getGive2Count(), p.getGetCount(), p.getNote());
 			dataList.add(d);
 		}
-		return GSON.toJson(dataList);
+		return JsonListCodec.toJson(dataList);
 	}
 
 	/** 从 JSON 字符串解析交易对列表；非法数据会被过滤并修复默认值 */
 	public static List<TradePair> fromJson(String json) {
-		if (json == null || json.isBlank())
-			return new ArrayList<>();
-		try {
-			checkLegacyIoConfig(json);
-			List<TradePairData> dataList = GSON.fromJson(json, PAIR_LIST_TYPE);
-			if (dataList == null)
-				return new ArrayList<>();
-			List<TradePair> result = new ArrayList<>();
-			for (TradePairData d : dataList) {
-				if (d.give != null && !d.give.isBlank()) {
-					// 兼容旧配置：give2 缺失时以空串兜底，避免后续 NPE
-					String give2 = d.give2 != null ? d.give2 : "";
-					String note = d.note != null ? d.note : "";
-					TradePair pair = new TradePair(d.give, d.get != null ? d.get : "", d.limit, d.enabled, give2,
-							d.give2Count, d.getCount, note);
-					result.add(pair);
-				}
-			}
-			return result;
-		} catch (Exception e) {
-			AutoTrade.logger.warn("[AutoTrade] Failed to parse trade pair list JSON", e);
-			return new ArrayList<>();
-		}
+		return JsonListCodec.fromJson(json, PAIR_LIST_TYPE, "[AutoTrade] Failed to parse trade pair list JSON",
+				(List<TradePairData> dataList) -> {
+					checkLegacyIoConfig(json);
+					List<TradePair> result = new ArrayList<>();
+					for (TradePairData d : dataList) {
+						if (d.give != null && !d.give.isBlank()) {
+							// 兼容旧配置：give2 缺失时以空串兜底，避免后续 NPE
+							String give2 = d.give2 != null ? d.give2 : "";
+							String note = d.note != null ? d.note : "";
+							TradePair pair = new TradePair(d.give, d.get != null ? d.get : "", d.limit, d.enabled,
+									give2, d.give2Count, d.getCount, note);
+							result.add(pair);
+						}
+					}
+					return result;
+				});
 	}
 
 	/** 检测旧版容器 IO 配置（内嵌于交易对的 input/output/give2Input 字段），命中时进程内只 warn 一次 */

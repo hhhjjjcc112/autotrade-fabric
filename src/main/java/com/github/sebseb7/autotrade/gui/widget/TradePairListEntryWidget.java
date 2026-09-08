@@ -47,13 +47,6 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 
 	// editAction：编辑按钮回调（参数为交易对下标；null = 编辑按钮无操作——选项卡始终注入回调，无回调即死代码路径）
 	// refreshAction：启停/删除保存后的刷新回调（null = 默认重建宿主屏）
-	public TradePairListEntryWidget(int x, int y, int width, int height, int labelWidth, int configWidth,
-			ConfigOptionWrapper wrapper, int listIndex, IKeybindConfigGui host,
-			WidgetListConfigOptionsBase<?, ?> parent, Consumer<Integer> editAction, Runnable refreshAction) {
-		this(x, y, width, height, labelWidth, configWidth, wrapper, listIndex, host, parent, editAction, refreshAction,
-				null);
-	}
-
 	// jumpToIoAction：物品图标点击跳转 IO 页回调（null = 无跳转行为）
 	public TradePairListEntryWidget(int x, int y, int width, int height, int labelWidth, int configWidth,
 			ConfigOptionWrapper wrapper, int listIndex, IKeybindConfigGui host,

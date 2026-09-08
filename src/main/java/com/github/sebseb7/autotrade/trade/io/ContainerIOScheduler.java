@@ -1,4 +1,4 @@
-package com.github.sebseb7.autotrade.trade.machine;
+package com.github.sebseb7.autotrade.trade.io;
 
 import com.github.sebseb7.autotrade.AutoTrade;
 import com.github.sebseb7.autotrade.config.Configs;
@@ -8,8 +8,6 @@ import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.data.TradePair;
 import com.github.sebseb7.autotrade.trade.data.TradePairCache;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -42,13 +40,12 @@ public class ContainerIOScheduler {
 	public record ContainerCandidate(ItemIO io, ItemIOLocation loc, boolean isInput, double distance) {
 		/** 条目级饥饿标识：物品 + 维度/坐标 + 方向（同容器不同物品 = 不同 key，独立记账；键含维度与位置，dim 空 = 空串段，格式稳定） */
 		public String ioKey() {
-			return io.getItem() + "#" + loc.getDimension() + "," + loc.getX() + "," + loc.getY() + "," + loc.getZ()
-					+ "#" + isInput;
+			return new IoKey(io.getItem(), ContainerLocKey.from(loc, isInput)).format();
 		}
 
 		/** 容器身份键（维度+坐标+方向）：L2 检查器排除同容器条目、CONFIG 失败冷却用 */
 		public String containerKey() {
-			return loc.getDimension() + "," + loc.getX() + "," + loc.getY() + "," + loc.getZ() + "#" + isInput;
+			return ContainerLocKey.from(loc, isInput).format();
 		}
 	}
 
@@ -115,25 +112,23 @@ public class ContainerIOScheduler {
 			cachedAtTick = now;
 		}
 		List<ContainerCandidate> result = new ArrayList<>();
-		// 外层循环：条目级过滤（行级总开关 + 活动物品集命中），内层循环：位置记录级过滤（记录开关 + 占位 + 维度 + 距离 + 阈值）
+		// 外层循环：条目级过滤（活动物品集命中；行级总开关在位置循环内随启用合判），
+		// 内层循环：位置记录级过滤（行+记录开关 AND + 占位 + 维度 + 距离 + 阈值）
 		for (ItemIO io : entries) {
-			// 条目级启用开关：禁用的条目不参与任何容器 IO（在方向命中检查之前）
-			if (!io.isEnabled()) {
-				continue;
-			}
 			boolean isInput = io.isInput();
-			// 条目物品必须命中活动物品集：输入条目 ∈ 输入集、输出条目 ∈ 输出集，未命中跳过
+			// 条目物品必须命中活动物品集：输入条目 ∈ 输入集、输出条目 ∈ 输出集，未命中跳过；
+			// 禁用的条目同样先经此处（位置循环内的启用合判会将其全部拦截，结果不变，仅顺序微调）
 			if (isInput ? !inputItems.contains(io.getItem()) : !outputItems.contains(io.getItem())) {
 				continue;
 			}
 			// 内层循环：该条目下每条启用位置记录独立成候选（同一物品多个容器 = 多个候选，各自距离/维度过滤）
 			for (ItemIOLocation loc : io.getLocations()) {
-				// 位置记录级启用开关：关闭的位置不参与容器 IO
-				if (!loc.isEnabled()) {
+				// 行级总开关与记录级开关合判（AND）：任一级关闭即该位置记录不参与容器 IO
+				if (!ContainerFilters.isLocationEnabled(io, loc)) {
 					continue;
 				}
 				// 占位坐标 0 0 0 的位置记录不触发容器 IO
-				if (loc.getX() == 0 && loc.getY() == 0 && loc.getZ() == 0) {
+				if (ContainerFilters.isSentinelZero(loc)) {
 					continue;
 				}
 				// 维度过滤：记录指定维度且与当前维度不符时跳过（空串 = 任意维度，恒通过；currentDimensionId 返回 null 时 equals
