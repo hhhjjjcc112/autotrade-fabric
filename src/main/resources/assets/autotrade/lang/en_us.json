@@ -96,6 +96,13 @@
     "autotrade.gui.config.boolean_on": "ON",
     "autotrade.gui.config.boolean_off": "OFF",
 
+    "autotrade.gui.config.section_core": "§fCore",
+    "autotrade.gui.config.section_scan_timeout": "§fScan & Timeouts",
+    "autotrade.gui.config.section_debug": "§fDebug",
+    "autotrade.gui.config.section_containers": "§fContainers & Cache",
+    "autotrade.gui.config.note_static_only": "Only applies in Static Trade mode",
+    "autotrade.gui.config.note_moving_only": "Only applies in Moving Trade mode",
+
     "autotrade.trademode.static": "§6Static Trade",
     "autotrade.trademode.moving": "§bMoving Trade",
     "autotrade.trademode.void": "§5Void Trade",

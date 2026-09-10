@@ -257,9 +257,24 @@ public class GuiConfigs extends GuiConfigsBase {
 		ConfigGuiTab tab = GuiConfigs.tab;
 
 		switch (tab) {
-			case GENERIC -> configs = Configs.Generic.OPTIONS;
-			case STATIC -> configs = Configs.Static.OPTIONS;
-			case MOVING -> configs = Configs.Moving.OPTIONS;
+			case GENERIC -> {
+				// 通用页：手工构建带分组标题的行列表（分组仅用于 GUI 展示）
+				return getGenericConfigs();
+			}
+			case STATIC -> {
+				// 静止页：顶部插入模式说明行（无 §f 前缀 → 由标签灰化渲染为次级灰）
+				List<ConfigOptionWrapper> wrappers = new ArrayList<>();
+				wrappers.add(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.config.note_static_only")));
+				wrappers.addAll(ConfigOptionWrapper.createFor(Configs.Static.OPTIONS));
+				return wrappers;
+			}
+			case MOVING -> {
+				// 移动页：顶部插入模式说明行（无 §f 前缀 → 由标签灰化渲染为次级灰）
+				List<ConfigOptionWrapper> wrappers = new ArrayList<>();
+				wrappers.add(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.config.note_moving_only")));
+				wrappers.addAll(ConfigOptionWrapper.createFor(Configs.Moving.OPTIONS));
+				return wrappers;
+			}
 			case VOID -> configs = Configs.Void.OPTIONS;
 			case HOTKEYS -> configs = Hotkeys.HOTKEY_LIST;
 			case TRADE_PAIRS -> {
@@ -307,6 +322,29 @@ public class GuiConfigs extends GuiConfigsBase {
 				label += " " + StringUtils.translate("autotrade.gui.pair_list.limit_prefix", p.getGetCount());
 			configs.add(new ConfigOptionWrapper(new ConfigString("pair_" + i, label, "")));
 		}
+		return configs;
+	}
+
+	// 通用页配置行：按分组在每组前插入白色小节标题（文本自带 §f 前缀 → 保持白色；标题行不计入标签列宽），
+	// 组内与组间顺序严格保持 Configs.Generic.OPTIONS 原顺序；仅 GUI 分组展示，不改变配置定义与保存结构
+	private List<ConfigOptionWrapper> getGenericConfigs() {
+		List<ConfigOptionWrapper> configs = new ArrayList<>();
+		// 核心：总开关、交易模式、执行策略
+		configs.add(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.config.section_core")));
+		configs.addAll(ConfigOptionWrapper.createFor(ImmutableList.<IConfigBase>of(Configs.Generic.ENABLED,
+				Configs.Generic.TRADE_MODE, Configs.Generic.TRADE_EXECUTOR_MODE)));
+		// 扫描与超时：村民扫描范围、界面打开超时、任务超时
+		configs.add(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.config.section_scan_timeout")));
+		configs.addAll(ConfigOptionWrapper.createFor(ImmutableList.<IConfigBase>of(Configs.Generic.VILLAGER_SCAN_RANGE,
+				Configs.Generic.OPEN_TIMEOUT, Configs.Generic.TASK_TIMEOUT)));
+		// 调试：调试 HUD 开关与位置
+		configs.add(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.config.section_debug")));
+		configs.addAll(ConfigOptionWrapper.createFor(
+				ImmutableList.<IConfigBase>of(Configs.Generic.DEBUG_HUD, Configs.Generic.DEBUG_HUD_POSITION)));
+		// 容器与缓存：空闲扫描间隔、容器距离、搬运上限、交易缓存 TTL
+		configs.add(new ConfigOptionWrapper(StringUtils.translate("autotrade.gui.config.section_containers")));
+		configs.addAll(ConfigOptionWrapper.createFor(ImmutableList.<IConfigBase>of(Configs.Generic.IDLE_SCAN_INTERVAL,
+				Configs.Generic.CONTAINER_REACH, Configs.Generic.OUTPUT_MOVE_CAP, Configs.Generic.TRADE_CACHE_TTL)));
 		return configs;
 	}
 

@@ -96,6 +96,13 @@
     "autotrade.gui.config.boolean_on": "开",
     "autotrade.gui.config.boolean_off": "关",
 
+    "autotrade.gui.config.section_core": "§f核心",
+    "autotrade.gui.config.section_scan_timeout": "§f扫描与超时",
+    "autotrade.gui.config.section_debug": "§f调试",
+    "autotrade.gui.config.section_containers": "§f容器与缓存",
+    "autotrade.gui.config.note_static_only": "以下设置仅在静止交易模式下生效",
+    "autotrade.gui.config.note_moving_only": "以下设置仅在移动交易模式下生效",
+
     "autotrade.trademode.static": "§6静止交易",
     "autotrade.trademode.moving": "§b移动交易",
     "autotrade.trademode.void": "§5虚空交易",
