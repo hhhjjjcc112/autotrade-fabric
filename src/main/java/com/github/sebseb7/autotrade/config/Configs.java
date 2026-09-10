@@ -122,7 +122,7 @@ public class Configs implements IConfigHandler {
 		public static final ConfigDimension VOID_RETURN_DIM = new ConfigDimension("voidReturnDim", "",
 				"Dimension (registry id) where the void return trigger block is located, e.g. minecraft:overworld. Empty = any dimension");
 		public static final ConfigBoolean VOID_RETURN_STRICT = new ConfigBoolean("voidReturnStrict", true,
-				"Strictly validate that the return trigger block type matches the configured type; mismatch is skipped with a warning (default off = only check block existence and distance)");
+				"Strictly validate that the return trigger block type matches the configured type; mismatch is skipped with a warning (default on = strict type check; off = only check block existence and distance)");
 
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(VOID_TELEPORT_TIMEOUT,
 				VOID_UNLOAD_DELAY, VOID_RETURN_TYPE, VOID_RETURN_POS, VOID_RETURN_DIM, VOID_RETURN_STRICT);

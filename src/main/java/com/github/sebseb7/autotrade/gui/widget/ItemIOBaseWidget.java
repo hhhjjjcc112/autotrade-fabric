@@ -108,9 +108,9 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	 */
 	protected static final String STATUS_ON_KEY = "autotrade.gui.item_io.status_on";
 	protected static final String STATUS_OFF_KEY = "autotrade.gui.item_io.status_off";
-	/** 状态文本颜色：启用绿 / 禁用红（样式同交易对列表状态文本） */
+	/** 状态文本颜色：启用绿 / 禁用灰（中性色；红色仅保留给「当前不生效」警告 STATS_INACTIVE_COLOR） */
 	protected static final int STATUS_ON_COLOR = 0xFF55FF55;
-	protected static final int STATUS_OFF_COLOR = 0xFFFF5555;
+	protected static final int STATUS_OFF_COLOR = 0xFFA0A0A0;
 	/** 条目级状态文本悬浮提示翻译键（区分层级：条目级总开关） */
 	protected static final String STATUS_TIP_ENTRY_ON_KEY = "autotrade.gui.item_io.status_tip_entry_on";
 	protected static final String STATUS_TIP_ENTRY_OFF_KEY = "autotrade.gui.item_io.status_tip_entry_off";

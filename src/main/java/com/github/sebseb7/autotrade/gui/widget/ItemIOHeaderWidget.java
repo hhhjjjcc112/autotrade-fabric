@@ -98,7 +98,7 @@ public class ItemIOHeaderWidget extends ItemIOBaseWidget {
 
 		// ── 头部行（固定高 20px）：条目级 [开/关] 状态文本（最左）+ 物品预览图标 + 统计文本（放得下才渲染）；
 		// [阈值]/[每次拿取] 简写标签+输入框块右对齐 ──
-		// 条目级状态文本：仅展示当前启用状态（绿色 [开]/红色 [关]），实际开关操作由「启用/禁用」按钮承担，
+		// 条目级状态文本：仅展示当前启用状态（绿色 [开]/灰色 [关]），实际开关操作由「启用/禁用」按钮承担，
 		// 悬浮显示完整说明（与按钮 hover 共同消除「按钮显示的是状态还是动作」歧义）
 		String statusLabel = StringUtils.translate(entry.isEnabled() ? STATUS_ON_KEY : STATUS_OFF_KEY);
 		int statusW = this.getStringWidth(statusLabel);

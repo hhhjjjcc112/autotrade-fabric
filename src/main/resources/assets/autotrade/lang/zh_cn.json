@@ -41,7 +41,7 @@
     "autotrade.gui.pair_list.remove": "删除",
     "autotrade.gui.pair_list.empty": "§7暂无交易对",
     "autotrade.gui.pair_list.status_on": "§a[开]",
-    "autotrade.gui.pair_list.status_off": "§c[关]",
+    "autotrade.gui.pair_list.status_off": "§7[关]",
     "autotrade.gui.pair_list.trade_number": "#%d",
     "autotrade.gui.pair_list.arrow": "§7→",
     "autotrade.gui.pair_list.limit_prefix": "§6x%d",
@@ -56,7 +56,7 @@
     "autotrade.gui.item_io.stats": "开%d · 关%d",
     "autotrade.gui.item_io.threshold": "阈值",
     "autotrade.gui.item_io.take_amount": "每次拿取",
-    "autotrade.gui.item_io.threshold_short": "阈",
+    "autotrade.gui.item_io.threshold_short": "阈值",
     "autotrade.gui.item_io.take_amount_short": "拿取",
     "autotrade.gui.item_io.threshold_tip_input": "补货阈值（组）：该物品在背包占用 ≤ N 组时从容器取货（1-36）",
     "autotrade.gui.item_io.threshold_tip_output": "清出阈值（组）：该物品在背包占用 ≥ N 组时放入容器（1-36）",
@@ -94,7 +94,7 @@
     "autotrade.trademode.void": "§5虚空交易",
 
     "autotrade.executormode.output_slot": "§7输出槽推导（不读 uses）",
-    "autotrade.executormode.use": "§b直接读取 uses（默认）",
+    "autotrade.executormode.use": "§b直读 uses（默认）",
 
     "autotrade.returntrigger.none": "无（禁用）",
     "autotrade.returntrigger.trapped_chest": "陷阱箱",
