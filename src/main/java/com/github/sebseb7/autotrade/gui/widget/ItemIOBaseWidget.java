@@ -63,6 +63,26 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	 * 仅作用于记录行左侧内容（序号/状态/维度/坐标），右侧按钮组仍锚定行尾不受影响
 	 */
 	public static final int RECORD_INDENT = 12;
+	/** 开/关按钮宽度（头部与记录行共用状态显示按钮） */
+	public static final int BTN_STATE_WIDTH = 36;
+	/** 抓取按钮宽度 */
+	public static final int BTN_GRAB_WIDTH = 36;
+	/** ✕ 删除按钮宽度 */
+	public static final int BTN_DELETE_WIDTH = 22;
+	/** 「+ 添加」按钮宽度 */
+	public static final int BTN_ADD_WIDTH = 50;
+	/** 阈值/拿取数值框宽度（含边框；收缩下限 30） */
+	public static final int FIELD_NUM_WIDTH = 40;
+	/** 间隔：标签 ↔ 输入框 */
+	public static final int GAP_TIGHT = 2;
+	/** 间隔：同组控件（字段之间 / 按钮之间） */
+	public static final int GAP = 4;
+	/** 间隔：子组之间（开关 ↔ 字段组 / 字段区 ↔ 按钮组 / 字段组 ↔ 添加按钮） */
+	public static final int GAP_WIDE = 8;
+	/** 物品图标占位块宽度 */
+	public static final int ICON_BLOCK_WIDTH = 22;
+	/** 行右缘留白（右对齐锚点 = x + width - ROW_RIGHT_MARGIN） */
+	public static final int ROW_RIGHT_MARGIN = 4;
 	/**
 	 * 头部行占位配置名前缀：父列表用 {@code HEADER_NAME_PREFIX + i} 命名占位 ConfigString，
 	 * 本控件据此识别头部行（i = 行数据下标）
