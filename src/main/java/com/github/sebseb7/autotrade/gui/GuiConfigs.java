@@ -169,6 +169,26 @@ public class GuiConfigs extends GuiConfigsBase {
 				TradePairCache.add("minecraft:air", "minecraft:air", 1);
 				this.refreshWithScrollRestore();
 			});
+
+			// 批量启停按钮：仅列表非空时显示（空列表借用同一空态上下文，只有新增按钮有意义）
+			List<TradePair> pairs = TradePairCache.getAll();
+			if (!pairs.isEmpty()) {
+				// 全部启用：把每个交易对统一写为启用态后重建本屏（刷新走滚动条恢复路径）
+				ButtonGeneric enableAllBtn = new ButtonGeneric(this.width / 10 + 94, this.height - 24, 70, 20,
+						StringUtils.translate("autotrade.gui.pair_list.enable_all"));
+				this.addButton(enableAllBtn, (b, mb) -> {
+					TradePairCache.enableAll(true);
+					this.refreshWithScrollRestore();
+				});
+
+				// 全部禁用：把每个交易对统一写为禁用态后重建本屏（刷新走滚动条恢复路径）
+				ButtonGeneric disableAllBtn = new ButtonGeneric(this.width / 10 + 168, this.height - 24, 70, 20,
+						StringUtils.translate("autotrade.gui.pair_list.disable_all"));
+				this.addButton(disableAllBtn, (b, mb) -> {
+					TradePairCache.enableAll(false);
+					this.refreshWithScrollRestore();
+				});
+			}
 		}
 	}
 

@@ -37,6 +37,8 @@
     "autotrade.gui.pair_edit.status_off": "关",
 
     "autotrade.gui.pair_list.add": "[+] 新增交易对",
+    "autotrade.gui.pair_list.enable_all": "全部开",
+    "autotrade.gui.pair_list.disable_all": "全部关",
     "autotrade.gui.pair_list.edit": "编辑",
     "autotrade.gui.pair_list.remove": "删除",
     "autotrade.gui.pair_list.empty": "§7暂无交易对",

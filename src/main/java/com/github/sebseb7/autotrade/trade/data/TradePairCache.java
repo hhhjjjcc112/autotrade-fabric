@@ -78,4 +78,16 @@ public final class TradePairCache {
 		pair.setEnabled(!pair.isEnabled());
 		INSTANCE.persist();
 	}
+
+	/** 批量设置全部交易对的启用状态（幂等：统一覆盖写目标值；空列表按 no-op 返回不落盘）；持久化路径与 toggle 一致 */
+	public static void enableAll(boolean enabled) {
+		INSTANCE.ensureLoaded();
+		if (INSTANCE.cache.isEmpty()) {
+			return;
+		}
+		for (TradePair pair : INSTANCE.cache) {
+			pair.setEnabled(enabled);
+		}
+		INSTANCE.persist();
+	}
 }

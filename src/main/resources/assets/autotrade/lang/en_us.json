@@ -37,6 +37,8 @@
     "autotrade.gui.pair_edit.status_off": "OFF",
 
     "autotrade.gui.pair_list.add": "[+] Add Pair",
+    "autotrade.gui.pair_list.enable_all": "All On",
+    "autotrade.gui.pair_list.disable_all": "All Off",
     "autotrade.gui.pair_list.edit": "Edit",
     "autotrade.gui.pair_list.remove": "Remove",
     "autotrade.gui.pair_list.empty": "§7No trade pairs configured",
