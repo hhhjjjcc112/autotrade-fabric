@@ -20,6 +20,8 @@ import java.util.List;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.text.Text;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 
 /**
@@ -425,6 +427,22 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 		}
 		// 站在满格方块上时脚底方块为空气，取正下方容器（原语义）
 		return feetPos.down();
+	}
+
+	/**
+	 * 抓取玩家准星指向的方块坐标（射线距离固定 6 格，与交互距离一致）；玩家不存在时返回 null。 未命中任何方块时回退到玩家正下方
+	 * （「脚下」语义，不做容器判定）；供虚空中「回程坐标」行的抓取按钮写入回程坐标/维度使用。
+	 */
+	public static BlockPos grabAimedBlockPos() {
+		MinecraftClient mc = MinecraftClient.getInstance();
+		if (mc.player == null)
+			return null;
+		// 从玩家视线投射 6 格射线：仅命中方块（BLOCK）时取其坐标
+		HitResult hit = mc.player.raycast(6.0, 1.0F, false);
+		if (hit instanceof BlockHitResult bhr && hit.getType() == HitResult.Type.BLOCK)
+			return bhr.getBlockPos();
+		// 未命中任何方块：回退正下方（「脚下」语义；不判断是否为容器）
+		return mc.player.getBlockPos().down();
 	}
 
 	/**

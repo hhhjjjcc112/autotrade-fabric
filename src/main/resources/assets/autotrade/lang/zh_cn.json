@@ -83,6 +83,8 @@
     "autotrade.gui.item_io.grab_container_tip": "将玩家脚下容器的坐标与当前维度填入本记录",
     "autotrade.gui.item_io.grab_container_save_short": "保存",
     "autotrade.gui.item_io.grab_container_save_tip": "将快捷键抓取的容器坐标保存到本记录",
+    "autotrade.gui.void.grab_return": "抓取",
+    "autotrade.gui.void.grab_return_tip": "将准星指向的方块（6格内；未指向时取脚下方块）的坐标与维度填入回程坐标与回程维度",
     "autotrade.gui.item_io.dimension": "维度",
     "autotrade.gui.item_io.dimension_short": "维",
     "autotrade.gui.item_io.dimension_tip": "容器所在维度 registry id（如 minecraft:overworld）；留空 = 任意维度",

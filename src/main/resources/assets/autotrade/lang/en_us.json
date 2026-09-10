@@ -83,6 +83,8 @@
     "autotrade.gui.item_io.grab_container_tip": "Fill this record with the container at the player's feet (position + current dimension)",
     "autotrade.gui.item_io.grab_container_save_short": "Save",
     "autotrade.gui.item_io.grab_container_save_tip": "Save the container position grabbed by the hotkey into this record",
+    "autotrade.gui.void.grab_return": "Grab",
+    "autotrade.gui.void.grab_return_tip": "Fill return pos/dimension with the block you are looking at (within 6 blocks; falls back to the block below your feet)",
     "autotrade.gui.item_io.dimension": "Dimension",
     "autotrade.gui.item_io.dimension_short": "Dim",
     "autotrade.gui.item_io.dimension_tip": "Dimension registry id of the container (e.g. minecraft:overworld); empty = any dimension",
