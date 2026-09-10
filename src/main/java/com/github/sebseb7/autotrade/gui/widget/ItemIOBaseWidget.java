@@ -52,15 +52,15 @@ import net.minecraft.util.math.BlockPos;
  */
 public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	/**
-	 * 头部行高（状态文本/icon/统计/行级开关/数量块/添加按钮）；与交易对列表行高
-	 * TradePairListConfigOptions.ENTRY_HEIGHT 同为 20（独立常量，值变更需同步）
+	 * 头部行高（icon/统计/行级开关/数量块/添加按钮）；与交易对列表行高 TradePairListConfigOptions.ENTRY_HEIGHT
+	 * 同为 20（独立常量，值变更需同步）
 	 */
 	public static final int HEADER_HEIGHT = 20;
-	/** 单条位置记录行高（序号/状态/维度/坐标/抓取/启用禁用/删除）；同上，与 ENTRY_HEIGHT 同为 20 */
+	/** 单条位置记录行高（序号/维度/坐标/抓取/启用禁用/删除）；同上，与 ENTRY_HEIGHT 同为 20 */
 	public static final int RECORD_HEIGHT = 20;
 	/**
 	 * 记录行左侧内容相对头部行的缩进（px）：表达「头部条目 → 记录」的层级从属关系；
-	 * 仅作用于记录行左侧内容（序号/状态/维度/坐标），右侧按钮组仍锚定行尾不受影响
+	 * 仅作用于记录行左侧内容（序号/维度/坐标），右侧按钮组仍锚定行尾不受影响
 	 */
 	public static final int RECORD_INDENT = 12;
 	/** 开/关按钮宽度（头部与记录行共用状态显示按钮） */
@@ -124,27 +124,12 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	protected static final String THRESHOLD_TIP_OUTPUT_KEY = "autotrade.gui.item_io.threshold_tip_output";
 	/** 每次拿取字段的悬浮完整说明翻译键（单位 = 组，仅输入方向） */
 	protected static final String TAKE_AMOUNT_TIP_KEY = "autotrade.gui.item_io.take_amount_tip";
-	/**
-	 * 启用状态指示文本翻译键：仅作状态展示（[开]/[关]），实际开关操作由「启用/禁用」按钮承担；
-	 * 键值不携带颜色代码，渲染时按启用状态直接选色（STATUS_ON_COLOR/STATUS_OFF_COLOR）
-	 */
-	protected static final String STATUS_ON_KEY = "autotrade.gui.item_io.status_on";
-	protected static final String STATUS_OFF_KEY = "autotrade.gui.item_io.status_off";
-	/** 状态文本颜色：启用绿 / 禁用灰（中性色；红色仅保留给「当前不生效」警告 STATS_INACTIVE_COLOR） */
-	protected static final int STATUS_ON_COLOR = 0xFF55FF55;
-	protected static final int STATUS_OFF_COLOR = 0xFFA0A0A0;
-	/** 条目级状态文本悬浮提示翻译键（区分层级：条目级总开关） */
-	protected static final String STATUS_TIP_ENTRY_ON_KEY = "autotrade.gui.item_io.status_tip_entry_on";
-	protected static final String STATUS_TIP_ENTRY_OFF_KEY = "autotrade.gui.item_io.status_tip_entry_off";
-	/** 记录级状态文本悬浮提示翻译键（与条目级开关 AND 生效） */
-	protected static final String STATUS_TIP_RECORD_ON_KEY = "autotrade.gui.item_io.status_tip_record_on";
-	protected static final String STATUS_TIP_RECORD_OFF_KEY = "autotrade.gui.item_io.status_tip_record_off";
 	/** 启停按钮悬浮提示翻译键（动作语义：点击后发生什么，消除「按钮显示的是当前状态还是动作」歧义） */
 	protected static final String TOGGLE_BTN_TIP_ON_KEY = "autotrade.gui.item_io.toggle_btn_tip_on";
 	protected static final String TOGGLE_BTN_TIP_OFF_KEY = "autotrade.gui.item_io.toggle_btn_tip_off";
 	protected static final String REC_TOGGLE_BTN_TIP_ON_KEY = "autotrade.gui.item_io.rec_toggle_btn_tip_on";
 	protected static final String REC_TOGGLE_BTN_TIP_OFF_KEY = "autotrade.gui.item_io.rec_toggle_btn_tip_off";
-	/** 记录行序号翻译键（格式参数 %d = 记录下标+1，灰色渲染；序号使记录级状态与头部条目级状态错位，表达层级从属） */
+	/** 记录行序号翻译键（格式参数 %d = 记录下标+1，灰色渲染；序号与缩进共同表达「头部条目 → 记录」的层级从属） */
 	protected static final String RECORD_NUMBER_KEY = "autotrade.gui.item_io.record_number";
 	/** 记录行序号颜色（灰色，弱于主内容） */
 	protected static final int RECORD_NUM_COLOR = 0xFFAAAAAA;
@@ -168,7 +153,7 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	protected static final String ADD_LOCATION_KEY = "autotrade.gui.item_io.add_location";
 	/** 添加容器按钮悬浮提示翻译键 */
 	protected static final String ADD_LOCATION_TIP_KEY = "autotrade.gui.item_io.add_location_tip";
-	/** 启停按钮显示文本翻译键（按钮显示「点击后执行的动作」，悬浮补当前状态；头部行总开关与记录行共用） */
+	/** 启停按钮显示文本翻译键（按钮显示当前状态「开/关」；悬浮提示点击动作；头部行总开关与记录行共用） */
 	protected static final String TOGGLE_ON_LABEL = "autotrade.gui.item_io.enabled";
 	protected static final String TOGGLE_OFF_LABEL = "autotrade.gui.item_io.disabled";
 	/** 非法维度提示翻译键（非空且无法解析为 Identifier 时提示并恢复原值） */
@@ -467,7 +452,7 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 
 	/**
 	 * 带悬浮提示的文本标签控件：渲染单行文本（指定颜色），悬浮时显示 tooltip（翻译键，null = 无提示）。
-	 * 用于简写标签（阈/拿取/维/抓取）与状态文本（[开]/[关]）的完整说明兜底（第 3 点：长文本简写 + hover 全解）。
+	 * 用于简写标签（阈/拿取/维/抓取）与计数标签等的完整说明兜底（第 3 点：长文本简写 + hover 全解）。
 	 */
 	protected class HoverLabelWidget extends WidgetBase {
 		private final String text;
