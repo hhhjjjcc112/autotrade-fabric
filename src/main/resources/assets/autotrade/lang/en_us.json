@@ -91,6 +91,9 @@
     "autotrade.gui.item_io.delete": "✕",
     "autotrade.gui.item_io.delete_tip": "Delete this record (applies immediately, no confirmation)",
 
+    "autotrade.gui.config.boolean_on": "ON",
+    "autotrade.gui.config.boolean_off": "OFF",
+
     "autotrade.trademode.static": "§6Static Trade",
     "autotrade.trademode.moving": "§bMoving Trade",
     "autotrade.trademode.void": "§5Void Trade",

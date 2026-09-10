@@ -3,6 +3,7 @@ package com.github.sebseb7.autotrade.gui;
 import com.github.sebseb7.autotrade.Reference;
 import com.github.sebseb7.autotrade.config.Configs;
 import com.github.sebseb7.autotrade.config.Hotkeys;
+import com.github.sebseb7.autotrade.gui.widget.AutoTradeWidgetListConfigOptions;
 import com.github.sebseb7.autotrade.gui.widget.ItemIOTabList;
 import com.github.sebseb7.autotrade.gui.widget.TradePairListConfigOptions;
 import com.github.sebseb7.autotrade.gui.widget.TradePairListEntryWidget;
@@ -340,7 +341,14 @@ public class GuiConfigs extends GuiConfigsBase {
 			return new ItemIOTabList(listX, listY, this.getBrowserWidth(), this.getBrowserHeight(),
 					this.getConfigWidth(), 0.f, this.useKeybindSearch(), this, tab == ConfigGuiTab.IO_INPUT);
 		}
-		// GENERIC/STATIC/MOVING/VOID/HOTKEYS：基础配置列表控件（原行为，与 malilib 默认构造一致）
+		if (tab == ConfigGuiTab.GENERIC || tab == ConfigGuiTab.STATIC || tab == ConfigGuiTab.MOVING
+				|| tab == ConfigGuiTab.VOID) {
+			// 值页（通用/静止/移动/虚空）：行控件走 AutoTrade 自定义实现（布尔值本地化「开/关」+ 标签灰化），
+			// 构造参数与 malilib 默认列表控件一致
+			return new AutoTradeWidgetListConfigOptions(listX, listY, this.getBrowserWidth(), this.getBrowserHeight(),
+					this.getConfigWidth(), 0.f, this.useKeybindSearch(), this);
+		}
+		// HOTKEYS：基础配置列表控件（原行为，与 malilib 默认构造一致）
 		return new WidgetListConfigOptions(listX, listY, this.getBrowserWidth(), this.getBrowserHeight(),
 				this.getConfigWidth(), 0.f, this.useKeybindSearch(), this);
 	}

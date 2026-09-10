@@ -91,6 +91,9 @@
     "autotrade.gui.item_io.delete": "✕",
     "autotrade.gui.item_io.delete_tip": "删除该记录（即时生效，无确认）",
 
+    "autotrade.gui.config.boolean_on": "开",
+    "autotrade.gui.config.boolean_off": "关",
+
     "autotrade.trademode.static": "§6静止交易",
     "autotrade.trademode.moving": "§b移动交易",
     "autotrade.trademode.void": "§5虚空交易",
