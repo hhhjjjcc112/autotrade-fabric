@@ -57,6 +57,11 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 	/** 单条位置记录行高（序号/状态/维度/坐标/抓取/启用禁用/删除）；同上，与 ENTRY_HEIGHT 同为 20 */
 	public static final int RECORD_HEIGHT = 20;
 	/**
+	 * 记录行左侧内容相对头部行的缩进（px）：表达「头部条目 → 记录」的层级从属关系；
+	 * 仅作用于记录行左侧内容（序号/状态/维度/坐标），右侧按钮组仍锚定行尾不受影响
+	 */
+	public static final int RECORD_INDENT = 12;
+	/**
 	 * 头部行占位配置名前缀：父列表用 {@code HEADER_NAME_PREFIX + i} 命名占位 ConfigString，
 	 * 本控件据此识别头部行（i = 行数据下标）
 	 */

@@ -106,7 +106,9 @@ public class ItemIORecordWidget extends ItemIOBaseWidget {
 	protected void layoutRow(int x, int y, float zLevel, int labelWidth, int configWidth, IConfigBase config) {
 		int gap = 4;
 		int rightEdge = (this.x + this.width) - gap;
-		int rc = x + 2;
+		// 左侧内容整体右移 RECORD_INDENT：记录行相对头部行缩进，表达层级从属；
+		// 右侧按钮组仍由 rightEdge/btnX 右对齐锚定行尾（不随缩进移动），弹性区 flexW = rowBtnX - rc 自动扣减缩进
+		int rc = x + 2 + RECORD_INDENT;
 
 		// ── 记录行（固定高 20px）：[序号][记录级 开/关][维度 简写标签+文本框][坐标 文本框][抓取容器][启用/禁用][✕ 删除] ──
 		// 按钮组（抓取/启停/删除）整体右对齐到行尾：右对齐锚定行尾使删除按钮永不超出右边界
