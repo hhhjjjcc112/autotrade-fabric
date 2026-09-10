@@ -48,6 +48,10 @@
     "autotrade.gui.pair_list.note_label": "备注: \"%s\"",
     "autotrade.gui.pair_list.enable_btn": "开",
     "autotrade.gui.pair_list.disable_btn": "关",
+    "autotrade.gui.pair_list.enable_btn_tip_on": "当前已启用，点击后禁用该交易对",
+    "autotrade.gui.pair_list.enable_btn_tip_off": "当前已禁用，点击后启用该交易对",
+    "autotrade.gui.pair_list.edit_btn_tip": "打开交易对编辑屏",
+    "autotrade.gui.pair_list.remove_btn_tip": "删除该交易对（即时生效，无确认）",
 
     "autotrade.gui.item_io.stats": "开%d · 关%d",
     "autotrade.gui.item_io.threshold": "阈值",

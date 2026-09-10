@@ -163,6 +163,10 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			String enableLabel = StringUtils.translate(
 					p.isEnabled() ? "autotrade.gui.pair_list.disable_btn" : "autotrade.gui.pair_list.enable_btn");
 			ButtonGeneric toggleBtn = new ButtonGeneric(toggleX, y, btnW, 20, enableLabel);
+			// 启停按钮悬浮提示：按钮文案是动作（开/关），提示反映当前状态；按当前启用状态在构造时选择键，行重建后自动跟随
+			toggleBtn.setHoverStrings(p.isEnabled()
+					? "autotrade.gui.pair_list.enable_btn_tip_on"
+					: "autotrade.gui.pair_list.enable_btn_tip_off");
 			this.addButton(toggleBtn, (button, mouseButton) -> {
 				TradePairCache.toggle(idx);
 				if (refreshAction != null)
@@ -172,6 +176,8 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			// Edit 按钮：使用自定义回调（打开独立编辑屏）；回调为 null 时无操作
 			ButtonGeneric editBtn = new ButtonGeneric(editX, y, btnW, 20,
 					StringUtils.translate("autotrade.gui.pair_list.edit"));
+			// 编辑按钮悬浮提示：说明点击后打开交易对编辑屏
+			editBtn.setHoverStrings("autotrade.gui.pair_list.edit_btn_tip");
 			this.addButton(editBtn, (button, mouseButton) -> {
 				if (editAction != null) {
 					editAction.accept(idx);
@@ -181,6 +187,8 @@ public class TradePairListEntryWidget extends WidgetConfigOption {
 			// Remove 按钮
 			ButtonGeneric removeBtn = new ButtonGeneric(removeX, y, btnW, 20,
 					StringUtils.translate("autotrade.gui.pair_list.remove"));
+			// 删除按钮悬浮提示：说明删除即时生效且无确认弹窗
+			removeBtn.setHoverStrings("autotrade.gui.pair_list.remove_btn_tip");
 			this.addButton(removeBtn, (button, mouseButton) -> {
 				TradePairCache.remove(idx);
 				if (refreshAction != null)

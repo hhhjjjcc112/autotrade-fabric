@@ -48,6 +48,10 @@
     "autotrade.gui.pair_list.note_label": "Note: \"%s\"",
     "autotrade.gui.pair_list.enable_btn": "On",
     "autotrade.gui.pair_list.disable_btn": "Off",
+    "autotrade.gui.pair_list.enable_btn_tip_on": "Currently ON; click to disable this pair",
+    "autotrade.gui.pair_list.enable_btn_tip_off": "Currently OFF; click to enable this pair",
+    "autotrade.gui.pair_list.edit_btn_tip": "Open the trade pair editor",
+    "autotrade.gui.pair_list.remove_btn_tip": "Remove this pair (applies immediately, no confirmation)",
 
     "autotrade.gui.item_io.stats": "On %d · Off %d",
     "autotrade.gui.item_io.threshold": "Threshold",
