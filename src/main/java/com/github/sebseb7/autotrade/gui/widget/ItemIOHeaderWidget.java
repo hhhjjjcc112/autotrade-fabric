@@ -7,6 +7,7 @@ import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
 import fi.dy.masa.malilib.config.IConfigBase;
+import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase.ConfigOptionWrapper;
 import fi.dy.masa.malilib.gui.GuiTextFieldGeneric;
 import fi.dy.masa.malilib.gui.Message;
@@ -20,10 +21,15 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.util.math.BlockPos;
 
 /**
- * 物品 IO 头部行控件（固定高 20px，方案 B 拆分后的头部条目）：渲染单个 (item, 方向) 的条目级头部行 —— [开/关]
- * 状态文本（最左）+ 物品预览 icon + 「开 X · 关 Y」计数标签（放不下跳过）+ 行级「启用/禁用」总开关按钮 + 右侧 [阈值] 输入框 +
- * [每次拿取] 输入框（仅输入方向）右对齐 + [添加容器] 按钮（行尾）。阈值/每次拿取以组为单位 （1 组 = 1 槽位）。stat
- * 由选项卡层填入，本控件只负责渲染。
+ * 物品 IO 头部行控件（固定高 20px，方案 B 拆分后的头部条目）：渲染单个 (item, 方向) 的条目级头部行 —— 物品预览图标（最左）+ 「开
+ * X · 关 Y」统计（中部弹性区，放不下不渲染）+ 右侧控件组右对齐（右锚 x + width -
+ * ROW_RIGHT_MARGIN）：状态显示开关（开=绿 / 关=灰，固定 36px）+ 阈值标签+输入框 + 每次拿取标签+输入框（仅输入方向）+
+ * 添加按钮（50px，行尾）。阈值/每次拿取以组为单位 （1 组 = 1 槽位）。stat 由选项卡层填入，本控件只负责渲染。
+ *
+ * <p>
+ * 窄窗收缩阶梯：统计让位 → 数值框 40→30 → 开关 36→30 → 间隔压到 2 → 极限钳制（数值框 24）；右侧控件组宽度 由内容派生 +
+ * 固定档位，保证同页各行右对齐列整齐。
+ * </p>
  *
  * <p>
  * 旧实现把头部段与全部记录行渲染在同一个可变高条目里（行高 = 20 + 20×记录数），记录数过多时行高超过列表视口， malilib
@@ -92,54 +98,70 @@ public class ItemIOHeaderWidget extends ItemIOBaseWidget {
 
 	@Override
 	protected void layoutRow(int x, int y, float zLevel, int labelWidth, int configWidth, IConfigBase config) {
-		int gap = 4;
-		int rightEdge = (this.x + this.width) - gap;
+		// ── 头部行（固定高 20px）：物品预览图标（最左）+ 统计文本（中部弹性区）+
+		// 右侧控件组右对齐（右锚 x + width - ROW_RIGHT_MARGIN）──
+		// 物品预览图标（最左；条目级状态改由右侧开关按钮自身以颜色显示，不再单独渲染状态文本）
 		int cx = x + 2;
-
-		// ── 头部行（固定高 20px）：条目级 [开/关] 状态文本（最左）+ 物品预览图标 + 统计文本（放得下才渲染）；
-		// [阈值]/[每次拿取] 简写标签+输入框块右对齐 ──
-		// 条目级状态文本：仅展示当前启用状态（绿色 [开]/灰色 [关]），实际开关操作由「启用/禁用」按钮承担，
-		// 悬浮显示完整说明（与按钮 hover 共同消除「按钮显示的是状态还是动作」歧义）
-		String statusLabel = StringUtils.translate(entry.isEnabled() ? STATUS_ON_KEY : STATUS_OFF_KEY);
-		int statusW = this.getStringWidth(statusLabel);
-		int statusColor = entry.isEnabled() ? STATUS_ON_COLOR : STATUS_OFF_COLOR;
-		String statusTipKey = entry.isEnabled() ? STATUS_TIP_ENTRY_ON_KEY : STATUS_TIP_ENTRY_OFF_KEY;
-		this.addWidget(new HoverLabelWidget(cx, y + 6, statusLabel, statusColor, statusTipKey));
-		cx += statusW + gap;
-
-		// 物品预览图标（状态文本之后）
 		ItemStack stack = ItemStringHelper.decode(item);
 		if (!stack.isEmpty()) {
 			this.addWidget(new ItemIconWidget(cx, y + 1, stack));
 		}
-		int iconEndX = cx + 22;
+		int iconEndX = cx + ICON_BLOCK_WIDTH;
+
+		// 右侧控件组（右对齐）：状态显示开关 + 阈值标签+输入框 + 每次拿取标签+输入框（仅输入方向）+ 添加按钮
+		int rightEdge = (this.x + this.width) - ROW_RIGHT_MARGIN;
 		// 字段文本标签：阈值两个方向都显示；每次拿取仅输入方向（输出方向无此概念，见 ContainerIOTask
 		// transferLimit：输出固定 999 全量搬运，不读 takeAmount）；标签用简写，悬浮显示完整说明
 		String thresholdLabel = StringUtils.translate(THRESHOLD_SHORT_KEY);
-		int threshLabelW = this.getStringWidth(thresholdLabel);
+		int threshW = this.getStringWidth(thresholdLabel);
 		String takeAmountLabel = null;
-		int takeLabelW = 0;
+		int takeW = 0;
 		if (isInput) {
 			takeAmountLabel = StringUtils.translate(TAKE_AMOUNT_SHORT_KEY);
-			takeLabelW = this.getStringWidth(takeAmountLabel);
+			takeW = this.getStringWidth(takeAmountLabel);
 		}
-		// 右侧块（右对齐到行尾）：[阈值 标签+输入框] + [每次拿取 标签+输入框]（每次拿取仅输入行）+ [添加容器 按钮]
-		// 阈值/每次拿取以组为单位（1 组 = 1 槽位）；右段宽度按行宽比例分配（40%..60%），下限为内容最小宽
-		String addLabelText = StringUtils.translate(ADD_LOCATION_KEY);
-		int addW = Math.min(60, Math.max(50, this.getStringWidth(addLabelText) + 10));
-		// 内容最小宽：阈值块（标签+2+numW 下限 40）+ 每次拿取块（仅输入行）+ 添加按钮
-		int minRightW = (threshLabelW + 2 + 40) + (isInput ? (takeLabelW + 2 + 40 + gap) : 0) + gap + addW;
-		// 右段按行宽比例分配并钳制 [40%, 60%]，下限为内容最小宽（窄窗口下右段不压缩到内容以下）
-		int rightBlockW = Math.max(minRightW, Math.min(this.width * 40 / 100, this.width * 60 / 100));
-		int blockX = rightEdge - rightBlockW;
-		// 数量输入框宽：右段内扣除标签与按钮后均分（输入行 2 个、输出行 1 个），钳制 [40, 60]
-		int numW = (rightBlockW - (threshLabelW + 2) - (isInput ? takeLabelW + 2 + gap : 0) - gap - addW)
-				/ (isInput ? 2 : 1);
-		numW = Math.min(60, Math.max(40, numW));
-		// 统计文本：位于图标之后、右侧块之前；启停按钮优先，统计文本让位（含统计放不下 toggleW 时统计不渲染）
-		int statsEndX = iconEndX;
-		int toggleW = Math
-				.min(Math.max(this.getStringWidth(TOGGLE_ON_LABEL), this.getStringWidth(TOGGLE_OFF_LABEL)) + 8, 44);
+		// 右侧控件组初始宽度（收缩阶梯起点）：开关 36 + 阈值块 +（输入方向）拿取块 + 添加按钮，子组间 GAP_WIDE
+		int toggleW = BTN_STATE_WIDTH;
+		int threshNumW = FIELD_NUM_WIDTH;
+		int takeNumW = isInput ? FIELD_NUM_WIDTH : 0;
+		int rightBlockW = toggleW + GAP_WIDE + (threshW + GAP_TIGHT + threshNumW)
+				+ (isInput ? GAP + (takeW + GAP_TIGHT + takeNumW) : 0) + GAP_WIDE + BTN_ADD_WIDTH;
+		// 收缩阶梯（统计文本不预留空间）：数值框依次分摊（各最多 -10，下限 30）→ 开关 36→30 →
+		// 仍不满足则走硬钳制路径（间隔可压到 GAP_TIGHT，数值框降至 24）
+		int maxRightW = rightEdge - iconEndX - GAP_WIDE;
+		if (rightBlockW > maxRightW) {
+			int deficit = rightBlockW - maxRightW;
+			// (b) 数值框依次分摊：先阈值框、再拿取框，每框最多 -10（下限 30）
+			int cut = Math.min(Math.min(10, threshNumW - 30), Math.max(0, deficit));
+			threshNumW -= cut;
+			deficit -= cut;
+			if (isInput) {
+				cut = Math.min(Math.min(10, takeNumW - 30), Math.max(0, deficit));
+				takeNumW -= cut;
+				deficit -= cut;
+			}
+			// (c) 开关 36→30
+			if (deficit > 0) {
+				cut = Math.min(BTN_STATE_WIDTH - 30, deficit);
+				toggleW -= cut;
+				deficit -= cut;
+			}
+			rightBlockW = toggleW + GAP_WIDE + (threshW + GAP_TIGHT + threshNumW)
+					+ (isInput ? GAP + (takeW + GAP_TIGHT + takeNumW) : 0) + GAP_WIDE + BTN_ADD_WIDTH;
+			// (d)+(e) 仍不满足（间隔可压到 GAP_TIGHT）→ 硬钳制路径：数值框降至 24（覆盖步骤 b 的 30）
+			if (rightBlockW > rightEdge - iconEndX - GAP_TIGHT) {
+				threshNumW = 24;
+				if (isInput) {
+					takeNumW = 24;
+				}
+				rightBlockW = toggleW + GAP_WIDE + (threshW + GAP_TIGHT + threshNumW)
+						+ (isInput ? GAP + (takeW + GAP_TIGHT + takeNumW) : 0) + GAP_WIDE + BTN_ADD_WIDTH;
+			}
+		}
+		// 控件组左边界：右锚算出后不越过图标区（极限窄窗下与图标区仅隔 GAP_TIGHT）
+		int blockX = Math.max(iconEndX + GAP_TIGHT, rightEdge - rightBlockW);
+
+		// 统计文本（中部弹性区）：不参与宽度分配；放不下（会撞上右侧控件组）则不渲染
 		boolean renderStats = false;
 		String statsText = null;
 		boolean statsInactive = false;
@@ -147,25 +169,21 @@ public class ItemIOHeaderWidget extends ItemIOBaseWidget {
 			statsText = StringUtils.translate(STATS_KEY, stat.enabledCount(), stat.disabledCount());
 			statsInactive = stat.enabledCount() == 0;
 			int statsW = this.getStringWidth(statsText);
-			// 先按「含统计」判断中段是否放得下 toggleW：放不下则统计让位（不渲染，statsEndX 保持 iconEndX）
-			if (iconEndX + statsW + gap <= blockX && toggleW <= blockX - (iconEndX + statsW) - gap) {
+			if (iconEndX + statsW + GAP <= blockX) {
 				renderStats = true;
-				statsEndX = iconEndX + statsW;
 			}
 		}
-		// 中段可用宽（统计已渲染则从统计文本之后起算，否则从图标之后起算）
-		int midAvailable = blockX - statsEndX - gap;
-		toggleW = Math.max(30, Math.min(toggleW, midAvailable));
 		if (renderStats) {
 			this.addWidget(new CountLabelWidget(iconEndX, y + 6, statsText, statsInactive));
 		}
 
-		// 行级「启用/禁用」总开关按钮（统计文本之后）：宽度按两态文本中最宽者 + 边距自适应，
-		// 44px 硬上限；中段放不下时统计文本让位，极端窄窗口下按钮紧贴右段（下限 30）；
-		// 按钮显示「点击后执行的动作」（条目当前启用时显示「禁用」、禁用时显示「启用」），hover 补当前状态
-		String toggleLabel = StringUtils.translate(entry.isEnabled() ? TOGGLE_OFF_LABEL : TOGGLE_ON_LABEL);
+		// 状态显示开关（控件组最左，固定宽）：按钮显示「当前状态」（开=绿 / 关=灰），点击切换；
+		// 悬浮提示说明点击后的动作，消除「按钮显示的是状态还是动作」歧义
+		String toggleLabel = entry.isEnabled()
+				? GuiBase.TXT_GREEN + StringUtils.translate(TOGGLE_ON_LABEL) + GuiBase.TXT_RST
+				: GuiBase.TXT_GRAY + StringUtils.translate(TOGGLE_OFF_LABEL) + GuiBase.TXT_RST;
 		String toggleTipKey = entry.isEnabled() ? TOGGLE_BTN_TIP_ON_KEY : TOGGLE_BTN_TIP_OFF_KEY;
-		ButtonGeneric toggleBtn = new ButtonGeneric(statsEndX + gap, y, toggleW, 20, toggleLabel);
+		ButtonGeneric toggleBtn = new ButtonGeneric(blockX, y, toggleW, 20, toggleLabel);
 		toggleBtn.setHoverStrings(toggleTipKey);
 		this.addButton(toggleBtn, (button, mouseButton) -> {
 			entry.setEnabled(!entry.isEnabled());
@@ -173,37 +191,37 @@ public class ItemIOHeaderWidget extends ItemIOBaseWidget {
 			if (onCommit != null)
 				onCommit.run();
 		});
+		int cursor = blockX + toggleW + GAP_WIDE;
 
 		// 阈值标签（简写 + 悬浮完整说明，按方向区分补货/清出语义）+ 输入框：范围 1..36 组，Enter/失焦提交
-		cx = blockX;
 		String thresholdTipKey = isInput ? THRESHOLD_TIP_INPUT_KEY : THRESHOLD_TIP_OUTPUT_KEY;
-		this.addWidget(new HoverLabelWidget(cx, y + 6, thresholdLabel, 0xFFFFFFFF, thresholdTipKey));
-		cx += threshLabelW + 2;
-		thresholdField = this.createTextField(cx, y + 1, numW - 4, 17);
+		this.addWidget(new HoverLabelWidget(cursor, y + 6, thresholdLabel, 0xFFFFFFFF, thresholdTipKey));
+		cursor += threshW + GAP_TIGHT;
+		thresholdField = this.createTextField(cursor, y + 1, threshNumW - 4, 17);
 		thresholdField.setMaxLength(8);
 		thresholdField.setText(String.valueOf(entry.getThreshold()));
 		registerField(thresholdField);
-		cx += numW;
+		cursor += threshNumW;
 
 		// 每次拿取标签（简写 + 悬浮完整说明）+ 输入框（仅输入方向；输出方向不渲染该字段，takeAmountField 保持 null）
-		if (takeAmountLabel != null) {
-			cx += gap;
-			this.addWidget(new HoverLabelWidget(cx, y + 6, takeAmountLabel, 0xFFFFFFFF, TAKE_AMOUNT_TIP_KEY));
-			cx += takeLabelW + 2;
-			takeAmountField = this.createTextField(cx, y + 1, numW - 4, 17);
+		if (isInput) {
+			cursor += GAP;
+			this.addWidget(new HoverLabelWidget(cursor, y + 6, takeAmountLabel, 0xFFFFFFFF, TAKE_AMOUNT_TIP_KEY));
+			cursor += takeW + GAP_TIGHT;
+			takeAmountField = this.createTextField(cursor, y + 1, takeNumW - 4, 17);
 			takeAmountField.setMaxLength(8);
 			takeAmountField.setText(String.valueOf(entry.getTakeAmount()));
 			registerField(takeAmountField);
-			cx += numW;
+			cursor += takeNumW;
 		}
-		cx += gap;
 
 		// 抓取模式下「+ 添加」按钮与保存按钮同样闪动，提示当前处于抓取模式
 		boolean grabMode = this.host instanceof GuiConfigs gc && gc.isGrabMode();
-		// 添加容器按钮（头部行行尾，原底部行按钮上移）：新增一条记录（维度 = 当前维度，坐标 0 0 0 占位，不触发 IO），即时生效并保存
+		// 添加容器按钮（行尾右锚，原底部行按钮上移）：新增一条记录（维度 = 当前维度，坐标 0 0 0 占位，不触发 IO），即时生效并保存
+		String addLabelText = StringUtils.translate(ADD_LOCATION_KEY);
 		ButtonGeneric addBtn = grabMode
-				? new FlashingButton(cx, y, addW, 20, addLabelText)
-				: new ButtonGeneric(cx, y, addW, 20, addLabelText);
+				? new FlashingButton(rightEdge - BTN_ADD_WIDTH, y, BTN_ADD_WIDTH, 20, addLabelText)
+				: new ButtonGeneric(rightEdge - BTN_ADD_WIDTH, y, BTN_ADD_WIDTH, 20, addLabelText);
 		addBtn.setHoverStrings(ADD_LOCATION_TIP_KEY);
 		this.addButton(addBtn, (button, mouseButton) -> {
 			// 抓取模式：新增记录行并立即把热键抓取的待保存坐标/维度写入该记录（等价于保存按钮），随后结束抓取模式
