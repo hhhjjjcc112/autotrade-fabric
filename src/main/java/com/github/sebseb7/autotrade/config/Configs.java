@@ -2,6 +2,7 @@ package com.github.sebseb7.autotrade.config;
 
 import com.github.sebseb7.autotrade.Reference;
 import com.github.sebseb7.autotrade.config.options.ConfigCoordinate;
+import com.github.sebseb7.autotrade.config.options.ConfigDimension;
 import com.github.sebseb7.autotrade.config.options.ConfigJsonArray;
 import com.github.sebseb7.autotrade.config.options.ConfigOptionListValue;
 import com.github.sebseb7.autotrade.render.HudPosition;
@@ -17,7 +18,6 @@ import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
 import fi.dy.masa.malilib.config.options.ConfigDouble;
 import fi.dy.masa.malilib.config.options.ConfigInteger;
-import fi.dy.masa.malilib.config.options.ConfigString;
 import fi.dy.masa.malilib.util.FileUtils;
 import fi.dy.masa.malilib.util.JsonUtils;
 import java.io.File;
@@ -119,7 +119,7 @@ public class Configs implements IConfigHandler {
 		 * 返回触发方块所在维度（registry id，如 minecraft:overworld）；默认空串 = 任意维度（与 IO 记录空语义一致，避免旧
 		 * Void 用户被默认 overworld 误过滤）
 		 */
-		public static final ConfigString VOID_RETURN_DIM = new ConfigString("voidReturnDim", "",
+		public static final ConfigDimension VOID_RETURN_DIM = new ConfigDimension("voidReturnDim", "",
 				"Dimension (registry id) where the void return trigger block is located, e.g. minecraft:overworld. Empty = any dimension");
 		public static final ConfigBoolean VOID_RETURN_STRICT = new ConfigBoolean("voidReturnStrict", true,
 				"Strictly validate that the return trigger block type matches the configured type; mismatch is skipped with a warning (default off = only check block existence and distance)");
