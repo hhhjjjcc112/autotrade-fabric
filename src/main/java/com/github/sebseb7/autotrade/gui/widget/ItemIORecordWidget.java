@@ -7,6 +7,7 @@ import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOHelper;
 import fi.dy.masa.malilib.config.IConfigBase;
+import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase.ConfigOptionWrapper;
 import fi.dy.masa.malilib.gui.GuiTextFieldGeneric;
 import fi.dy.masa.malilib.gui.Message;
@@ -20,9 +21,9 @@ import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
 /**
- * 物品 IO 记录行控件（固定高 20px，方案 B 拆分后的单条记录条目）：渲染单条容器记录行 —— [序号][记录级 开/关] [维度
- * 标签+文本框][坐标 文本框][抓取容器][启用/禁用][✕ 删除]（stat 由选项卡层填入，本控件只负责渲染）。 阈值/每次拿取以组为单位（1 组 =
- * 1 槽位）。
+ * 物品 IO 记录行控件（固定高 20px，方案 B 拆分后的单条记录条目）：渲染单条容器记录行 —— 序号 + 维度简写标签 + 维度框 + 坐标框 +
+ * 右锚按钮组（抓取 36 / 状态显示开关 36 / ✕ 删除 22）；无独立状态文本，开关按钮直接显示当前状态（开=绿 / 关=灰）。 （stat
+ * 由选项卡层填入，本控件只负责渲染）。阈值/每次拿取以组为单位（1 组 = 1 槽位）。
  *
  * <p>
  * 旧实现把头部段与全部记录行渲染在同一个可变高条目里（行高 = 20 + 20×记录数），记录数过多时行高超过列表视口， malilib
@@ -104,99 +105,89 @@ public class ItemIORecordWidget extends ItemIOBaseWidget {
 
 	@Override
 	protected void layoutRow(int x, int y, float zLevel, int labelWidth, int configWidth, IConfigBase config) {
-		int gap = 4;
-		int rightEdge = (this.x + this.width) - gap;
+		int rightEdge = (this.x + this.width) - ROW_RIGHT_MARGIN;
 		// 左侧内容整体右移 RECORD_INDENT：记录行相对头部行缩进，表达层级从属；
-		// 右侧按钮组仍由 rightEdge/btnX 右对齐锚定行尾（不随缩进移动），弹性区 flexW = rowBtnX - rc 自动扣减缩进
+		// 右侧按钮组仍由 rightEdge/rowBtnX 右对齐锚定行尾（不随缩进移动），弹性区 flexW = rowBtnX - GAP_WIDE - rc
+		// 自动扣减缩进
 		int rc = x + 2 + RECORD_INDENT;
 
-		// ── 记录行（固定高 20px）：[序号][记录级 开/关][维度 简写标签+文本框][坐标 文本框][抓取容器][启用/禁用][✕ 删除] ──
-		// 按钮组（抓取/启停/删除）整体右对齐到行尾：右对齐锚定行尾使删除按钮永不超出右边界
-		// （根治左对齐流式布局下 ✕ 出界）；弹性区（维度框 + 坐标框）吃「前缀到按钮组」剩余宽度，
-		// 维度框 55% / 坐标框 45%（坐标框吃剩余，保证和 = flexW - gap）；
-		// 序号 + 记录级状态文本使记录状态与头部条目级状态错位（层级从属视觉）
+		// ── 记录行（固定高 20px）：[序号][维度 简写标签+文本框][坐标 文本框][抓取容器][状态显示开关][✕ 删除] ──
+		// 按钮组（抓取/状态显示开关/删除）固定宽度三档（36/36/22）整体右对齐到行尾：各记录行按钮列完全对齐，
+		// 且删除按钮永不超出右边界（根治左对齐流式布局下 ✕ 出界）；
+		// 弹性区（维度框 + 坐标框）吃「前缀到按钮组」剩余宽度，维度框 55% / 坐标框 45%（坐标框吃剩余，保证和 = flexW - GAP）；
+		// 记录级状态文本已移除：状态改由行尾开关按钮直接显示当前值（开=绿 / 关=灰），不再占用行内前缀宽度
 		ItemIOLocation loc = entry.getLocations().get(recordIndex);
 		String dimLabel = StringUtils.translate(DIMENSION_SHORT_KEY);
 		int dimLabelW = this.getStringWidth(dimLabel);
-		// 按钮组（右对齐）内各按钮宽度按各自文本自适应 + 硬上限：宽度贴合内容（Grab/✕ 短、Disable 长），
-		// 不强制等宽以免短文本按钮出现大段空白；上限防英文长文本撑爆行宽（Grab 40 / 启停 44 / ✕ 24）
 		// 抓取模式：抓取热键按下后本行抓取按钮变为「保存」按钮（标签/悬浮/点击语义均切换）
 		boolean grabMode = this.host instanceof GuiConfigs gc && gc.isGrabMode();
 		String grabLabel = StringUtils.translate(grabMode ? GRAB_SAVE_SHORT_KEY : GRAB_CONTAINER_SHORT_KEY);
-		int grabW = Math.min(40, this.getStringWidth(grabLabel) + 6);
-		int recToggleW = Math.min(44,
-				Math.max(this.getStringWidth(TOGGLE_ON_LABEL), this.getStringWidth(TOGGLE_OFF_LABEL)) + 6);
-		int delW = Math.min(24, this.getStringWidth(StringUtils.translate(DELETE_KEY)) + 6);
+		// 按钮宽度固定三档（抓取 36 / 状态显示开关 36 / ✕ 删除 22）：不随文本自适应，保证按钮组列对齐
+		int grabW = BTN_GRAB_WIDTH;
+		int recToggleW = BTN_STATE_WIDTH;
+		int delW = BTN_DELETE_WIDTH;
 		// 按钮组右对齐：组左端 = 行尾 - 组宽（3 个按钮 + 2 个间隙）
-		int btnGroupW = grabW + gap + recToggleW + gap + delW;
+		int btnGroupW = grabW + GAP + recToggleW + GAP + delW;
 		int btnX = rightEdge - btnGroupW;
 
-		// 记录序号（灰色，最左）：记录编号（删除后自动重排），使后续记录级状态与头部条目级状态错位
+		// 记录序号（灰色，最左）：记录编号（删除后自动重排），与头部条目行形成层级标识
 		String numText = StringUtils.translate(RECORD_NUMBER_KEY, recordIndex + 1);
 		int numTextW = this.getStringWidth(numText);
 		this.addWidget(new HoverLabelWidget(rc, y + 6, numText, RECORD_NUM_COLOR, null));
-		rc += numTextW + gap;
-
-		// 记录级 [开/关] 状态文本（紧随序号，仅展示该记录启用状态）：实际开关操作由行尾「启用/禁用」按钮
-		// 承担（与条目级开关 AND 生效），悬浮显示层级说明
-		String recStatusLabel = StringUtils.translate(loc.isEnabled() ? STATUS_ON_KEY : STATUS_OFF_KEY);
-		int recStatusW = this.getStringWidth(recStatusLabel);
-		int recStatusColor = loc.isEnabled() ? STATUS_ON_COLOR : STATUS_OFF_COLOR;
-		String recStatusTipKey = loc.isEnabled() ? STATUS_TIP_RECORD_ON_KEY : STATUS_TIP_RECORD_OFF_KEY;
-		this.addWidget(new HoverLabelWidget(rc, y + 6, recStatusLabel, recStatusColor, recStatusTipKey));
-		rc += recStatusW + gap;
+		rc += numTextW + GAP;
 
 		// 维度标签（简写 + 悬浮完整说明）+ 文本框：留空 = 任意维度（兼容旧配置），非空必须为可解析的维度 id，Enter/失焦提交
 		this.addWidget(new HoverLabelWidget(rc, y + 6, dimLabel, 0xFFFFFFFF, DIMENSION_TIP_KEY));
-		rc += dimLabelW + 2;
+		rc += dimLabelW + GAP_TIGHT;
 
-		// 弹性区：维度框 55% / 坐标框 45%（坐标框吃剩余，保证和 = flexW - gap）；下限保护
+		// 弹性区：维度框 55% / 坐标框 45%（坐标框吃剩余，保证和 = flexW - GAP）；下限保护
 		// dimW ≥ 40、coordW ≥ 60（或 flexW < 140 提前触发收缩），不满足则收缩按钮组
 		// 行级局部副本：收缩只影响当前行，不污染其他记录行
-		int rowGrabW = grabW;
-		int rowToggleW = recToggleW;
-		int rowDelW = delW;
+		int rowGrabW = grabW, rowToggleW = recToggleW, rowDelW = delW;
 		int rowBtnX = btnX;
-		int flexW = rowBtnX - rc;
+		int flexW = rowBtnX - GAP_WIDE - rc;
 		int dimW = flexW * 55 / 100;
-		int coordW = flexW - dimW - gap;
+		int coordW = flexW - dimW - GAP;
 		if (dimW < 40 || coordW < 60 || flexW < 140) {
-			// 收缩路径：按 ✕(下限14) → 抓取(下限24) → 启停(下限30) 顺序收缩按钮组（保文本完整），组右端仍锚定行尾
+			// 收缩路径：按 ✕(下限18) → 抓取(下限28) → 开关(下限30) 顺序收缩按钮组（保文本完整），组右端仍锚定行尾
 			int deficit = Math.max(0, Math.max(60 - coordW, 40 - dimW));
-			int delShrink = Math.min(rowDelW - 14, deficit);
+			int delShrink = Math.min(rowDelW - 18, deficit);
 			rowDelW -= delShrink;
 			deficit -= delShrink;
-			int grabShrink = Math.min(rowGrabW - 24, deficit);
+			int grabShrink = Math.min(rowGrabW - 28, deficit);
 			rowGrabW -= grabShrink;
 			deficit -= grabShrink;
 			rowToggleW = Math.max(30, rowToggleW - deficit);
-			int rowBtnGroupW = rowGrabW + gap + rowToggleW + gap + rowDelW;
+			int rowBtnGroupW = rowGrabW + GAP + rowToggleW + GAP + rowDelW;
 			rowBtnX = rightEdge - rowBtnGroupW;
 			// 收缩后重算弹性区并重新分配
-			flexW = rowBtnX - rc;
+			flexW = rowBtnX - GAP_WIDE - rc;
 			dimW = flexW * 55 / 100;
-			coordW = flexW - dimW - gap;
+			coordW = flexW - dimW - GAP;
 			// 收缩后 coordW 仍 < 60（极端窄窗口）：维度框先保 40，坐标框尽力吃剩余（下限 4，避免负宽）
 			if (coordW < 60) {
-				dimW = Math.min(40, flexW);
-				coordW = Math.max(4, flexW - dimW - gap);
+				dimW = Math.max(8, Math.min(40, flexW));
+				coordW = Math.max(4, flexW - dimW - GAP);
 			}
 		}
-		dimField = this.createTextField(rc, y + 1, dimW - 4, 17);
+		// 防御：极端窄窗口（flexW 可能 ≤ 0）下文本框宽度保底 1，绝不把零/负宽传给控件
+		int dimFieldW = Math.max(1, dimW - 4);
+		int coordFieldW = Math.max(1, coordW - 4);
+		dimField = this.createTextField(rc, y + 1, dimFieldW, 17);
 		dimField.setMaxLength(64);
 		dimField.setText(loc.getDimension());
 		registerField(dimField);
-		rc += dimW + gap;
+		rc += dimW + GAP;
 
-		// 坐标文本框：吃「前缀（序号/状态/维度）到按钮组」剩余宽度（下限 60）；极端窄窗口下按钮组
+		// 坐标文本框：吃「前缀（序号/维度）到按钮组」剩余宽度（下限 60）；极端窄窗口下按钮组
 		// 收缩（行级局部计算，不影响其他记录行），组右端仍锚定行尾；
 		// ConfigCoordinate 校验语义，Enter/失焦提交（输入期间不保存不重建）
-		coordField = this.createTextField(rc, y + 1, coordW - 4, 17);
+		coordField = this.createTextField(rc, y + 1, coordFieldW, 17);
 		coordField.setMaxLength(48);
 		coordField.setText(String.format("%d %d %d", loc.getX(), loc.getY(), loc.getZ()));
 		registerField(coordField);
 
-		// 按钮组（右对齐到行尾）：[抓取容器][启用/禁用][✕ 删除]，组内等宽 rowBtnW，组左端 rowBtnX
+		// 按钮组（右对齐到行尾）：[抓取容器][状态显示开关][✕ 删除]，固定宽度 36/36/22，组左端 rowBtnX
 		// 抓取容器按钮（简写 + 悬浮完整说明）：写入玩家脚下方块坐标 + 当前维度（world 非空才写维度），即时生效并保存；
 		// 抓取模式下变为闪动的「保存」按钮（FlashingButton，基类共享）：点击把热键抓取的待保存坐标/维度写入本记录并结束模式
 		final int idx = recordIndex;
@@ -245,9 +236,12 @@ public class ItemIORecordWidget extends ItemIOBaseWidget {
 					dim, pos.getX(), pos.getY(), pos.getZ());
 		});
 
-		// 记录启用/禁用按钮（hover 补当前状态与 AND 语义）：写入该记录 enabled（与行级总开关 AND 生效），即时生效并保存
-		String recToggleLabel = StringUtils.translate(loc.isEnabled() ? TOGGLE_OFF_LABEL : TOGGLE_ON_LABEL);
-		ButtonGeneric recToggleBtn = new ButtonGeneric(rowBtnX + rowGrabW + gap, y, rowToggleW, 20, recToggleLabel);
+		// 记录启用/禁用状态显示开关（按钮显示当前状态：开=绿 / 关=灰；hover 补动作语义与 AND 语义）：
+		// 写入该记录 enabled（与行级总开关 AND 生效），即时生效并保存
+		String recToggleLabel = loc.isEnabled()
+				? GuiBase.TXT_GREEN + StringUtils.translate(TOGGLE_ON_LABEL) + GuiBase.TXT_RST
+				: GuiBase.TXT_GRAY + StringUtils.translate(TOGGLE_OFF_LABEL) + GuiBase.TXT_RST;
+		ButtonGeneric recToggleBtn = new ButtonGeneric(rowBtnX + rowGrabW + GAP, y, rowToggleW, 20, recToggleLabel);
 		recToggleBtn.setHoverStrings(loc.isEnabled() ? REC_TOGGLE_BTN_TIP_ON_KEY : REC_TOGGLE_BTN_TIP_OFF_KEY);
 		this.addButton(recToggleBtn, (button, mouseButton) -> {
 			ItemIOLocation target = entry.getLocations().get(idx);
@@ -258,7 +252,7 @@ public class ItemIORecordWidget extends ItemIOBaseWidget {
 		});
 
 		// 删除按钮（✕，悬浮说明）：点击即删除该记录并保存（无确认弹窗，与行级按钮即时生效风格一致）
-		ButtonGeneric delBtn = new ButtonGeneric(rowBtnX + rowGrabW + gap + rowToggleW + gap, y, rowDelW, 20,
+		ButtonGeneric delBtn = new ButtonGeneric(rowBtnX + rowGrabW + GAP + rowToggleW + GAP, y, rowDelW, 20,
 				StringUtils.translate(DELETE_KEY));
 		delBtn.setHoverStrings(DELETE_TIP_KEY);
 		this.addButton(delBtn, (button, mouseButton) -> {
