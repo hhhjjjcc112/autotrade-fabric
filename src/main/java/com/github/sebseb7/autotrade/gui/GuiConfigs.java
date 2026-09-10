@@ -25,6 +25,7 @@ import fi.dy.masa.malilib.util.StringUtils;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import net.minecraft.client.gui.DrawContext;
 import net.minecraft.util.math.BlockPos;
 
 public class GuiConfigs extends GuiConfigsBase {
@@ -52,6 +53,13 @@ public class GuiConfigs extends GuiConfigsBase {
 	private BlockPos pendingGrabPos;
 	/** 抓取模式下待写入记录行的容器维度（registry id）；null = 未进入抓取模式 */
 	private String pendingGrabDim;
+	/**
+	 * 活动选项卡按钮的屏幕矩形（左边缘 x / 宽度 / 下边缘 y+height）。createButton 在每次 initGui 重建时重新记录，
+	 * 因此窗口缩放、GUI 缩放或 initGui 重建后不会残留旧位置（-1 = 尚未记录，render 不绘制）。
+	 */
+	private int activeTabX = -1;
+	private int activeTabWidth;
+	private int activeTabYBottom;
 
 	public GuiConfigs() {
 		super(10, 50, Reference.MOD_ID, null, "autotrade.gui.title.configs");
@@ -99,6 +107,19 @@ public class GuiConfigs extends GuiConfigsBase {
 	@Override
 	protected int getBrowserWidth() {
 		return this.width * 8 / 10;
+	}
+
+	/** 绘制屏幕：先执行 malilib 基础渲染（含选项卡按钮），再在活动选项卡按钮底边叠加 2px 绿色强调下划线 */
+	@Override
+	public void render(DrawContext drawContext, int mouseX, int mouseY, float partialTicks) {
+		super.render(drawContext, mouseX, mouseY, partialTicks);
+
+		// 活动选项卡强调条：仅在 createButton 记录过活动按钮矩形时绘制（非活动选项卡不绘制）
+		// 绿色 0xFF55FF55 与 IO 页 [开] 状态文本一致；矩形每帧读取，由 initGui 重建刷新，缩放后不漂移
+		if (this.activeTabX >= 0) {
+			drawContext.fill(this.activeTabX, this.activeTabYBottom, this.activeTabX + this.activeTabWidth,
+					this.activeTabYBottom + 2, 0xFF55FF55);
+		}
 	}
 
 	@Override
@@ -176,6 +197,14 @@ public class GuiConfigs extends GuiConfigsBase {
 		ButtonGeneric button = new ButtonGeneric(x, y, width, 20, tab.getDisplayName());
 		button.setEnabled(GuiConfigs.tab != tab);
 		this.addButton(button, new ButtonListener(tab, this));
+
+		// 当前选项卡（即此按钮被禁用的活动按钮）的屏幕矩形：x / 宽度 / 下边缘 y+height
+		// 每次 initGui 重建都会重新记录 → resize / GUI 缩放 / 重建后不残留旧位置
+		if (GuiConfigs.tab == tab) {
+			this.activeTabX = button.getX();
+			this.activeTabWidth = button.getWidth();
+			this.activeTabYBottom = button.getY() + button.getHeight();
+		}
 
 		return button.getWidth() + 2;
 	}
