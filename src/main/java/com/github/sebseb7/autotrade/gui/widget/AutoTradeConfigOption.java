@@ -17,7 +17,7 @@ import fi.dy.masa.malilib.util.StringUtils;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 
-// 值页自定义配置行控件：仅布尔类型改用本地化「开/关」状态指示器按钮（其余类型全部交回 malilib 基类），
+// 值页自定义配置行控件：仅布尔类型改用本地化「开/关」满宽按钮（其余类型全部交回 malilib 基类），
 // 并把基类硬编码的白色标签弱化为次级灰；由 AutoTradeWidgetListConfigOptions 构造
 public class AutoTradeConfigOption extends WidgetConfigOption {
 	/**
@@ -34,8 +34,8 @@ public class AutoTradeConfigOption extends WidgetConfigOption {
 	}
 
 	/**
-	 * 覆写配置项构建：仅 BOOLEAN 类型改建本地化按钮（固定 60px 窄宽状态指示器）； 其余类型（文本/数值/热键等，以及 LABEL 型
-	 * wrapper）一律调 super 透传
+	 * 覆写配置项构建：仅 BOOLEAN 类型改建本地化按钮（满宽 configWidth，与同页其它控件等宽）； 其余类型（文本/数值/热键等，以及
+	 * LABEL 型 wrapper）一律调 super 透传
 	 */
 	@Override
 	protected void addConfigOption(int x, int y, float zLevel, int labelWidth, int configWidth, IConfigBase config) {
@@ -96,7 +96,7 @@ public class AutoTradeConfigOption extends WidgetConfigOption {
 
 		// 以下复刻 malilib BOOLEAN 分支（WidgetConfigOption.java:114-157）：标签 + 悬浮注释 + 值按钮 +
 		// 重置按钮；
-		// 唯一差异是值按钮宽度固定为状态指示器常量（60px），重置按钮仍在原右缘（与其它配置行对齐）
+		// 唯一差异是值按钮使用满宽 configWidth（与同页其它控件等宽），重置按钮仍在原右缘（x + configWidth + 2 锚定方式不变）
 		y += 1;
 		int configHeight = 20;
 
@@ -117,8 +117,8 @@ public class AutoTradeConfigOption extends WidgetConfigOption {
 
 		x += labelWidth + 10;
 
-		ConfigButtonBoolean optionButton = new LocalizedBooleanButton(x, y, LocalizedBooleanButton.INDICATOR_WIDTH,
-				configHeight, (IConfigBoolean) config);
+		ConfigButtonBoolean optionButton = new LocalizedBooleanButton(x, y, configWidth, configHeight,
+				(IConfigBoolean) config);
 		this.addConfigButtonEntry(x + configWidth + 2, y, (IConfigResettable) config, optionButton);
 	}
 

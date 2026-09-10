@@ -6,11 +6,8 @@ import fi.dy.masa.malilib.gui.button.ConfigButtonBoolean;
 import fi.dy.masa.malilib.util.StringUtils;
 
 // 本地化布尔值按钮：把 malilib 的 true/false 显示文本替换为「开/关」（英文 ON/OFF），
-// 保留暗绿/暗红着色与点击翻转行为；以固定窄宽（状态指示器）形态与列表行的满宽「动作按钮」区分
+// 满宽布尔按钮：与同页其它控件等宽；保留暗绿/暗红着色与点击翻转行为
 public class LocalizedBooleanButton extends ConfigButtonBoolean {
-	/** 固定宽度（像素）：布尔按钮作为「状态指示器」形态，刻意窄于满宽列表动作按钮 */
-	public static final int INDICATOR_WIDTH = 60;
-
 	/** 配置引用副本（malilib 父类的 config 字段为 private，显示文本需自行读取当前值） */
 	private final IConfigBoolean config;
 
