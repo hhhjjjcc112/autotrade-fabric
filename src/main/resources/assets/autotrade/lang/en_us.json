@@ -21,10 +21,11 @@
     "autotrade.message.added_trade_pairs": "§aAdded %d new trade pair(s)",
     "autotrade.message.void.exhausted": "§cVillager trade uses detected (count persisted/leftover) - either a leftover count from a previous wrong trade, or the void unload buffer is too small / the rig's chunk stays loaded (spawn/force-loaded chunks), causing counts to be saved. Trading continues but yields fewer trades per cycle; raise Void Unload Delay or check the rig location, or let the villager restock / replace it to reset the leftover count",
     "autotrade.message.io.not_container": "§cContainer operation failed: target position %s is not a container (%s), aborted. Check the container coordinates in IO Input/IO Output",
-    "autotrade.message.io.open_failed": "§cContainer operation failed: failed to open the container screen %s times in a row, aborted",
+    "autotrade.message.io.open_failed": "§cContainer operation failed: could not open the container screen; operation aborted",
     "autotrade.message.void.return_overlap": "§eVoid return trigger position overlaps an IO container coordinate - return trigger disabled (move the trigger block or the container coordinates)",
     "autotrade.message.void.invalid_dimension": "§cInvalid void return dimension, return trigger disabled",
     "autotrade.message.void.teleport_timeout": "Villager never teleported, skipping",
+    "autotrade.message.void.return_strict": "§eReturn trigger block type does not match the configured type (STRICT): fix the trigger type in the Void tab or replace the block; the return trigger is paused and resumes automatically once it matches",
     "autotrade.message.moving.starvation_hint": "§e[Moving] A %s (hunger %d, %.1f blocks away) has not been served for a long time - check your movement path or the target's position",
 
     "autotrade.gui.title.pair_edit": "Edit Trade Pair",
