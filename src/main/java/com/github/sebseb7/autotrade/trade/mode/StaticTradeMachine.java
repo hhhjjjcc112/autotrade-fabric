@@ -19,8 +19,7 @@ import net.minecraft.entity.Entity;
 /**
  * STATIC 模式：站在固定位置逐村交易 + 容器 IO + 交易/IO 冷却。 扫描/名单/已处理记录全部在机器层维护：每轮扫描范围内全部村民建立
  * 名单（targetVillagers），按顺序逐个派发单村民会话，名单处理完后进入交易冷却（约 5 秒），冷却结束重新扫描开始新一轮
- * （每轮都重新处理全部村民，不记忆上一轮谁已耗尽）。 容器 IO 在交易冷却期间按 IO 间隔尝试（经机器层 ContainerIOScheduler
- * 调度），交易进行中不插队。
+ * （每轮都重新处理全部村民，不记忆上一轮谁已耗尽）。 容器 IO 按 IO 间隔尝试，坏容器由调度器逐容器冷却排除（本类不再有全局失败冷却）。
  */
 public class StaticTradeMachine extends AbstractTradeMachine {
 
@@ -86,23 +85,17 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 容器 IO 正常结束钩子（基类骨架调用）：矩阵行「非静默失败 → 显式 100t 节流」——SCREEN_TIMEOUT / CONFIG_INVALID
-	 * 失败后按基类固定 100t 冷却（防坏容器高频重试与刷屏）；其余结果仍按 CONTAINER_IO_INTERVAL 间隔。 STATIC
-	 * 保持全局冷却模型（不识别具体坏容器）：一个坏容器最多阻塞其它容器 IO 100t，该权衡有意接受。
+	 * 容器 IO 正常结束钩子（基类骨架调用）：逐容器冷却由调度器统一处理（矩阵在 NO_PROGRESS / CONFIG_INVALID /
+	 * SCREEN_TIMEOUT 失败时标记，候选收集统一过滤）；本处仅保留容器操作之间的固定间隔节奏。
 	 */
 	@Override
 	protected void onContainerTaskEnded(ContainerIOTask op, TaskResult result) {
-		if (result.isFailed() && (result.reason() == TaskResult.FailReason.SCREEN_TIMEOUT
-				|| result.reason() == TaskResult.FailReason.CONFIG_INVALID)) {
-			containerIOCooldown = CONFIG_FAIL_COOLDOWN_TICKS;
-		} else {
-			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
-		}
+		containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
 	}
 
 	/**
-	 * 容器 IO 被看门狗强杀钩子（基类骨架调用）：强杀路径没有 TaskResult（看门狗不产生失败原因），无法按原因判定节流， 故保持现状——仍设 IO
-	 * 间隔冷却（强杀后不立即重试同一容器；原因级 100t 节流仅适用于正常失败结束）。
+	 * 容器 IO 被看门狗强杀钩子（基类骨架调用）：强杀仍设 IO 间隔冷却（强杀后不立即重试同一容器）；原因级 100t
+	 * 冷却已由调度器逐容器承担，本类不再区分失败原因。
 	 */
 	@Override
 	protected void onContainerTaskInterrupted(ContainerIOTask op) {

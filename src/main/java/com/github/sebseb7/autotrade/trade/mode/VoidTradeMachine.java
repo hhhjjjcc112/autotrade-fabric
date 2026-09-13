@@ -6,13 +6,16 @@ import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
-import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
+import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
@@ -29,8 +32,8 @@ import net.minecraft.util.math.BlockPos;
  *
  * <p>
  * 返回触发节流与门控：瞬态类失败（SCREEN_TIMEOUT/TRANSIT_TIMEOUT/看门狗强杀）后 100t 内不重派； STRICT
- * 开启时派发前做方块类型门控（类型不符不派发、不落村民，等待玩家修正后自动恢复），告警走状态边沿； 容器
- * SCREEN_TIMEOUT/CONFIG_INVALID 失败后同样 100t 冷却（全局时间戳，VOID 不区分具体容器）。
+ * 开启时派发前做方块类型门控（类型不符不派发、不落村民，等待玩家修正后自动恢复），告警走状态边沿； 失败村民 100t 重试冷却（逐
+ * UUID，跳过后尝试下一村民；看门狗强杀同样标记）。
  */
 public class VoidTradeMachine extends AbstractTradeMachine {
 
@@ -46,11 +49,16 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 	/** 返回触发失败后的重试节流时长：100 tick = 5 秒（瞬态类失败/看门狗强杀后显式等待，避免忙循环） */
 	private static final int RETURN_TRIGGER_RETRY_TICKS = 100;
 
+	/**
+	 * 失败村民的重试冷却时长：100 tick = 5 秒；防「失败 → 下一 tick 立即重选同一村民」忙循环，并让选择循环有机会尝试其它村民。
+	 */
+	private static final int VILLAGER_FAIL_RETRY_TICKS = 100;
+
 	/** 返回触发下次可派发的世界时间戳（世界时间基准；当前时间 < 该值 = 节流中，不重派） */
 	private long returnTriggerRetryAtTick = 0;
 
-	/** 容器 IO 下次可派发的世界时间戳（SCREEN_TIMEOUT/CONFIG_INVALID 失败后全局 100t 冷却） */
-	private long containerIoRetryAtTick = 0;
+	/** 失败村民重试冷却表（村民 UUID → 冷却截止世界 tick）；选择循环跳过冷却中的村民，到期惰性清除；reset 清空。 */
+	private final Map<UUID, Long> villagerRetryAt = new HashMap<>();
 
 	public VoidTradeMachine() {
 		super();
@@ -62,9 +70,8 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		if (tickInventoryPause(mc))
 			return;
 
-		// 优先容器 IO（先卸货/补货再返回，否则岛侧容器被「传回原侧」永久饿死，决策 2）；
-		// 容器失败冷却未到期时跳过（全局时间戳节流，避免坏容器每 tick 重派）
-		if (mc.world.getTime() >= containerIoRetryAtTick && containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
+		// 优先容器 IO（先卸货/补货再返回，否则岛侧容器被「传回原侧」永久饿死，决策 2）
+		if (containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
 			return;
 
 		// 返回触发：已配置时先做交接与可达性判定（空间相位：玩家在岛侧 ⇔ 返回块可达），优先级高于找村民（决策 2）
@@ -105,6 +112,9 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 			// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
 			// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
 			if (isCachedMiss(e.getUuid(), mc.world.getTime())) {
+				continue;
+			}
+			if (isVillagerOnRetryCooldown(e.getUuid(), mc.world.getTime())) {
 				continue;
 			}
 			setTaskIfEmpty(new VoidTradeTask(e.getUuid()));
@@ -219,8 +229,8 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 任务结束回调（在基类 9 值矩阵之上叠加 VOID 差异）：返回触发细分原因 100t 重试节流（含竞态 CONFIG_INVALID
-	 * 告警兜底）与容器失败冷却；末尾必须委托 super（背包满暂停/告警解除/统计/日志均在基类矩阵）。
+	 * 任务结束回调（在基类 10 值矩阵之上叠加 VOID 差异）：返回触发细分原因 100t 重试节流（含竞态 CONFIG_INVALID
+	 * 告警兜底）与失败村民 100t 重试冷却（背包满暂停除外）；末尾必须委托 super（背包满暂停/告警解除/统计/日志均在基类矩阵）。
 	 */
 	@Override
 	protected void onTaskEnded(Task task, TaskResult result) {
@@ -237,37 +247,48 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 				clearFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
 			}
 		}
-		if (task instanceof ContainerIOTask && result.isFailed()
-				&& (result.reason() == TaskResult.FailReason.SCREEN_TIMEOUT
-						|| result.reason() == TaskResult.FailReason.CONFIG_INVALID)) {
-			// 矩阵行：容器非静默失败 → 全局 100t 冷却（tickIdle 与暂停期输出 IO 同受节流）
-			containerIoRetryAtTick = lastWorldTime + CONFIG_FAIL_COOLDOWN_TICKS;
+		if (task instanceof TradeTask ts && result.isFailed()
+				&& result.reason() != TaskResult.FailReason.INVENTORY_BLOCKED) {
+			// 失败村民逐 UUID 100t 重试冷却（背包满暂停已自带节奏，不叠加）
+			villagerRetryAt.put(ts.getVillagerUuid(), lastWorldTime + VILLAGER_FAIL_RETRY_TICKS);
 		}
 		super.onTaskEnded(task, result);
 	}
 
 	/**
-	 * 任务被看门狗强杀回调：返回触发无结果可判（强杀时任务状态不可信），统一按瞬态类失败处理——100t 内不重派（防忙循环）。
+	 * 任务被看门狗强杀回调：返回触发无结果可判（强杀时任务状态不可信），统一按瞬态类失败处理——100t 内不重派（防忙循环）；
+	 * 村民任务同样无结果可判，统一进入 100t 重试冷却。
 	 */
 	@Override
 	protected void onTaskInterrupted(Task task) {
 		if (task instanceof BlockTriggerTask) {
 			returnTriggerRetryAtTick = lastWorldTime + RETURN_TRIGGER_RETRY_TICKS;
 		}
+		if (task instanceof TradeTask ts) {
+			// 看门狗强杀 = 异常会话，同样进入重试冷却（无结果可判，统一冷却）
+			villagerRetryAt.put(ts.getVillagerUuid(), lastWorldTime + VILLAGER_FAIL_RETRY_TICKS);
+		}
 		super.onTaskInterrupted(task);
 	}
 
-	/** 容器 IO 节流门（覆写基类默认）：容器失败冷却期内，暂停期的输出优先 IO 亦不启动（防 1-2 tick 忙循环） */
-	@Override
-	protected boolean isContainerIoThrottled(MinecraftClient mc) {
-		return mc.world.getTime() < containerIoRetryAtTick;
+	/** 村民是否处于失败重试冷却（选择循环跳过；到期惰性清除） */
+	private boolean isVillagerOnRetryCooldown(UUID uuid, long nowTick) {
+		Long until = villagerRetryAt.get(uuid);
+		if (until == null) {
+			return false;
+		}
+		if (nowTick >= until) {
+			villagerRetryAt.remove(uuid);
+			return false;
+		}
+		return true;
 	}
 
 	@Override
 	public void reset() {
 		returnTriggerConflict = null;
 		returnTriggerRetryAtTick = 0;
-		containerIoRetryAtTick = 0;
+		villagerRetryAt.clear();
 		super.reset();
 	}
 }

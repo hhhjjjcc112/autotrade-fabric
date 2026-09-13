@@ -35,9 +35,8 @@ import net.minecraft.entity.Entity;
  * 评分 score = 饥饿×HUNGER_WEIGHT + bonus（容器 +2，决策零成本；村民 0），无距离项；tie-break：最久未服务 →
  * 距离近 → 容器先入列。任务期窗口补偿：L1 任务期记账（onTaskTick 收集窗口内候选入 seenKeys，离窗差集补记错过）；
  * 驻留老化（tickIdle 评分前对候选按 lastServedTick 老化——从未服务或超老化间隔 → 饥饿 +1 并重置周期，每周期至多 +1； 3
- * 周期后必超容器 bonus 插队；容器统一老化——被村民插队压着的容器不会反向饿死）。容器 SCREEN_TIMEOUT/CONFIG_INVALID
- * 失败冷却 100 tick（矩阵：非静默失败 →
- * 显式节流；防失败容器独占运行位的忙循环/刷屏）。候选收集/处理记录（processedVillagers）在机器层维护：评分选中村民后通过
+ * 周期后必超容器 bonus 插队；容器统一老化——被村民插队压着的容器不会反向饿死）。容器失败冷却已迁移至调度器逐容器统一过滤
+ * （本类不再维护本地冷却表；基类矩阵标记，调度器候选层排除）。候选收集/处理记录（processedVillagers）在机器层维护：评分选中村民后通过
  * 构造器锁定派发，会话内不再自行重扫（修复「machine 选 A、session 取到 B」的竞态）。
  * </p>
  *
@@ -101,19 +100,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	private final Set<StarvationKey> seenKeys = new HashSet<>();
 	/** 上次服务时间（tie-break：最久未服务优先；默认 MIN_VALUE = 从未服务） */
 	private final Map<StarvationKey, Long> lastServedTick = new HashMap<>();
-	/**
-	 * 容器失败冷却：containerKey（坐标+方向）→ 失败时世界 tick（仅 SCREEN_TIMEOUT/CONFIG_INVALID
-	 * 记录；防失败容器独占运行位）
-	 */
-	private final Map<String, Long> failedContainerCooldown = new HashMap<>();
 
 	/** 复用集合（类内初始化，每 tick clear，避免分配） */
 	private final List<Candidate> candidates = new ArrayList<>();
 	private final Set<StarvationKey> candidateKeys = new HashSet<>();
 	private final List<Entity> unprocessedVillagers = new ArrayList<>();
 
-	/** 最近一次可见的世界 tick（结束钩子记录容器失败冷却用；误差 ≤1 tick，100 tick 冷却不敏感） */
-	private long lastWorldTick = 0;
 	/** 安全点让位检查器（村民任务注入）：候选内存在「饥饿 ≥ 阈值 且 > 当前村民」的未处理村民（排除自己）→ 让位 */
 	private final CompetitorChecker villagerCompetitorChecker;
 	/** 提示防刷屏状态：已提示过饥饿阈值的目标键（服务完成/清除饥饿时移除，reset 清空） */
@@ -141,7 +133,7 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			}
 			// 候选内更饿的不同容器（公平轮转确定版；同容器条目不视为竞争者——防 X/Y 各转移 1 组互相让位的 ping-pong）
 			for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc)) {
-				if (c.containerKey().equals(excludedContainerKey) || isContainerOnCooldown(mc, c.containerKey())) {
+				if (c.containerKey().equals(excludedContainerKey)) {
 					continue;
 				}
 				int h = starvation.getOrDefault(new ContainerKey(c.ioKey()), 0);
@@ -205,19 +197,14 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	}
 
 	/**
-	 * 容器 IO 正常结束钩子（基类骨架调用）：清饥饿/窗口快照/提示记录（任何结果均清——防饿死回归） + 矩阵非静默失败
-	 * （SCREEN_TIMEOUT/CONFIG_INVALID）容器额外冷却排除 （失败清饥饿后该容器仍 pending 且 bonus
-	 * 恒胜出，不冷却则整轮忙循环）
+	 * 容器 IO 正常结束钩子（基类骨架调用）：清饥饿/窗口快照/提示记录（任何结果均清——防饿死回归）。
+	 * 容器的失败冷却记录由基类矩阵统一标记、由调度器候选过滤统一承担，本类不再本地记录。
 	 */
 	@Override
 	protected void onContainerTaskEnded(ContainerIOTask op, TaskResult result) {
 		starvation.remove(new ContainerKey(op.getIntent().ioKey()));
 		seenKeys.remove(new ContainerKey(op.getIntent().ioKey()));
 		hintedKeys.remove(new ContainerKey(op.getIntent().ioKey()));
-		if (result.isFailed() && (result.reason() == TaskResult.FailReason.CONFIG_INVALID
-				|| result.reason() == TaskResult.FailReason.SCREEN_TIMEOUT)) {
-			failedContainerCooldown.put(op.getIntent().containerKey(), lastWorldTick);
-		}
 	}
 
 	/**
@@ -232,15 +219,12 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	/**
 	 * 任务运行期钩子（基类每任务 tick 调用，先于 currentTask.tick）：L1 任务期窗口记账——任务运行期间进入范围的目标并入
 	 * seenKeys，离窗差集补记错过（修「任务期进出范围无痕迹」的结构性错过）。 容器候选每 tick 重算（距离实时，无 TTL 漏记）；村民每 tick
-	 * 记账（正确性优先，无节流）。 冷却中的失败容器不记账（配置错误目标既不执行也不记饥饿）。
+	 * 记账（正确性优先，无节流）。 冷却中的失败容器已由调度器候选过滤统一排除，本处无需再判。
 	 */
 	@Override
 	protected void onTaskTick(MinecraftClient mc) {
-		lastWorldTick = mc.world.getTime();
 		for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc)) {
-			if (!isContainerOnCooldown(mc, c.containerKey())) {
-				seenKeys.add(new ContainerKey(c.ioKey()));
-			}
+			seenKeys.add(new ContainerKey(c.ioKey()));
 		}
 		for (Entity v : findUnprocessedVillagers(mc)) {
 			seenKeys.add(new VillagerKey(v.getUuid()));
@@ -249,7 +233,6 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 
 	@Override
 	protected void tickIdle(MinecraftClient mc) {
-		lastWorldTick = mc.world.getTime();
 		// 残留窗口兜底：让位/异常路径可能遗留「交互在途、窗口晚到」的窗口（任务已结束）→ 检测到即关闭
 		// （关闭链路说明见 closeResidualScreen——1.20.4 源码核实，等效阻止窗口出现）
 		if (closeResidualScreen(mc)) {
@@ -279,13 +262,11 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 			}
 		}
 
-		// 收集候选：范围内需要 IO 的容器条目（过滤失败冷却中）∪ 未处理村民（无冷却，每 tick 决策）；
+		// 收集候选：范围内需要 IO 的容器条目（调度器已统一过滤冷却中容器）∪ 未处理村民（无冷却，每 tick 决策）；
 		// 容器先入列（bonus=CONTAINER_BONUS），村民后入列（bonus=0）——评分相同时先入列者胜（容器优先）
 		candidates.clear();
 		for (ContainerCandidate c : containerIOScheduler.findPendingContainers(mc)) {
-			if (!isContainerOnCooldown(mc, c.containerKey())) {
-				candidates.add(new Candidate(new ContainerKey(c.ioKey()), CONTAINER_BONUS, c.distance(), c, null));
-			}
+			candidates.add(new Candidate(new ContainerKey(c.ioKey()), CONTAINER_BONUS, c.distance(), c, null));
 		}
 		double interactRange = Configs.Moving.MOVING_INTERACT_RANGE.getDoubleValue();
 		for (Entity v : findUnprocessedVillagers(mc)) {
@@ -406,24 +387,6 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		return Math.min(oldValue + inc, STARVATION_CAP);
 	}
 
-	/**
-	 * 容器是否处于 SCREEN_TIMEOUT/CONFIG_INVALID 失败冷却（节流时长 = 基类
-	 * {@link AbstractTradeMachine#CONFIG_FAIL_COOLDOWN_TICKS}；tickIdle 候选收集 / L1 记账
-	 * / L2 检查器三处共用过滤；惰性清理过期条目）
-	 */
-	private boolean isContainerOnCooldown(MinecraftClient mc, String containerKey) {
-		Long at = failedContainerCooldown.get(containerKey);
-		if (at == null) {
-			return false;
-		}
-		if (mc.world.getTime() - at >= CONFIG_FAIL_COOLDOWN_TICKS) {
-			// 冷却到期，惰性移除
-			failedContainerCooldown.remove(containerKey);
-			return false;
-		}
-		return true;
-	}
-
 	@Override
 	public void reset() {
 		super.reset();
@@ -433,7 +396,6 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		starvation.clear();
 		seenKeys.clear();
 		lastServedTick.clear();
-		failedContainerCooldown.clear();
 		hintedKeys.clear();
 	}
 

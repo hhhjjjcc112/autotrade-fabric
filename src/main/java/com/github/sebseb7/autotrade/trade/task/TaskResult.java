@@ -13,7 +13,7 @@ public record TaskResult(Status status, FailReason reason) {
 	}
 
 	/**
-	 * 失败原因 9 值（顺序固定，供机器层按细分原因分发处理动作）：
+	 * 失败原因 10 值（顺序固定，供机器层按细分原因分发处理动作）：
 	 *
 	 * <ul>
 	 * <li>{@link #WORLD_GONE}：玩家或世界意外缺失（如断线）</li>
@@ -25,10 +25,11 @@ public record TaskResult(Status status, FailReason reason) {
 	 * <li>{@link #CONFIG_INVALID}：配置与现场不符（如返回触发方块类型不匹配）</li>
 	 * <li>{@link #INVENTORY_BLOCKED}：背包空间不足，交易结果放不下</li>
 	 * <li>{@link #TELEPORT_TIMEOUT}：虚空模式村民始终未消失（传送未完成）超时</li>
+	 * <li>{@link #NO_PROGRESS}：容器搬运无进展（目标容器已满 / 无可搬运物品 / 背包无法接收）</li>
 	 * </ul>
 	 */
 	public enum FailReason {
-		WORLD_GONE, TARGET_INVALID, CHUNK_UNLOADED, SCREEN_TIMEOUT, SCREEN_CLOSED, TRANSIT_TIMEOUT, CONFIG_INVALID, INVENTORY_BLOCKED, TELEPORT_TIMEOUT
+		WORLD_GONE, TARGET_INVALID, CHUNK_UNLOADED, SCREEN_TIMEOUT, SCREEN_CLOSED, TRANSIT_TIMEOUT, CONFIG_INVALID, INVENTORY_BLOCKED, TELEPORT_TIMEOUT, NO_PROGRESS
 	}
 
 	/** 继续执行的结果常量（reason 恒为 null） */

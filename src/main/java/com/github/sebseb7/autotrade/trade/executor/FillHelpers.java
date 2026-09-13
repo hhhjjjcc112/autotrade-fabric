@@ -18,6 +18,12 @@ import net.minecraft.screen.slot.SlotActionType;
  * 机（runOneBatch/exactTradeN/exactTradeNDual 等）仍留在基类。
  */
 final class FillHelpers {
+	/**
+	 * splitSlotExact 阶段一（二分拆半）的硬迭代上限：正常情况拆半次数 ≤ log2(64) ≈ 6 次（输入堆叠最大 64）， 16
+	 * 为安全余量。超出该上限即视为不变量破坏（如槽状态异常导致循环不收敛），放弃拆分并返回 false。
+	 */
+	private static final int SPLIT_SLOT_MAX_HALVINGS = 16;
+
 	private FillHelpers() {
 	}
 
@@ -96,6 +102,8 @@ final class FillHelpers {
 	// 不变量：目标槽为「待拆分堆叠」，B 累积「已拆出多余」，光标空。
 	// 阶段 1 每轮：光标空 + 右键槽 = 取半 ceil((cur+1)/2)（PICKUP 单笔语义，F5）→ 槽剩 floor(cur/2)；
 	// 左键 B = 光标全部并入 → 光标空。轮数 ≤ log2(64) ≈ 6（S=64 时），点击数从 O(S−M) 降到 O(log S)。
+	// 阶段 1 迭代上限 SPLIT_SLOT_MAX_HALVINGS（16，安全余量）：超限 = 不变量破坏，与收尾校验失败同路径
+	// （返回 false → 调用方 undoFill + CAPACITY_SKIP）。
 	// 收尾（放回法）：溢出 ≤ 右键预算(8) → PICKUP 槽（光标 = cur、槽 = 0）→ 右键 B × overflow（光标每次
 	// 放回 1 → 光标 = keep）→ PICKUP 槽（光标 keep 放回 → 槽 = keep ✓）。
 	// 阶段 2 回补：取半过头（槽 < keep）→ 每轮 B 取半到光标、右键槽放回 1 个（槽 +1）、左键 B 清光标；
@@ -114,7 +122,13 @@ final class FillHelpers {
 			return true;
 		}
 		// 阶段 1：二分拆半，直到槽数量 ≤ keep 或进入收尾路径
+		int halvings = 0;
 		while (target.getStack().getCount() > keep) {
+			// 阶段 1 硬迭代上限护栏：超限 = 不变量破坏（循环不收敛），放弃拆分（调用方撤销 + CAPACITY_SKIP）
+			if (++halvings > SPLIT_SLOT_MAX_HALVINGS) {
+				AutoTrade.logger.warn("[Executor] 拆半循环超出上限（{} 次），放弃拆分（调用方撤销 + CAPACITY_SKIP）", SPLIT_SLOT_MAX_HALVINGS);
+				return false;
+			}
 			int cur = target.getStack().getCount();
 			int overflow = cur - keep;
 			// 收尾（放回法）：溢出 ≤ 右键预算 → 放回 finish，返回前校验光标净空 + 槽 = keep

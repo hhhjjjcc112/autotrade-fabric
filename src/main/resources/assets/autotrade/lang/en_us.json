@@ -22,6 +22,7 @@
     "autotrade.message.void.exhausted": "§cVillager trade uses detected (count persisted/leftover) - either a leftover count from a previous wrong trade, or the void unload buffer is too small / the rig's chunk stays loaded (spawn/force-loaded chunks), causing counts to be saved. Trading continues but yields fewer trades per cycle; raise Void Unload Delay or check the rig location, or let the villager restock / replace it to reset the leftover count",
     "autotrade.message.io.not_container": "§cContainer operation failed: target position %s is not a container (%s), aborted. Check the container coordinates in IO Input/IO Output",
     "autotrade.message.io.open_failed": "§cContainer operation failed: could not open the container screen; operation aborted",
+    "autotrade.message.io.no_progress": "§eContainer operation made no progress: the target container is full or has no matching items (this container will be retried later)",
     "autotrade.message.void.return_overlap": "§eVoid return trigger position overlaps an IO container coordinate - return trigger disabled (move the trigger block or the container coordinates)",
     "autotrade.message.void.invalid_dimension": "§cInvalid void return dimension, return trigger disabled",
     "autotrade.message.void.teleport_timeout": "Villager never teleported, skipping",

@@ -22,6 +22,7 @@
     "autotrade.message.void.exhausted": "§c检测到村民交易已有使用次数（次数被持久化/残留）——可能是此前误交易留下的次数，或虚空卸载缓冲不足、装置区块被持续加载（出生点/强制加载区块）导致次数回写。交易不会停止，但每次可交易数量会减少；请调大「村民卸载等待」或检查装置位置；若为残留次数，让村民补货或更换村民即可清零",
     "autotrade.message.io.not_container": "§c容器操作失败：目标位置 %s 不是容器（%s），已放弃。请检查「IO输入/IO输出」中的容器坐标",
     "autotrade.message.io.open_failed": "§c容器操作失败：无法打开容器窗口，已放弃本次操作",
+    "autotrade.message.io.no_progress": "§e容器操作无进展：目标容器已满或没有可搬运的物品（该容器将稍后自动重试）",
     "autotrade.message.void.return_overlap": "§e虚空回程触发坐标与 IO 容器坐标重叠，回程触发未启用（请更换触发方块或容器坐标）",
     "autotrade.message.void.invalid_dimension": "§c虚空回程维度格式错误，回程触发已禁用",
     "autotrade.message.void.teleport_timeout": "村民一直未传送，已跳过",

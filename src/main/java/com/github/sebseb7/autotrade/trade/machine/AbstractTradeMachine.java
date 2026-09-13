@@ -28,7 +28,7 @@ import net.minecraft.util.math.BlockPos;
  * {@link #onTaskInterrupted(Task)}。
  *
  * <p>
- * <b>失败处理矩阵（9 值 FailReason →
+ * <b>失败处理矩阵（10 值 FailReason →
  * 机器层动作/告警）</b>：{@link #onTaskEnded(Task, TaskResult)} 按细分原因
  * 分发机器层动作；告警走状态边沿（{@link AlertType} + armedAlerts，同故障一次、恢复重新武装，无时间窗口限频）。
  *
@@ -43,6 +43,7 @@ import net.minecraft.util.math.BlockPos;
  * CONFIG_INVALID      配置与现场不符                  容器任务 100t 冷却；返回触发门控/冷却     容器非容器 / 返回触发 STRICT（边沿）
  * INVENTORY_BLOCKED   背包空间不足                    暂停交易 100t                             背包满（边沿）
  * TELEPORT_TIMEOUT    虚空村民始终未消失              会话结束（由模式层决定后续）              传送超时（边沿）
+ * NO_PROGRESS         容器搬运零进展（满/无匹配/背包无法接收）  逐容器 100t 冷却                          容器无进展（边沿）
  * </pre>
  */
 public abstract class AbstractTradeMachine implements TradingMachine {
@@ -67,8 +68,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	private final Set<String> armedAlerts = new HashSet<>();
 
 	/**
-	 * 容器任务 SCREEN_TIMEOUT / CONFIG_INVALID 失败后的重试节流 tick（矩阵行；STATIC/VOID/MOVING
-	 * 共用常量）。 100 tick = 5 秒；仅约束「非静默失败」后的容器 IO 重试节奏，成功路径不受影响。
+	 * 容器任务 NO_PROGRESS / SCREEN_TIMEOUT / CONFIG_INVALID 失败后的逐容器冷却 tick（矩阵行；
+	 * STATIC/VOID/MOVING 共用常量）。 100 tick = 5 秒；仅约束「非静默失败」后的容器 IO 重试节奏，成功路径不受影响。
 	 */
 	protected static final int CONFIG_FAIL_COOLDOWN_TICKS = 100;
 
@@ -85,7 +86,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		/** VOID 交易耗尽证据（开窗 offers uses > 0） */
 		VOID_EXHAUSTED("autotrade.message.void.exhausted"),
 		/** 返回触发 STRICT 类型不符（VOID 派发前门控） */
-		RETURN_TRIGGER_STRICT("autotrade.message.void.return_strict");
+		RETURN_TRIGGER_STRICT("autotrade.message.void.return_strict"),
+		/** 容器搬运零进展（NO_PROGRESS）。 */
+		CONTAINER_NO_PROGRESS("autotrade.message.io.no_progress");
 
 		/** i18n 消息键（发送时经 InfoUtils 本地化渲染） */
 		final String messageKey;
@@ -276,8 +279,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 
 	/**
 	 * 任务结束后的回调（由 tick 检测到任务返回非 RUNNING 结果时调用，非强杀）：按细分失败原因分发机器层动作 —— 静默 / 节流 / 暂停 /
-	 * 告警（见类 javadoc 的 9 行矩阵），并同步「背包满暂停」与状态边沿告警的解除。 STATIC/MOVING/VOID 覆写为设置各自冷却后须委托
-	 * super（矩阵分发与告警均在基类）。 告警为状态边沿：同一故障键只在首次发送，恢复点 clear 重新武装；无时间窗口限频。
+	 * 告警（见类 javadoc 的 10 行矩阵），并同步「背包满暂停」与状态边沿告警的解除。 STATIC/MOVING/VOID
+	 * 覆写为设置各自冷却后须委托 super（矩阵分发与告警均在基类）。 告警为状态边沿：同一故障键只在首次发送，恢复点 clear 重新武装；无时间窗口限频。
 	 *
 	 * @param task
 	 *            已结束的任务
@@ -296,12 +299,18 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 			TradeStats.getInstance().recordIoOp(op.isInputOp());
 			clearContainerFaultAlert(AlertType.CONTAINER_OPEN_FAILED, op.getIntent().containerKey());
 			clearContainerFaultAlert(AlertType.CONTAINER_NOT_CONTAINER, op.getIntent().containerKey());
+			clearContainerFaultAlert(AlertType.CONTAINER_NO_PROGRESS, op.getIntent().containerKey());
 			clearFaultAlert(AlertType.INVENTORY_FULL);
 		}
-		// 失败矩阵：仅 4 个细分原因有机器层动作；其余 5
-		// 值（WORLD_GONE/TARGET_INVALID/CHUNK_UNLOADED/SCREEN_CLOSED/
-		// TRANSIT_TIMEOUT）静默
+		// 失败矩阵：仅 5 个细分原因有机器层动作（INVENTORY_BLOCKED / TELEPORT_TIMEOUT / CONFIG_INVALID /
+		// SCREEN_TIMEOUT / NO_PROGRESS）；其余 5 值静默
 		if (result.isFailed()) {
+			// 容器失败统一逐容器冷却（NO_PROGRESS / CONFIG_INVALID / SCREEN_TIMEOUT 三原因共用同一标记点，禁止分散进
+			// case）
+			if (task instanceof ContainerIOTask op && isContainerCooldownReason(result)) {
+				containerIOScheduler.markContainerCooldown(op.getIntent().containerKey(), lastWorldTime,
+						CONFIG_FAIL_COOLDOWN_TICKS);
+			}
 			switch (result.reason()) {
 				case INVENTORY_BLOCKED -> {
 					// 背包空间不足：暂停交易退避 + 边沿告警（满包不标记村民由 handleTaskEnded 骨架短路保证）
@@ -327,6 +336,12 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 						showContainerFaultAlert(AlertType.CONTAINER_OPEN_FAILED, op.getIntent().containerKey());
 					}
 				}
+				case NO_PROGRESS -> {
+					// 容器搬运零进展（满/无匹配/背包无法接收）：按容器键边沿告警（逐容器冷却已在 switch 前统一标记）
+					if (task instanceof ContainerIOTask op) {
+						showContainerFaultAlert(AlertType.CONTAINER_NO_PROGRESS, op.getIntent().containerKey());
+					}
+				}
 				default -> {
 					// 静默分支：WORLD_GONE / TARGET_INVALID / CHUNK_UNLOADED / SCREEN_CLOSED /
 					// TRANSIT_TIMEOUT
@@ -345,8 +360,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 				clearFaultAlert(AlertType.VOID_EXHAUSTED);
 			}
 		}
-		if (task instanceof ContainerIOTask op && !op.isInputOp() && inventoryPauseCooldown > 0) {
-			// 输出 IO 把产出物品运走后背包应有空间 → 立即恢复交易探测
+		if (task instanceof ContainerIOTask op && !op.isInputOp() && inventoryPauseCooldown > 0 && result.isSucceeded()
+				&& op.getTransferred() > 0) {
+			// 仅「成功且实际搬运 > 0」的输出 IO（真正释放了背包空间）才解除暂停
 			AutoTrade.logger.info("[ModeMachine] Output container IO done, inventory pause released");
 			inventoryPauseCooldown = 0;
 		}
@@ -381,6 +397,19 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	 */
 	protected static boolean isInventoryBlockedResult(TaskResult result) {
 		return result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED;
+	}
+
+	/**
+	 * 容器任务是否需要逐容器冷却的失败原因判定（NO_PROGRESS / CONFIG_INVALID / SCREEN_TIMEOUT）。
+	 *
+	 * @param result
+	 *            任务最后一次 tick 返回的结果
+	 * @return true = 该失败原因应触发逐容器冷却标记
+	 */
+	private static boolean isContainerCooldownReason(TaskResult result) {
+		return result.isFailed() && (result.reason() == TaskResult.FailReason.NO_PROGRESS
+				|| result.reason() == TaskResult.FailReason.CONFIG_INVALID
+				|| result.reason() == TaskResult.FailReason.SCREEN_TIMEOUT);
 	}
 
 	/**
@@ -488,7 +517,7 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		// 告警武装集合重置：重置视为全新状态，故障在下次出现时重新提示（状态边沿重新武装）
 		armedAlerts.clear();
 		// 重置后背包状态可能已变（清空/转移）→ 缓存立即失效，避免复用过期扫描结果
-		containerIOScheduler.invalidate();
+		containerIOScheduler.reset();
 	}
 
 	@Override

@@ -17,6 +17,7 @@ import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.gui.screen.ingame.ShulkerBoxScreen;
 import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.Slot;
@@ -29,7 +30,8 @@ import net.minecraft.world.World;
 /**
  * 容器 IO 任务：打开目标容器窗口后，在 1 tick 内循环搬运全部匹配物品（burst transfer）， 直到达 transferLimit
  * 上限或无匹配物品即停；随后关窗结束（OPENING→TRANSFERRING→CLOSING→SUCCEEDED）。 目标容器位置取自 IOIntent
- * 携带的位置记录（loc），与条目坐标解耦（多位置记录维度）。
+ * 携带的位置记录（loc），与条目坐标解耦（多位置记录维度）。 零进展语义：容器已满 / 无货 → 任务以 `NO_PROGRESS`
+ * 失败，机器层据此对该容器做逐容器冷却。
  */
 public class ContainerIOTask extends Task {
 
@@ -92,6 +94,11 @@ public class ContainerIOTask extends Task {
 	/** 返回本次 IO 意图（MOVING 饥饿记账清零用，见 {@link IOIntent#ioKey()}） */
 	public IOIntent getIntent() {
 		return intent;
+	}
+
+	/** 本次实际搬运的组数；机器层暂停解除门控用 */
+	public int getTransferred() {
+		return transferred;
 	}
 
 	/**
@@ -208,9 +215,9 @@ public class ContainerIOTask extends Task {
 		// 1 tick 内循环搬运全部：每迭代一次 QUICK_MOVE（1 组），直到达 transferLimit 上限或无匹配物品；
 		// clickSlot 本地模拟同步生效，循环内槽位状态实时更新（同 tick 多包点击先例：交易 executor runPassLoop）
 		while (transferred < transferLimit) {
-			boolean clicked = intent.isInput() ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
-			if (!clicked) {
-				break; // 无匹配物品 = 搬运完毕
+			boolean moved = intent.isInput() ? transferItem(mc, handler, true) : transferItem(mc, handler, false);
+			if (!moved) {
+				break; // 无实际移动 = 搬运完毕或容器已满（无进展）
 			}
 			transferred++;
 		}
@@ -218,7 +225,9 @@ public class ContainerIOTask extends Task {
 		return TaskResult.RUNNING;
 	}
 
-	// 移动单个匹配物品：
+	// 尝试点击移动单个匹配物品，返回「本次点击是否实际移动了物品」：
+	// 找到匹配槽 → 点击且实际移动（返回 true）；
+	// 失败语义（返回 false）= 无匹配物品 / 无进展（容器满或无空间）/ 点击异常，调用方均 break。
 	// 输入操作：从容器槽位快速移动到玩家背包（遍历到玩家背包槽位即停止）；
 	// 输出操作：从玩家背包槽位快速移动到容器（跳过非玩家背包槽位）。
 	private boolean transferItem(MinecraftClient mc, ScreenHandler handler, boolean isInputOp) {
@@ -243,12 +252,21 @@ public class ContainerIOTask extends Task {
 
 			String slotItemId = Registries.ITEM.getId(slot.getStack().getItem()).toString();
 			if (slotItemId.equals(targetItem)) {
+				// 点击前记录槽位快照：本地模拟同步生效，点击后内容不变即为无进展
+				ItemStack before = slot.getStack().copy();
 				try {
 					mc.interactionManager.clickSlot(handler.syncId, slot.id, 0, SlotActionType.QUICK_MOVE, mc.player);
-					return true;
 				} catch (Exception e) {
+					// 点击异常：记录错误后继续扫描其它匹配槽（不视为进展）
 					AutoTrade.logger.error("Error transferring item", e);
+					continue;
 				}
+				// 仅正常返回后比较：无变化 = 容器满 / 背包无空间 / 点击无效
+				if (ItemStack.areEqual(before, slot.getStack())) {
+					AutoTrade.logger.info("[ContainerIO] 点击无进展（容器满或无空间），停止本轮搬运 (container={})", intent.containerKey());
+					return false;
+				}
+				return true;
 			}
 		}
 		return false;
@@ -256,6 +274,12 @@ public class ContainerIOTask extends Task {
 
 	private TaskResult tickClosing(MinecraftClient mc) {
 		closeScreenIfOpen(mc.currentScreen);
+		// 关窗后判定：非让位且零实际搬运 = 无进展（容器满 / 无货），返回失败供机器层逐容器冷却
+		if (!yielded && transferred == 0) {
+			AutoTrade.logger.info("[ContainerIO] 无进展结束 (container={})", intent.containerKey());
+			return TaskResult.failed(FailReason.NO_PROGRESS);
+		}
+		// 让位为主动放弃，保持成功语义
 		return TaskResult.SUCCEEDED;
 	}
 

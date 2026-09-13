@@ -33,6 +33,12 @@ import net.minecraft.registry.Registries;
  * 拼接，微秒级），距离每 tick 新鲜（MOVING 玩家移动），无 TTL 陈旧问题；任意任务结束/重置时经 {@link #invalidate()}
  * 强制清空背包计数缓存——交易与转运都改变背包，必须重算。
  * </p>
+ *
+ * <p>
+ * 逐容器冷却语义：容器 NO_PROGRESS / CONFIG_INVALID / SCREEN_TIMEOUT 失败后，矩阵经
+ * {@link #markContainerCooldown} 给该容器打上冷却；冷却在候选收集的统一漏斗中过滤（一处过滤、所有入口 全局一致，取代
+ * STATIC/VOID 全局冷却与 MOVING 本地冷却表），到期惰性清除后自动重试；不同容器互不影响。
+ * </p>
  */
 public class ContainerIOScheduler {
 
@@ -68,9 +74,53 @@ public class ContainerIOScheduler {
 	/** 让位检查器（MOVING 注入；null = 不检查，STATIC/VOID 保持原行为） */
 	private CompetitorChecker competitorChecker = null;
 
+	/**
+	 * 逐容器冷却表（containerKey → 冷却截止世界 tick）：候选收集时统一过滤，到期惰性清除。 机器层矩阵在容器 NO_PROGRESS /
+	 * CONFIG_INVALID / SCREEN_TIMEOUT 失败时经 {@link #markContainerCooldown}
+	 * 标记——一处过滤取代 STATIC/VOID 全局冷却与 MOVING 本地冷却表， 所有入口（startNearest /
+	 * startOutputFirst / MOVING 的 findPendingContainers 消费方）共享、全局一致。
+	 */
+	private final Map<String, Long> containerCooldownUntil = new HashMap<>();
+
 	/** 使扫描缓存失效：任何任务结束/重置时调用——交易与转运都改变背包，必须重算背包计数 */
 	public void invalidate() {
 		cachedSlotCounts = null;
+	}
+
+	/**
+	 * 标记某容器进入冷却：机器层矩阵在容器 NO_PROGRESS / CONFIG_INVALID / SCREEN_TIMEOUT 失败时调用；
+	 * 时长由调用方传 CONFIG_FAIL_COOLDOWN_TICKS（逐容器，互不影响）。
+	 */
+	public void markContainerCooldown(String containerKey, long nowTick, int cooldownTicks) {
+		containerCooldownUntil.put(containerKey, nowTick + cooldownTicks);
+	}
+
+	/**
+	 * 判断某容器是否仍在冷却中（候选收集统一过滤的唯一判定点）：null 键视为不在冷却（无身份可比）； 已到期（nowTick >= 截止
+	 * tick）时惰性清除并返回 false；键缺失同样返回 false。
+	 */
+	private boolean isContainerOnCooldown(String containerKey, long nowTick) {
+		if (containerKey == null) {
+			return false;
+		}
+		Long until = containerCooldownUntil.get(containerKey);
+		if (until == null) {
+			return false;
+		}
+		if (nowTick >= until) {
+			containerCooldownUntil.remove(containerKey);
+			return false;
+		}
+		return true;
+	}
+
+	/**
+	 * 机器 reset 时调用：清空背包计数缓存与逐容器冷却表（回到冷启动状态）。与任务结束的 {@link #invalidate()}
+	 * 区分——后者只清背包缓存、不丢冷却（任务失败标记的冷却必须跨任务保留）。
+	 */
+	public void reset() {
+		cachedSlotCounts = null;
+		containerCooldownUntil.clear();
 	}
 
 	/** 设置让位检查器（MOVING 模式构造器注入；STATIC/VOID 不设置，任务无让位检查点） */
@@ -135,6 +185,12 @@ public class ContainerIOScheduler {
 				// 天然不匹配）
 				if (!loc.getDimension().isEmpty()
 						&& !loc.getDimension().equals(ContainerIOHelper.currentDimensionId(mc))) {
+					continue;
+				}
+				// 逐容器冷却过滤（唯一漏斗）：矩阵在 NO_PROGRESS / CONFIG_INVALID / SCREEN_TIMEOUT
+				// 失败时标记该容器冷却，冷却期内在此统一排除；到期后惰性清除，自动重试
+				String containerKey = ContainerLocKey.from(loc, isInput).format();
+				if (isContainerOnCooldown(containerKey, now)) {
 					continue;
 				}
 				// 距离只算一次：同时用于可及检查与候选距离（替代旧 needsContainerIO 内的重复计算）
