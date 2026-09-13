@@ -12,9 +12,23 @@ public record TaskResult(Status status, FailReason reason) {
 		RUNNING, SUCCEEDED, FAILED
 	}
 
-	/** 失败原因四值：瞬态失败 / 配置错误 / 背包空间不足 / 虚空模式传送超时 */
+	/**
+	 * 失败原因 9 值（顺序固定，供机器层按细分原因分发处理动作）：
+	 *
+	 * <ul>
+	 * <li>{@link #WORLD_GONE}：玩家或世界意外缺失（如断线）</li>
+	 * <li>{@link #TARGET_INVALID}：目标方块缺失或超出可达距离</li>
+	 * <li>{@link #CHUNK_UNLOADED}：目标容器所在区块尚未加载</li>
+	 * <li>{@link #SCREEN_TIMEOUT}：交互后交易/容器界面始终未出现（超时）</li>
+	 * <li>{@link #SCREEN_CLOSED}：交易窗口在交易过程中意外关闭</li>
+	 * <li>{@link #TRANSIT_TIMEOUT}：等待玩家传送回程超时</li>
+	 * <li>{@link #CONFIG_INVALID}：配置与现场不符（如返回触发方块类型不匹配）</li>
+	 * <li>{@link #INVENTORY_BLOCKED}：背包空间不足，交易结果放不下</li>
+	 * <li>{@link #TELEPORT_TIMEOUT}：虚空模式村民始终未消失（传送未完成）超时</li>
+	 * </ul>
+	 */
 	public enum FailReason {
-		TRANSIENT, CONFIG, INVENTORY_BLOCKED, TELEPORT_TIMEOUT
+		WORLD_GONE, TARGET_INVALID, CHUNK_UNLOADED, SCREEN_TIMEOUT, SCREEN_CLOSED, TRANSIT_TIMEOUT, CONFIG_INVALID, INVENTORY_BLOCKED, TELEPORT_TIMEOUT
 	}
 
 	/** 继续执行的结果常量（reason 恒为 null） */

@@ -85,13 +85,25 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 		processedVillagers.add(villagerId);
 	}
 
-	/** 容器 IO 正常结束钩子（基类骨架调用）：设置 IO 间隔冷却（任意结果均设，与重构前一致） */
+	/**
+	 * 容器 IO 正常结束钩子（基类骨架调用）：矩阵行「非静默失败 → 显式 100t 节流」——SCREEN_TIMEOUT / CONFIG_INVALID
+	 * 失败后按基类固定 100t 冷却（防坏容器高频重试与刷屏）；其余结果仍按 CONTAINER_IO_INTERVAL 间隔。 STATIC
+	 * 保持全局冷却模型（不识别具体坏容器）：一个坏容器最多阻塞其它容器 IO 100t，该权衡有意接受。
+	 */
 	@Override
 	protected void onContainerTaskEnded(ContainerIOTask op, TaskResult result) {
-		containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
+		if (result.isFailed() && (result.reason() == TaskResult.FailReason.SCREEN_TIMEOUT
+				|| result.reason() == TaskResult.FailReason.CONFIG_INVALID)) {
+			containerIOCooldown = CONFIG_FAIL_COOLDOWN_TICKS;
+		} else {
+			containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();
+		}
 	}
 
-	/** 容器 IO 被看门狗强杀钩子（基类骨架调用）：同样设置 IO 间隔冷却（看门狗强杀后不立即重试同一容器） */
+	/**
+	 * 容器 IO 被看门狗强杀钩子（基类骨架调用）：强杀路径没有 TaskResult（看门狗不产生失败原因），无法按原因判定节流， 故保持现状——仍设 IO
+	 * 间隔冷却（强杀后不立即重试同一容器；原因级 100t 节流仅适用于正常失败结束）。
+	 */
 	@Override
 	protected void onContainerTaskInterrupted(ContainerIOTask op) {
 		containerIOCooldown = Configs.Static.CONTAINER_IO_INTERVAL.getIntegerValue();

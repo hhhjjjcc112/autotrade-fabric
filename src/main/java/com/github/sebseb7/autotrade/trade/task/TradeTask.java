@@ -6,8 +6,6 @@ import com.github.sebseb7.autotrade.trade.executor.TradeExecutor;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.helper.VillagerInteractHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.CompetitorChecker;
-import fi.dy.masa.malilib.gui.Message;
-import fi.dy.masa.malilib.util.InfoUtils;
 import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
@@ -57,6 +55,8 @@ public abstract class TradeTask extends Task {
 	private boolean sessionMatched = false;
 	/** 学习 tick（TTL 起点） */
 	private long sessionMatchedTick = 0;
+	/** VOID 耗尽证据：本会话开窗 offers 快照中检出 uses > 0（弹窗由机器层的状态边沿告警统一发送） */
+	private boolean exhaustedEvidenceDetected;
 
 	/** 锁定本会话要处理的目标村民（由机器层在派发前调用，修复「机器层评分选 A、会话内部重扫可能取到 B」的竞态） */
 	public TradeTask(UUID villagerActiveId) {
@@ -99,8 +99,8 @@ public abstract class TradeTask extends Task {
 
 	private TaskResult tickInteracting(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
-			// 玩家/世界意外缺失（如断线）：瞬态失败结束
-			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+			// 玩家/世界意外缺失（如断线）：结束会话（机器层静默处理）
+			return TaskResult.failed(TaskResult.FailReason.WORLD_GONE);
 		}
 
 		Entity entity = VillagerHelper.findByUuid(mc, villagerActive);
@@ -131,8 +131,8 @@ public abstract class TradeTask extends Task {
 
 	private TaskResult tickWaitingForScreen(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
-			// 玩家/世界意外缺失（如断线）：瞬态失败结束
-			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+			// 玩家/世界意外缺失（如断线）：结束会话（机器层静默处理）
+			return TaskResult.failed(TaskResult.FailReason.WORLD_GONE);
 		}
 
 		if (mc.currentScreen instanceof MerchantScreen screen) {
@@ -156,9 +156,10 @@ public abstract class TradeTask extends Task {
 				// 耗尽检测告警：此时 offers 仍是开窗时服务端同步真值（尚未被本地点击模拟污染）——
 				// 健康虚空装置中村民每次重载 uses 应为 0，任何 uses > 0 都是交易被持久化到村民的痕迹
 				if (hasExhaustedTradeEvidence(screen)) {
+					// 只记录证据标志，弹窗与去重由机器层的状态边沿告警统一处理（机器层据此发送一次提示）
+					exhaustedEvidenceDetected = true;
 					AutoTrade.logger.warn(
 							"[VoidMode] 村民交易已有使用次数（被持久化/残留）：可能是此前误交易留下的次数，或卸载缓冲不足/装置区块被持续加载；交易仍继续但每次可交易数量减少（请调大 voidUnloadDelay 或检查装置位置）");
-					InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.void.exhausted");
 				}
 				state = State.TRADING;
 				AutoTrade.logger.info("[TradeTask] WAITING_FOR_SCREEN → TRADING (villager unloaded)");
@@ -175,14 +176,14 @@ public abstract class TradeTask extends Task {
 			return TaskResult.RUNNING;
 		}
 
-		// 窗口未开：交互超时后跳过该村民，结束会话（瞬态失败）
+		// 窗口未开：交互超时后跳过该村民，结束会话（界面超时）
 		if (interactTimeout > 0) {
 			interactTimeout--;
 			return TaskResult.RUNNING;
 		}
 
 		AutoTrade.logger.warn("[TradeTask] Screen never appeared for villager {}, skipping", villagerActive);
-		return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+		return TaskResult.failed(TaskResult.FailReason.SCREEN_TIMEOUT);
 	}
 
 	// VOID 耗尽证据：开窗 offers 快照（服务端同步真值）中任一 offer uses > 0。
@@ -200,14 +201,14 @@ public abstract class TradeTask extends Task {
 
 	private TaskResult tickTrading(MinecraftClient mc) {
 		if (mc.player == null || mc.world == null) {
-			// 玩家/世界意外缺失（如断线）：瞬态失败结束
-			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+			// 玩家/世界意外缺失（如断线）：结束会话（机器层静默处理）
+			return TaskResult.failed(TaskResult.FailReason.WORLD_GONE);
 		}
 
 		if (!(mc.currentScreen instanceof MerchantScreen screen)) {
-			// 交易窗口意外关闭：瞬态失败结束
+			// 交易窗口意外关闭：结束会话（机器层静默处理）
 			AutoTrade.logger.warn("[TradeTask] 交易窗口意外关闭");
-			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+			return TaskResult.failed(TaskResult.FailReason.SCREEN_CLOSED);
 		}
 
 		// 到达此处说明玩家/世界就绪且当前界面为交易界面：标记本会话已扫描
@@ -223,21 +224,33 @@ public abstract class TradeTask extends Task {
 		return TaskResult.RUNNING;
 	}
 
+	// 关闭界面并结束会话：背包满以 FAILED(INVENTORY_BLOCKED) 结束（机器层据此暂停交易且不标记村民，
+	// 下轮重试该村民）；正常结束返回 SUCCEEDED。两种情况均先关窗，并统一在会话末捕获 9.8 学习信息
 	private TaskResult tickClosingScreen(MinecraftClient mc) {
 		if (mc.currentScreen instanceof MerchantScreen screen) {
 			screen.close();
 		}
-		// 单村民直链下完成后无条件结束会话，机器层 onTaskEnded 负责标记/冷却决策（背包满时不标记，下轮重试该村民）
-		AutoTrade.logger.info("[TradeTask] CLOSING_SCREEN → SUCCEEDED");
 		// 9.8 会话末捕获命中信息（正常结束/让位统一路径；executor 的会话级 OR 信号在此读取为最终结果）
 		sessionMatched = executor.hasSessionHadExecutable();
 		sessionMatchedTick = mc.world.getTime();
+		if (inventoryBlocked) {
+			// 背包满：失败结果结束（机器层据此暂停交易 + 不标记村民；非 SUCCEEDED 不写学习缓存，由 TTL 自愈）
+			AutoTrade.logger.info("[TradeTask] CLOSING_SCREEN → FAILED (inventory blocked)");
+			return TaskResult.failed(TaskResult.FailReason.INVENTORY_BLOCKED);
+		}
+		// 正常结束：单村民直链完成后结束会话，机器层 onTaskEnded 负责标记/冷却决策
+		AutoTrade.logger.info("[TradeTask] CLOSING_SCREEN → SUCCEEDED");
 		return TaskResult.SUCCEEDED;
 	}
 
 	/** 本次会话是否因背包空间不足提前结束（正常路径机器层用结果判断；强杀路径无结果故保留本访问器供机器层查询） */
 	public boolean isInventoryBlocked() {
 		return inventoryBlocked;
+	}
+
+	/** 本会话是否检出 VOID 耗尽证据（机器层据此发送状态边沿告警） */
+	public boolean isExhaustedEvidenceDetected() {
+		return exhaustedEvidenceDetected;
 	}
 
 	/** 本次会话是否因安全点让位提前结束（机器层据此不标记已处理、饥饿不 +1；正常路径与强杀路径均查询） */

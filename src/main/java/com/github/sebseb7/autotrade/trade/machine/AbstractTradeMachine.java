@@ -11,11 +11,14 @@ import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
 import net.minecraft.client.gui.screen.ingame.MerchantScreen;
 import net.minecraft.client.gui.screen.ingame.ShulkerBoxScreen;
+import net.minecraft.util.math.BlockPos;
 
 /**
  * 交易模式机器的公共基类：封装「当前任务（交易会话/容器 IO）的生命周期管理」。 三种模式（STATIC/MOVING/VOID）只需实现
@@ -23,6 +26,24 @@ import net.minecraft.client.gui.screen.ingame.ShulkerBoxScreen;
  * {@link #setTaskIfEmpty(Task)} 启动（守卫保证同一时刻最多一个运行中任务）；任务结束经双钩子分发——正常结束走
  * {@link #onTaskEnded(Task, TaskResult)}， 看门狗强杀走
  * {@link #onTaskInterrupted(Task)}。
+ *
+ * <p>
+ * <b>失败处理矩阵（9 值 FailReason →
+ * 机器层动作/告警）</b>：{@link #onTaskEnded(Task, TaskResult)} 按细分原因
+ * 分发机器层动作；告警走状态边沿（{@link AlertType} + armedAlerts，同故障一次、恢复重新武装，无时间窗口限频）。
+ *
+ * <pre>
+ * 细分原因            触发场景                        机器层动作                                告警
+ * WORLD_GONE          玩家/世界意外缺失               静默                                      无
+ * TARGET_INVALID      返回触发方块缺失/超距           静默（可达性门控兜底）                    无
+ * CHUNK_UNLOADED      容器所在区块未加载              静默快速重试                              无
+ * SCREEN_TIMEOUT      交易/容器界面超时               容器任务 100t 冷却；返回触发 100t 节流    容器开窗失败（边沿）
+ * SCREEN_CLOSED       交易窗口意外关闭                静默                                      无
+ * TRANSIT_TIMEOUT     等待玩家传送回程超时            返回触发 100t 节流                        无
+ * CONFIG_INVALID      配置与现场不符                  容器任务 100t 冷却；返回触发门控/冷却     容器非容器 / 返回触发 STRICT（边沿）
+ * INVENTORY_BLOCKED   背包空间不足                    暂停交易 100t                             背包满（边沿）
+ * TELEPORT_TIMEOUT    虚空村民始终未消失              会话结束（由模式层决定后续）              传送超时（边沿）
+ * </pre>
  */
 public abstract class AbstractTradeMachine implements TradingMachine {
 
@@ -38,6 +59,41 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 
 	/** 容器 IO 调度器（机器层拥有调度决策；本基类与三模式共用同一实例） */
 	protected final ContainerIOScheduler containerIOScheduler = new ContainerIOScheduler();
+
+	/** 最近一次 tick 的世界时间戳（玩家/世界空检查后刷新）；子类冷却/节流（如 VOID 返回触发重试）的时间基准 */
+	protected long lastWorldTime = 0;
+
+	/** 已武装的故障告警键集合：状态边沿去重——同键只在首次发送，恢复时 clear 重新武装；无时间窗口限频 */
+	private final Set<String> armedAlerts = new HashSet<>();
+
+	/**
+	 * 容器任务 SCREEN_TIMEOUT / CONFIG_INVALID 失败后的重试节流 tick（矩阵行；STATIC/VOID/MOVING
+	 * 共用常量）。 100 tick = 5 秒；仅约束「非静默失败」后的容器 IO 重试节奏，成功路径不受影响。
+	 */
+	protected static final int CONFIG_FAIL_COOLDOWN_TICKS = 100;
+
+	/** 故障告警类型：携带 i18n 消息键；告警走状态边沿（同键一次、恢复重新武装），无时间窗口限频 */
+	protected enum AlertType {
+		/** 背包空间不足（INVENTORY_BLOCKED） */
+		INVENTORY_FULL("autotrade.message.inventory.full"),
+		/** VOID 传送超时（TELEPORT_TIMEOUT） */
+		TELEPORT_TIMEOUT("autotrade.message.void.teleport_timeout"),
+		/** 容器开窗失败（SCREEN_TIMEOUT 且任务标记 openFailed） */
+		CONTAINER_OPEN_FAILED("autotrade.message.io.open_failed"),
+		/** 目标位置不是容器（CONFIG_INVALID） */
+		CONTAINER_NOT_CONTAINER("autotrade.message.io.not_container"),
+		/** VOID 交易耗尽证据（开窗 offers uses > 0） */
+		VOID_EXHAUSTED("autotrade.message.void.exhausted"),
+		/** 返回触发 STRICT 类型不符（VOID 派发前门控） */
+		RETURN_TRIGGER_STRICT("autotrade.message.void.return_strict");
+
+		/** i18n 消息键（发送时经 InfoUtils 本地化渲染） */
+		final String messageKey;
+
+		AlertType(String messageKey) {
+			this.messageKey = messageKey;
+		}
+	}
 
 	protected AbstractTradeMachine() {
 	}
@@ -60,12 +116,70 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		return true;
 	}
 
+	/**
+	 * 发送全局键故障告警（状态边沿：同一故障键只在首次发送，恢复时 clear 重新武装；无时间窗口限频）。
+	 *
+	 * @param type
+	 *            告警类型（决定 i18n 消息键与去重键）
+	 * @param args
+	 *            消息格式化参数
+	 */
+	protected final void showFaultAlert(AlertType type, Object... args) {
+		showAlertKeyed(type.name(), type, args);
+	}
+
+	/**
+	 * 发送按容器键隔离的故障告警（状态边沿：同容器同故障只在首次发送，恢复时 clear 重新武装；无时间窗口限频）。
+	 *
+	 * @param type
+	 *            告警类型（决定 i18n 消息键）
+	 * @param containerKey
+	 *            容器身份键（坐标+方向；同类型故障按容器独立去重）
+	 * @param args
+	 *            消息格式化参数
+	 */
+	protected final void showContainerFaultAlert(AlertType type, String containerKey, Object... args) {
+		showAlertKeyed(type.name() + "#" + containerKey, type, args);
+	}
+
+	/**
+	 * 解除全局键故障告警的武装（故障恢复时调用；下次同键故障会重新发送一次；状态边沿，无时间窗口限频）。
+	 *
+	 * @param type
+	 *            告警类型
+	 */
+	protected final void clearFaultAlert(AlertType type) {
+		armedAlerts.remove(type.name());
+	}
+
+	/**
+	 * 解除按容器键隔离的故障告警的武装（该容器故障恢复时调用；下次同容器同故障会重新发送一次；状态边沿，无时间窗口限频）。
+	 *
+	 * @param type
+	 *            告警类型
+	 * @param containerKey
+	 *            容器身份键
+	 */
+	protected final void clearContainerFaultAlert(AlertType type, String containerKey) {
+		armedAlerts.remove(type.name() + "#" + containerKey);
+	}
+
+	/** 状态边沿告警核心：键首次出现才发送（armedAlerts.add 返回 true），恢复点经 clear 解除武装后可再次发送 */
+	private void showAlertKeyed(String key, AlertType type, Object... args) {
+		if (armedAlerts.add(key)) {
+			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, type.messageKey, args);
+		}
+	}
+
 	@Override
 	public void tick(MinecraftClient mc) {
 		// 玩家/世界可能为空（退出世界等），此时不执行任何任务
 		if (mc.player == null || mc.world == null) {
 			return;
 		}
+
+		// 记录世界时间戳（子类节流/冷却的时间基准；须在玩家/世界空检查之后，避免 NPE）
+		lastWorldTime = mc.world.getTime();
 
 		// 当前任务推进：每 tick 执行一步，返回非 RUNNING 结果即任务结束
 		if (currentTask != null) {
@@ -161,8 +275,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	}
 
 	/**
-	 * 任务结束后的回调（由 tick 检测到任务返回非 RUNNING 结果时调用，非强杀）。 STATIC 模式覆写为设置交易/容器 IO 冷却。
-	 * 基类统一在此同步「背包满暂停」状态：会话因背包满失败结束 → 暂停交易 + 游戏内提示； 输出容器 IO 结束（背包空间释放）→ 解除暂停。
+	 * 任务结束后的回调（由 tick 检测到任务返回非 RUNNING 结果时调用，非强杀）：按细分失败原因分发机器层动作 —— 静默 / 节流 / 暂停 /
+	 * 告警（见类 javadoc 的 9 行矩阵），并同步「背包满暂停」与状态边沿告警的解除。 STATIC/MOVING/VOID 覆写为设置各自冷却后须委托
+	 * super（矩阵分发与告警均在基类）。 告警为状态边沿：同一故障键只在首次发送，恢复点 clear 重新武装；无时间窗口限频。
 	 *
 	 * @param task
 	 *            已结束的任务
@@ -171,22 +286,64 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	 */
 	protected void onTaskEnded(Task task, TaskResult result) {
 		// 9.8 村民交易缓存：仅「确已扫描」的会话写入学习结果——未进入 TRADING 的会话（开窗失败/传送超时/让位于 tick 入口）天然被
-		// sessionScanned 排除；result.isSucceeded() 为双保险（TradeTask 从 CLOSING_SCREEN 恒返回
-		// SUCCEEDED）
+		// sessionScanned 排除；result.isSucceeded() 为双保险（TradeTask 从 CLOSING_SCREEN 返回
+		// SUCCEEDED 或 INVENTORY_BLOCKED）
 		if (task instanceof TradeTask ts && result.isSucceeded() && ts.isSessionScanned()) {
 			VillagerTradeCache.learn(ts.getVillagerUuid(), ts.isSessionMatched(), ts.getSessionMatchedTick());
 		}
-		// 统计：仅记录成功完成的容器 IO（失败/超时/强杀不计入调试计数）
+		// 容器成功：记录统计，并解除该容器的开窗失败/非容器告警与全局背包满告警（故障已恢复 → 解除武装）
 		if (task instanceof ContainerIOTask op && result.isSucceeded()) {
 			TradeStats.getInstance().recordIoOp(op.isInputOp());
+			clearContainerFaultAlert(AlertType.CONTAINER_OPEN_FAILED, op.getIntent().containerKey());
+			clearContainerFaultAlert(AlertType.CONTAINER_NOT_CONTAINER, op.getIntent().containerKey());
+			clearFaultAlert(AlertType.INVENTORY_FULL);
 		}
-		if (result.isFailed() && result.reason() == TaskResult.FailReason.INVENTORY_BLOCKED) {
-			// 会话因背包空间不足失败结束 → 暂停交易并提示
-			inventoryPauseCooldown = INVENTORY_PAUSE_TICKS;
-			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.inventory.full");
-		} else if (result.reason() == TaskResult.FailReason.TELEPORT_TIMEOUT) {
-			// VOID 模式传送超时（村民一直未消失）→ 游戏内告警，提示检查装置
-			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.void.teleport_timeout");
+		// 失败矩阵：仅 4 个细分原因有机器层动作；其余 5
+		// 值（WORLD_GONE/TARGET_INVALID/CHUNK_UNLOADED/SCREEN_CLOSED/
+		// TRANSIT_TIMEOUT）静默
+		if (result.isFailed()) {
+			switch (result.reason()) {
+				case INVENTORY_BLOCKED -> {
+					// 背包空间不足：暂停交易退避 + 边沿告警（满包不标记村民由 handleTaskEnded 骨架短路保证）
+					inventoryPauseCooldown = INVENTORY_PAUSE_TICKS;
+					showFaultAlert(AlertType.INVENTORY_FULL);
+				}
+				case TELEPORT_TIMEOUT -> {
+					// VOID 村民一直未消失（传送未完成）：边沿告警，提示检查装置
+					showFaultAlert(AlertType.TELEPORT_TIMEOUT);
+				}
+				case CONFIG_INVALID -> {
+					// 仅容器任务：目标位置非容器（配置错误）→ 按容器键边沿告警，附带坐标与方块名
+					if (task instanceof ContainerIOTask op) {
+						showContainerFaultAlert(AlertType.CONTAINER_NOT_CONTAINER, op.getIntent().containerKey(),
+								new BlockPos(op.getIntent().loc().getX(), op.getIntent().loc().getY(),
+										op.getIntent().loc().getZ()).toShortString(),
+								op.getNotContainerBlockName());
+					}
+				}
+				case SCREEN_TIMEOUT -> {
+					// 仅容器任务且确实开窗失败：按容器键边沿告警（TradeTask/BlockTriggerTask 的同名原因静默，防误报）
+					if (task instanceof ContainerIOTask op && op.isOpenFailed()) {
+						showContainerFaultAlert(AlertType.CONTAINER_OPEN_FAILED, op.getIntent().containerKey());
+					}
+				}
+				default -> {
+					// 静默分支：WORLD_GONE / TARGET_INVALID / CHUNK_UNLOADED / SCREEN_CLOSED /
+					// TRANSIT_TIMEOUT
+				}
+			}
+		}
+		// TradeTask：成功 → 解除传送超时/背包满告警；检出耗尽证据 → 边沿告警，无证据的成功会话 → 解除（恢复正常）
+		if (task instanceof TradeTask ts) {
+			if (result.isSucceeded()) {
+				clearFaultAlert(AlertType.TELEPORT_TIMEOUT);
+				clearFaultAlert(AlertType.INVENTORY_FULL);
+			}
+			if (ts.isExhaustedEvidenceDetected()) {
+				showFaultAlert(AlertType.VOID_EXHAUSTED);
+			} else if (result.isSucceeded()) {
+				clearFaultAlert(AlertType.VOID_EXHAUSTED);
+			}
 		}
 		if (task instanceof ContainerIOTask op && !op.isInputOp() && inventoryPauseCooldown > 0) {
 			// 输出 IO 把产出物品运走后背包应有空间 → 立即恢复交易探测
@@ -199,14 +356,19 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 
 	/**
 	 * 任务被看门狗强杀（forceAbortTask）时的回调。 强杀时任务处于中途状态、无结果可言（任务未返回终态结果），
-	 * 基类不设置/解除背包满暂停（与正常结束的 onTaskEnded 语义不同）。 子类可按需覆写以处理中断收尾； 需要查询任务状态时使用任务访问器（如
+	 * 基类不设置/解除背包满暂停（与正常结束的 onTaskEnded 语义不同）。 例外：VOID 耗尽证据在强杀前可能已置位，
+	 * 此处补发状态边沿告警，避免证据告警因看门狗强杀丢失。 子类可按需覆写以处理中断收尾； 需要查询任务状态时使用任务访问器（如
 	 * TradeTask#isInventoryBlocked）。
 	 *
 	 * @param task
 	 *            被强杀的任务（未正常结束）
 	 */
 	protected void onTaskInterrupted(Task task) {
-		// 默认无操作：中断时任务状态不可信，基类不触碰背包满暂停
+		// 看门狗强杀时任务未返回终态结果，但耗尽证据可能已置位 → 补发边沿告警（已武装则去重不重复发送）
+		if (task instanceof TradeTask ts && ts.isExhaustedEvidenceDetected()) {
+			showFaultAlert(AlertType.VOID_EXHAUSTED);
+		}
+		// 其余默认无操作：中断时任务状态不可信，基类不触碰背包满暂停
 	}
 
 	/**
@@ -286,6 +448,19 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	}
 
 	/**
+	 * 容器 IO 节流门（默认不限流，返回 false）：子类可覆写以在特定冷却期（如 VOID 返回触发 100t 重试节流）内抑制 暂停期的输出优先 IO。
+	 * 返回 true 时 {@link #tickInventoryPause(MinecraftClient)} 不启动容器 IO，但
+	 * 仍递减暂停冷却并保持「暂停期不启动交易」语义。
+	 *
+	 * @param mc
+	 *            Minecraft 客户端实例
+	 * @return true = 当前处于容器 IO 节流期，暂不启动输出优先 IO
+	 */
+	protected boolean isContainerIoThrottled(MinecraftClient mc) {
+		return false;
+	}
+
+	/**
 	 * 背包满暂停逻辑（子类在 tickIdle 开头调用）：暂停期间不启动交易会话，只尝试「输出优先」的容器 IO （释放背包空间）；返回 true 表示本
 	 * tick 已被暂停逻辑消费，调用方应直接 return。
 	 */
@@ -293,8 +468,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		if (inventoryPauseCooldown <= 0)
 			return false;
 
-		// 暂停期间每 tick 尝试输出优先容器 IO（本地零成本检查，无 IO 需求时不发包）
-		if (containerIOScheduler.startOutputFirst(mc, this::setTaskIfEmpty))
+		// 暂停期间每 tick 尝试输出优先容器 IO（本地零成本检查，无 IO 需求时不发包）；
+		// 子类可经 isContainerIoThrottled 节流，被节流时仍递减冷却并保持暂停语义
+		if (!isContainerIoThrottled(mc) && containerIOScheduler.startOutputFirst(mc, this::setTaskIfEmpty))
 			return true;
 
 		inventoryPauseCooldown--;
@@ -309,6 +485,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		currentTask = null;
 		taskTicks = 0;
 		inventoryPauseCooldown = 0;
+		// 告警武装集合重置：重置视为全新状态，故障在下次出现时重新提示（状态边沿重新武装）
+		armedAlerts.clear();
 		// 重置后背包状态可能已变（清空/转移）→ 缓存立即失效，避免复用过期扫描结果
 		containerIOScheduler.invalidate();
 	}

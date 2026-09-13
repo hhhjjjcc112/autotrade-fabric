@@ -94,7 +94,13 @@ public class BlockTriggerTask extends Task {
 
 	// STRICT 模式：强制校验方块类型与配置类型一致；弱校验（默认）只做存在性 + 距离
 	private boolean isBlockTypeMatched(MinecraftClient mc) {
-		BlockState blockState = mc.world.getBlockState(pos);
+		// 委托公开静态谓词（VOID 机器派发前门控复用同一判定，保证语义一致）
+		return matchesBlockType(type, mc.world.getBlockState(pos));
+	}
+
+	// 触发类型与方块类型是否匹配的公开静态谓词：VOID 机器在派发前用已持有的 BlockState 复用本判定，
+	// 避免重复读取世界方块；NONE 为防御性分支（不会派发本任务）
+	public static boolean matchesBlockType(ReturnTriggerType type, BlockState blockState) {
 		return switch (type) {
 			case TRAPPED_CHEST -> blockState.getBlock() instanceof TrappedChestBlock;
 			case BUTTON -> blockState.getBlock() instanceof ButtonBlock;
@@ -116,18 +122,18 @@ public class BlockTriggerTask extends Task {
 	}
 
 	private TaskResult tickInteracting(MinecraftClient mc) {
-		// 轻校验失败（方块被拆/距离超限）→ 警告 + 瞬态失败结束（不再间隔重试，结果由机器层决定）
+		// 轻校验失败（方块被拆/距离超限）→ 警告 + 目标无效失败结束（不再间隔重试，结果由机器层决定）
 		if (!validateTarget(mc)) {
 			AutoTrade.logger.warn("[BlockTrigger] 触发方块 {} 缺失或距离过远 (type={})", pos.toShortString(),
 					type.getStringValue());
-			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+			return TaskResult.failed(TaskResult.FailReason.TARGET_INVALID);
 		}
 
-		// STRICT 模式类型不符 → 警告 + 配置失败结束（等待玩家修正配置或方块）
+		// STRICT 模式类型不符 → 警告 + 配置无效失败结束（派发前门控的竞态兜底；结果由机器层决定）
 		if (Configs.Void.VOID_RETURN_STRICT.getBooleanValue() && !isBlockTypeMatched(mc)) {
 			AutoTrade.logger.warn("[BlockTrigger] 触发方块类型与配置不符，STRICT 模式 (pos={}, type={})", pos.toShortString(),
 					type.getStringValue());
-			return TaskResult.failed(TaskResult.FailReason.CONFIG);
+			return TaskResult.failed(TaskResult.FailReason.CONFIG_INVALID);
 		}
 
 		// LEVER 两段交互间隔：第一段（还原）后等待 2 tick 让服务端处理，期间跳过第一段分支并递减
@@ -194,9 +200,9 @@ public class BlockTriggerTask extends Task {
 			return TaskResult.RUNNING;
 		}
 
-		// 超时兜底：警告 + 瞬态失败结束（不再回 INTERACTING 重试，结果由机器层决定）
+		// 超时兜底：警告 + 屏幕超时失败结束（不再回 INTERACTING 重试，结果由机器层决定）
 		AutoTrade.logger.warn("[BlockTrigger] 陷阱箱窗口未在 {} tick 内打开", Configs.Generic.OPEN_TIMEOUT.getIntegerValue());
-		return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+		return TaskResult.failed(TaskResult.FailReason.SCREEN_TIMEOUT);
 	}
 
 	private TaskResult tickWaitTransit(MinecraftClient mc) {
@@ -206,7 +212,7 @@ public class BlockTriggerTask extends Task {
 			AutoTrade.logger.info("[BlockTrigger] 玩家已传回，返回触发成功 (pos={})", pos.toShortString());
 			return TaskResult.SUCCEEDED;
 		}
-		// 机关无反应（玩家一直未离开返回区）→ 失败前主动关闭残留窗口（挡住下一轮交互），再超时瞬态失败结束（不再回
+		// 机关无反应（玩家一直未离开返回区）→ 失败前主动关闭残留窗口（挡住下一轮交互），再传送超时失败结束（不再回
 		// INTERACTING 重新触发，结果由机器层决定）
 		if (++transitTicks >= TRANSIT_TIMEOUT_TICKS) {
 			if (mc.currentScreen instanceof GenericContainerScreen screen) {
@@ -214,7 +220,7 @@ public class BlockTriggerTask extends Task {
 			}
 			AutoTrade.logger.warn("[BlockTrigger] 触发后 {} tick 内玩家未离开返回区 (pos={})", TRANSIT_TIMEOUT_TICKS,
 					pos.toShortString());
-			return TaskResult.failed(TaskResult.FailReason.TRANSIENT);
+			return TaskResult.failed(TaskResult.FailReason.TRANSIT_TIMEOUT);
 		}
 		return TaskResult.RUNNING;
 	}

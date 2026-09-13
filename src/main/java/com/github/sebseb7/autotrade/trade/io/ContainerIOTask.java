@@ -8,8 +8,6 @@ import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TaskResult.FailReason;
 import com.github.sebseb7.autotrade.util.ItemStringHelper;
-import fi.dy.masa.malilib.gui.Message;
-import fi.dy.masa.malilib.util.InfoUtils;
 import net.minecraft.block.BarrelBlock;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.ChestBlock;
@@ -67,6 +65,10 @@ public class ContainerIOTask extends Task {
 	private int containerTimeout = 0;
 	private int transferLimit = 0;
 	private int transferred = 0;
+	/** 目标位置不是容器时记录方块显示名（机器层告警元数据；弹窗决策在机器层） */
+	private String notContainerBlockName;
+	/** 是否因开窗超时失败（机器层据此发送容器开窗失败告警） */
+	private boolean openFailed;
 
 	public ContainerIOTask(IOIntent intent) {
 		this(intent, null);
@@ -90,6 +92,20 @@ public class ContainerIOTask extends Task {
 	/** 返回本次 IO 意图（MOVING 饥饿记账清零用，见 {@link IOIntent#ioKey()}） */
 	public IOIntent getIntent() {
 		return intent;
+	}
+
+	/**
+	 * 开窗失败元数据：机器层据此发送容器开窗失败告警（弹窗决策在机器层）
+	 */
+	public boolean isOpenFailed() {
+		return openFailed;
+	}
+
+	/**
+	 * 非容器失败元数据：返回目标方块的显示名，机器层据此发送容器告警（弹窗决策在机器层）
+	 */
+	public String getNotContainerBlockName() {
+		return notContainerBlockName;
 	}
 
 	@Override
@@ -119,17 +135,15 @@ public class ContainerIOTask extends Task {
 			// 若据此判定「不是容器」会误报。这里先确认区块已加载；未加载则返回瞬态失败（不交互、不报错），
 			// 由上层状态机下一 tick 重新派发容器 IO，实现自动重试
 			if (!isChunkLoaded(mc.world, pos)) {
-				return TaskResult.failed(FailReason.TRANSIENT);
+				return TaskResult.failed(FailReason.CHUNK_UNLOADED);
 			}
 			BlockState blockState = mc.world.getBlockState(pos);
-			// 区块已加载但目标位置仍非容器方块 → 真实配置错误，直接放弃
+			// 区块已加载但目标位置仍非容器方块 → 真实配置错误，直接放弃（弹窗决策上移至机器层）
 			if (!isContainerBlock(blockState)) {
-				AutoTrade.logger.warn("[ContainerIO] 目标位置 {} 不是容器 ({})，放弃操作", pos.toShortString(),
-						blockState.getBlock().getName().getString());
-				// 弹窗提示用户容器坐标配置错误
-				InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.io.not_container",
-						pos.toShortString(), blockState.getBlock().getName().getString());
-				return TaskResult.failed(FailReason.CONFIG);
+				String blockName = blockState.getBlock().getName().getString();
+				notContainerBlockName = blockName;
+				AutoTrade.logger.warn("[ContainerIO] 目标位置 {} 不是容器 ({})，放弃操作", pos.toShortString(), blockName);
+				return TaskResult.failed(FailReason.CONFIG_INVALID);
 			}
 		}
 
@@ -181,11 +195,11 @@ public class ContainerIOTask extends Task {
 				containerTimeout--;
 				return TaskResult.RUNNING;
 			}
-			// 超时仍未打开窗口：单次失败，弹窗提示后直接以瞬态失败结束（不再重试），由上层状态机重新派发
+			// 超时仍未打开窗口：单次失败，弹窗决策上移至机器层，由上层状态机重新派发
 			AutoTrade.logger.warn("[ContainerIO] 容器窗口打开失败（超时 {} tick），放弃本次操作",
 					Configs.Generic.OPEN_TIMEOUT.getIntegerValue());
-			InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, "autotrade.message.io.open_failed", 1);
-			return TaskResult.failed(FailReason.TRANSIENT);
+			openFailed = true;
+			return TaskResult.failed(FailReason.SCREEN_TIMEOUT);
 		}
 		containerTimeout = 0;
 

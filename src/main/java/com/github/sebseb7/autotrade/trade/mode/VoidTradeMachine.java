@@ -6,10 +6,14 @@ import com.github.sebseb7.autotrade.trade.data.ItemIO;
 import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
+import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
+import com.github.sebseb7.autotrade.trade.task.Task;
+import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
+import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.Identifier;
@@ -22,6 +26,11 @@ import net.minecraft.util.math.BlockPos;
  * 以纯空间条件派发——返回块可达（区块加载且距玩家 ≤4.5 格 ⇔ 玩家在岛侧）即派发「交互返回机关」任务，不可达
  * （玩家在原侧）则落入找村民；BlockTriggerTask 以「玩家已传回」为完成（WAIT_TRANSIT 空间完成），transit 窗口
  * （触发成功→传送完成）由任务持有运行位覆盖，机器层无需记忆。
+ *
+ * <p>
+ * 返回触发节流与门控：瞬态类失败（SCREEN_TIMEOUT/TRANSIT_TIMEOUT/看门狗强杀）后 100t 内不重派； STRICT
+ * 开启时派发前做方块类型门控（类型不符不派发、不落村民，等待玩家修正后自动恢复），告警走状态边沿； 容器
+ * SCREEN_TIMEOUT/CONFIG_INVALID 失败后同样 100t 冷却（全局时间戳，VOID 不区分具体容器）。
  */
 public class VoidTradeMachine extends AbstractTradeMachine {
 
@@ -34,6 +43,15 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 	 */
 	private static boolean invalidDimensionWarned = false;
 
+	/** 返回触发失败后的重试节流时长：100 tick = 5 秒（瞬态类失败/看门狗强杀后显式等待，避免忙循环） */
+	private static final int RETURN_TRIGGER_RETRY_TICKS = 100;
+
+	/** 返回触发下次可派发的世界时间戳（世界时间基准；当前时间 < 该值 = 节流中，不重派） */
+	private long returnTriggerRetryAtTick = 0;
+
+	/** 容器 IO 下次可派发的世界时间戳（SCREEN_TIMEOUT/CONFIG_INVALID 失败后全局 100t 冷却） */
+	private long containerIoRetryAtTick = 0;
+
 	public VoidTradeMachine() {
 		super();
 	}
@@ -44,8 +62,9 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		if (tickInventoryPause(mc))
 			return;
 
-		// 优先容器 IO（先卸货/补货再返回，否则岛侧容器被「传回原侧」永久饿死，决策 2）
-		if (containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
+		// 优先容器 IO（先卸货/补货再返回，否则岛侧容器被「传回原侧」永久饿死，决策 2）；
+		// 容器失败冷却未到期时跳过（全局时间戳节流，避免坏容器每 tick 重派）
+		if (mc.world.getTime() >= containerIoRetryAtTick && containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
 			return;
 
 		// 返回触发：已配置时先做交接与可达性判定（空间相位：玩家在岛侧 ⇔ 返回块可达），优先级高于找村民（决策 2）
@@ -54,12 +73,26 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 			if (mc.currentScreen != null)
 				return;
 			BlockPos pos = parseReturnPos();
-			if (isReturnTriggerUsable() && isReturnBlockReachable(mc)) {
-				ReturnTriggerType type = (ReturnTriggerType) Configs.Void.VOID_RETURN_TYPE.getOptionListValue();
-				setTaskIfEmpty(new BlockTriggerTask(pos, type));
-				AutoTrade.logger.info("[VoidMode] IDLE → RETURN_TRIGGER (pos={}, type={})", pos.toShortString(),
-						type.getStringValue());
-				return;
+			if (isReturnTriggerUsable()) {
+				// 单次读取：可达性判定与 STRICT 类型门控共用同一 BlockState（无重复读取）
+				BlockState state = mc.world.getBlockState(pos);
+				if (isReturnBlockReachable(mc, pos, state)) {
+					ReturnTriggerType type = (ReturnTriggerType) Configs.Void.VOID_RETURN_TYPE.getOptionListValue();
+					if (Configs.Void.VOID_RETURN_STRICT.getBooleanValue()
+							&& !BlockTriggerTask.matchesBlockType(type, state)) {
+						// STRICT 门控：类型不符 → 不派发、不落村民（零失败循环），等待玩家修正；状态边沿告警
+						showFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
+						return;
+					}
+					clearFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
+					// 显式重试节流：瞬态类失败/看门狗强杀后 100t 内不重派（冷却期同样 return，避免空转）
+					if (mc.world.getTime() >= returnTriggerRetryAtTick) {
+						setTaskIfEmpty(new BlockTriggerTask(pos, type));
+						AutoTrade.logger.info("[VoidMode] IDLE → RETURN_TRIGGER (pos={}, type={})", pos.toShortString(),
+								type.getStringValue());
+					}
+					return;
+				}
 			}
 			// 不可达（玩家在原侧）或不可用（冲突/坐标非法）→ 落入下方找村民
 		}
@@ -127,19 +160,26 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 
 	/**
 	 * 返回块当前可达（区块加载且距玩家 ≤ 交互距离 4.5 格）——与 BlockTriggerTask.validateTarget
-	 * 同谓词（空间相位：玩家在岛侧 ⇔ 可达）
+	 * 同谓词（空间相位：玩家在岛侧 ⇔ 可达）；BlockState 由调用方单次读取后传入（可达性判定与 STRICT 类型门控共用同一状态，避免重复读取）
+	 *
+	 * @param mc
+	 *            Minecraft 客户端实例
+	 * @param pos
+	 *            返回触发方块坐标（调用方解析）
+	 * @param state
+	 *            该坐标的方块状态（调用方读取）
+	 * @return true = 可达（玩家在岛侧）
 	 */
-	private boolean isReturnBlockReachable(MinecraftClient mc) {
+	private boolean isReturnBlockReachable(MinecraftClient mc, BlockPos pos, BlockState state) {
 		if (mc.world == null || mc.player == null)
 			return false;
 		// 维度过滤：VOID_RETURN_DIM 非空时玩家必须处于该维度才判定可达（空串 = 任意维度，跳过该过滤）
 		String dim = Configs.Void.VOID_RETURN_DIM.getStringValue();
 		if (!dim.isEmpty() && !dim.equals(mc.world.getRegistryKey().getValue().toString()))
 			return false;
-		BlockPos pos = parseReturnPos();
 		if (pos == null)
 			return false;
-		if (mc.world.getBlockState(pos).isAir())
+		if (state.isAir())
 			return false; // 未加载区块亦返回 air → 玩家在原侧时恒 false
 		return pos.toCenterPos().squaredDistanceTo(mc.player.getPos()) <= 4.5 * 4.5;
 	}
@@ -178,9 +218,56 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 				&& (loc.getDimension().isEmpty() || returnDim.isEmpty() || loc.getDimension().equals(returnDim));
 	}
 
+	/**
+	 * 任务结束回调（在基类 9 值矩阵之上叠加 VOID 差异）：返回触发细分原因 100t 重试节流（含竞态 CONFIG_INVALID
+	 * 告警兜底）与容器失败冷却；末尾必须委托 super（背包满暂停/告警解除/统计/日志均在基类矩阵）。
+	 */
+	@Override
+	protected void onTaskEnded(Task task, TaskResult result) {
+		if (task instanceof BlockTriggerTask) {
+			if (result.isFailed()) {
+				// TARGET_INVALID / SCREEN_TIMEOUT / TRANSIT_TIMEOUT / 竞态 CONFIG_INVALID：显式 100t
+				// 重试节流
+				returnTriggerRetryAtTick = lastWorldTime + RETURN_TRIGGER_RETRY_TICKS;
+				if (result.reason() == TaskResult.FailReason.CONFIG_INVALID) {
+					// 派发前门控已挡主要路径；此处为门控与任务内 STRICT 检查之间的竞态兜底（同一状态边沿告警）
+					showFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
+				}
+			} else if (result.isSucceeded()) {
+				clearFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
+			}
+		}
+		if (task instanceof ContainerIOTask && result.isFailed()
+				&& (result.reason() == TaskResult.FailReason.SCREEN_TIMEOUT
+						|| result.reason() == TaskResult.FailReason.CONFIG_INVALID)) {
+			// 矩阵行：容器非静默失败 → 全局 100t 冷却（tickIdle 与暂停期输出 IO 同受节流）
+			containerIoRetryAtTick = lastWorldTime + CONFIG_FAIL_COOLDOWN_TICKS;
+		}
+		super.onTaskEnded(task, result);
+	}
+
+	/**
+	 * 任务被看门狗强杀回调：返回触发无结果可判（强杀时任务状态不可信），统一按瞬态类失败处理——100t 内不重派（防忙循环）。
+	 */
+	@Override
+	protected void onTaskInterrupted(Task task) {
+		if (task instanceof BlockTriggerTask) {
+			returnTriggerRetryAtTick = lastWorldTime + RETURN_TRIGGER_RETRY_TICKS;
+		}
+		super.onTaskInterrupted(task);
+	}
+
+	/** 容器 IO 节流门（覆写基类默认）：容器失败冷却期内，暂停期的输出优先 IO 亦不启动（防 1-2 tick 忙循环） */
+	@Override
+	protected boolean isContainerIoThrottled(MinecraftClient mc) {
+		return mc.world.getTime() < containerIoRetryAtTick;
+	}
+
 	@Override
 	public void reset() {
 		returnTriggerConflict = null;
+		returnTriggerRetryAtTick = 0;
+		containerIoRetryAtTick = 0;
 		super.reset();
 	}
 }
