@@ -10,9 +10,11 @@ import com.github.sebseb7.autotrade.trade.executor.TradeExecutorMode;
 import com.github.sebseb7.autotrade.trade.mode.ReturnTriggerType;
 import com.github.sebseb7.autotrade.trade.mode.TradeMode;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import fi.dy.masa.malilib.config.ConfigUtils;
+import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.config.IConfigHandler;
 import fi.dy.masa.malilib.config.IConfigValue;
 import fi.dy.masa.malilib.config.options.ConfigBoolean;
@@ -127,6 +129,19 @@ public class Configs implements IConfigHandler {
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(VOID_TELEPORT_TIMEOUT,
 				VOID_UNLOAD_DELAY, VOID_RETURN_TYPE, VOID_RETURN_POS, VOID_RETURN_DIM, VOID_RETURN_STRICT);
 	}
+
+	/**
+	 * 进阶设置项集合（设置页以紫色标签与常规项区分）：需要理解内部机制（tick 时序 / 性能与缓存 /
+	 * 调度策略）才能正确调整，或属于调试与排障用途，通常保持默认即可。 仅用于 GUI
+	 * 展示着色（gui/widget/AutoTradeConfigOption），不改变配置结构与保存格式。
+	 */
+	public static final ImmutableSet<IConfigBase> ADVANCED_OPTIONS = ImmutableSet.of(Generic.TRADE_EXECUTOR_MODE,
+			Generic.OPEN_TIMEOUT, Generic.TASK_TIMEOUT, Generic.DEBUG_HUD, Generic.DEBUG_HUD_POSITION,
+			Generic.IDLE_SCAN_INTERVAL, Generic.CONTAINER_REACH, Generic.OUTPUT_MOVE_CAP, Generic.TRADE_CACHE_TTL,
+			Static.CONTAINER_IO_INTERVAL, Static.CONTAINER_IO_IDLE_INTERVAL, Moving.MOVING_RANGE_MULTIPLIER,
+			Moving.MOVING_INTERACT_RANGE, Moving.MOVING_STARVATION_AGING_INTERVAL,
+			Moving.MOVING_STARVATION_HINT_THRESHOLD, Void.VOID_TELEPORT_TIMEOUT, Void.VOID_UNLOAD_DELAY,
+			Void.VOID_RETURN_DIM, Void.VOID_RETURN_STRICT);
 
 	public static void loadFromFile() {
 		File configFile = new File(FileUtils.getConfigDirectory(), CONFIG_FILE_NAME);

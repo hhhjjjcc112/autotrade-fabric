@@ -18,13 +18,23 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 
 // 值页自定义配置行控件：仅布尔类型改用本地化「开/关」满宽按钮（其余类型全部交回 malilib 基类），
-// 并把基类硬编码的白色标签弱化为次级灰；由 AutoTradeWidgetListConfigOptions 构造
+// 并弱化基类硬编码的白色标签——常规项为次级灰、进阶项（Configs.ADVANCED_OPTIONS）为紫色，
+// 分节标题由文本自带 §f 前缀保持白色；由 AutoTradeWidgetListConfigOptions 构造
 public class AutoTradeConfigOption extends WidgetConfigOption {
 	/**
 	 * 父列表控件引用（构造时由列表传入自身）：行内自定义交互写入配置值后需要用它调用 refreshEntries()
 	 * 重建行内容（文本框等不会因配置值变化自动重绘）
 	 */
 	protected final WidgetListConfigOptionsBase<?, ?> parentList;
+
+	/** 进阶设置项的标签颜色（亮紫，与 §d 色码一致）；常规项保持次级灰 */
+	private static final int COLOR_ADVANCED = 0xFFFF55FF;
+
+	/**
+	 * 当前行是否为进阶设置项：在 addConfigOption 中判定，供 addLabel 着色。 不要添加字段初始化器（=
+	 * false）——基类构造器会先回调 addConfigOption， 初始化器随后执行会把判定结果覆盖掉；boolean 默认值即 false。
+	 */
+	private boolean advancedConfig;
 
 	public AutoTradeConfigOption(int x, int y, int width, int height, int labelWidth, int configWidth,
 			ConfigOptionWrapper wrapper, int listIndex, IKeybindConfigGui host,
@@ -39,6 +49,7 @@ public class AutoTradeConfigOption extends WidgetConfigOption {
 	 */
 	@Override
 	protected void addConfigOption(int x, int y, float zLevel, int labelWidth, int configWidth, IConfigBase config) {
+		this.advancedConfig = Configs.ADVANCED_OPTIONS.contains(config);
 		// 虚空页「回程坐标」行特殊布局：值文本框收窄 28px，其右侧追加「抓取」按钮（把准星方块坐标 +
 		// 当前维度写入回程坐标/回程维度），重置按钮仍锚定原右缘；几何对照 malilib STRING/COLOR 分支
 		// （WidgetConfigOption.java:177-204）：值区从 labelWidth + 10 起、总宽 configWidth，重置在
@@ -124,13 +135,13 @@ public class AutoTradeConfigOption extends WidgetConfigOption {
 
 	/**
 	 * 覆写标签构建：malilib 基类对配置标签与 LABEL 型说明行硬编码白色 0xFFFFFFFF
-	 * （WidgetConfigOption.java:110,121），统一弱化为次级灰 0xFFB0B0B0； 分节标题由文本自带 §f
-	 * 前缀自行保持白色（文本内格式码优先于控件色）
+	 * （WidgetConfigOption.java:110,121）；此处按当前行类型着色——进阶项紫色（COLOR_ADVANCED）、 常规项次级灰
+	 * 0xFFB0B0B0； 分节标题由文本自带 §f 前缀自行保持白色（文本内格式码优先于控件色）
 	 */
 	@Override
 	protected void addLabel(int x, int y, int width, int height, int textColor, String... lines) {
 		if (textColor == 0xFFFFFFFF) {
-			textColor = 0xFFB0B0B0;
+			textColor = this.advancedConfig ? COLOR_ADVANCED : 0xFFB0B0B0;
 		}
 
 		super.addLabel(x, y, width, height, textColor, lines);
