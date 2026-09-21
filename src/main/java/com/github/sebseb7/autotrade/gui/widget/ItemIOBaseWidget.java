@@ -239,7 +239,12 @@ public abstract class ItemIOBaseWidget extends WidgetConfigOption {
 		if (field == null)
 			return;
 		field.setFocused(true);
-		field.setCursorPositionEnd();
+		// 光标移至行尾：不使用 malilib 的 setCursorPositionEnd 包装方法（新版 malilib 0.18.4-alpha.1
+		// 已移除该方法，而编译期 malilib 0.18.0 仍含它——编译通过、运行时 NoSuchMethodError）；
+		// 改用原版 API：setSelectionStart/End(int) 在 MC 1.20–1.20.4 均为 public 且签名一致
+		int end = field.getText().length();
+		field.setSelectionStart(end);
+		field.setSelectionEnd(end);
 	}
 
 	/**
