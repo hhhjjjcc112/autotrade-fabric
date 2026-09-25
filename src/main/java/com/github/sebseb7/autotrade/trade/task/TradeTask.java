@@ -53,6 +53,8 @@ public abstract class TradeTask extends Task {
 	private boolean sessionScanned = false;
 	/** 本会话是否见过至少一个可执行交易 */
 	private boolean sessionMatched = false;
+	/** 本会话是否见过与启用交易对匹配的 offer（不论可执行性；供缓存分级学习） */
+	private boolean sessionPairMatched = false;
 	/** 学习 tick（TTL 起点） */
 	private long sessionMatchedTick = 0;
 	/** VOID 耗尽证据：本会话开窗 offers 快照中检出 uses > 0（弹窗由机器层的状态边沿告警统一发送） */
@@ -232,6 +234,7 @@ public abstract class TradeTask extends Task {
 		}
 		// 9.8 会话末捕获命中信息（正常结束/让位统一路径；executor 的会话级 OR 信号在此读取为最终结果）
 		sessionMatched = executor.hasSessionHadExecutable();
+		sessionPairMatched = executor.hasSessionHadPairMatch();
 		sessionMatchedTick = mc.world.getTime();
 		if (inventoryBlocked) {
 			// 背包满：失败结果结束（机器层据此暂停交易 + 不标记村民；非 SUCCEEDED 不写学习缓存，由 TTL 自愈）
@@ -271,6 +274,11 @@ public abstract class TradeTask extends Task {
 	/** 本会话是否见过至少一个可执行交易 */
 	public boolean isSessionMatched() {
 		return sessionMatched;
+	}
+
+	/** 本会话是否见过与启用交易对匹配的 offer（不论可执行性，供缓存分级） */
+	public boolean isSessionPairMatched() {
+		return sessionPairMatched;
 	}
 
 	/** 学习 tick（TTL 起点） */

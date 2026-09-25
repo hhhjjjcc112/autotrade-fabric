@@ -35,6 +35,8 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	protected boolean inventoryBlocked = false;
 	/** 会话级命中信号：本会话任一 tick 见过非空可执行 offer 列表即锁存 true，整个会话保持（仅声明处初始化，每 tick 不重置） */
 	private boolean sessionHadExecutable = false;
+	/** 会话级配对信号：本会话任一 tick 见过「与启用交易对匹配」的 offer（不论可执行性：含已耗尽 / 成本不足）即锁存 true */
+	private boolean sessionHadPairMatch = false;
 
 	// 会话内 pairs 预解码缓存：以配置串引用为失效信号（malilib getStringValue 返回字段引用；GUI 保存/加载
 	// 必产生新 String → 引用不等 → 重建数组）。引用相等时每 tick 复用数组，免去 offers×pairs 循环内 Gson 解析
@@ -116,6 +118,23 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		if (pairs.isEmpty()) {
 			AutoTrade.logger.info("[AutoTrade] No trade pairs configured");
 			return endSession(0);
+		}
+
+		// 会话级 OR 锁存：见过与启用交易对匹配的 offer（不论可执行性）即锁定——供「跳过开窗时间」分级
+		// （有匹配但不可执行 vs 完全无匹配交易对，见 VillagerTradeCache）；独立于扫描的 isDisabled 前置过滤，
+		// 故已耗尽的 offer 也能被识别
+		if (!sessionHadPairMatch) {
+			for (TradeOffer candidate : offers) {
+				for (ParsedPair pair : cachedParsedPairs) {
+					if (pair.enabled() && OfferGuards.doesOfferMatchPair(candidate, pair)) {
+						sessionHadPairMatch = true;
+						break;
+					}
+				}
+				if (sessionHadPairMatch) {
+					break;
+				}
+			}
 		}
 
 		// 第 3 步：预扫描可执行交易项（开屏 isDisabled() 过滤已耗尽的 offer；饿死候选标志随扫描携带）。
@@ -723,6 +742,11 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 	/** 本会话是否见过至少一个可执行 offer（会话级 OR 锁存，供缓存层区分未命中与无数据） */
 	public boolean hasSessionHadExecutable() {
 		return sessionHadExecutable;
+	}
+
+	/** 本会话是否见过与启用交易对匹配的 offer（不论可执行性；供「跳过开窗时间」分级） */
+	public boolean hasSessionHadPairMatch() {
+		return sessionHadPairMatch;
 	}
 
 	// 交易项剩余次数/耗尽状态抽象：两策略的差异点（非 use = 快照推导记账；use = 直接读 offer.getUses()）。

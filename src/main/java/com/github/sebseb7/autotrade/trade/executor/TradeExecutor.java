@@ -39,4 +39,9 @@ public class TradeExecutor {
 	public boolean hasSessionHadExecutable() {
 		return strategy.hasSessionHadExecutable();
 	}
+
+	/** 本会话是否见过与启用交易对匹配的 offer（不论可执行性；供「跳过开窗时间」分级） */
+	public boolean hasSessionHadPairMatch() {
+		return strategy.hasSessionHadPairMatch();
+	}
 }

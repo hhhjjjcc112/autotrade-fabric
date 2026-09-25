@@ -6,7 +6,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 村民交易记忆缓存：记住每个村民最近一次会话是否有可执行的匹配交易，TTL 内跳过已知不匹配村民的开窗。
+ * 村民交易记忆缓存：记住每个村民最近一次会话的交易结果，TTL 内跳过已知不匹配村民的开窗。 分两类跳过（各自 TTL）：
+ * 完全无匹配交易对（TRADE_CACHE_TTL，主开关）与有匹配交易对但本会话无可执行交易（SKIP_OPEN_TTL，耗尽 / 成本不足）。
  */
 public final class VillagerTradeCache {
 	/** 村民 UUID → 学习条目；ConcurrentHashMap 保证 HUD 渲染线程读 size() 与 tick 线程写并发安全 */
@@ -19,8 +20,11 @@ public final class VillagerTradeCache {
 	private VillagerTradeCache() {
 	}
 
-	/** 单条学习记录：是否命中 + 学习时点 tick（命中条目无 TTL，仅不命中用 learnTick 判定过期） */
-	record Entry(boolean matched, long learnTick) {
+	/**
+	 * 单条学习记录：是否命中 + 是否有匹配交易对但无执行 + 学习时点 tick（命中条目无 TTL，仅不命中用 learnTick
+	 * 判定过期；pairMatched 区分两类不命中，决定用哪个 TTL）
+	 */
+	record Entry(boolean matched, boolean pairMatched, long learnTick) {
 	}
 
 	/** 缓存总开关：TTL 为 0 即完全禁用 */
@@ -43,13 +47,13 @@ public final class VillagerTradeCache {
 		}
 	}
 
-	/** 学习一次会话结果：写入村民的命中/不命中记录 */
-	public static void learn(UUID uuid, boolean matched, long learnTick) {
+	/** 学习一次会话结果：写入村民的命中 / 不命中（pairMatched = 有匹配交易对但无执行）记录 */
+	public static void learn(UUID uuid, boolean matched, boolean pairMatched, long learnTick) {
 		if (!isCacheEnabled()) {
 			return;
 		}
 		ensureFingerprintFresh();
-		entries.put(uuid, new Entry(matched, learnTick));
+		entries.put(uuid, new Entry(matched, pairMatched, learnTick));
 	}
 
 	/** 是否为 TTL 内已知不匹配：纯函数，无计数副作用（未知/命中/过期均返回 false = 需要开窗） */
@@ -67,7 +71,15 @@ public final class VillagerTradeCache {
 		if (e.matched()) {
 			return false;
 		}
-		long ttl = Configs.Generic.TRADE_CACHE_TTL.getIntegerValue();
+		// 按不命中情形选 TTL：有匹配但无执行（耗尽/成本不足）用 SKIP_OPEN_TTL；完全无匹配用 TRADE_CACHE_TTL
+		int ttl = e.pairMatched()
+				? Configs.Generic.SKIP_OPEN_TTL.getIntegerValue()
+				: Configs.Generic.TRADE_CACHE_TTL.getIntegerValue();
+		// 该情形 TTL 为 0 = 不跳过：移除条目并复查开窗
+		if (ttl <= 0) {
+			entries.remove(uuid);
+			return false;
+		}
 		// TTL 到期 → 惰性移除并复查开窗
 		if (nowTick - e.learnTick() >= ttl) {
 			entries.remove(uuid);

@@ -10,4 +10,7 @@ interface TradeStrategy {
 	boolean isInventoryBlocked();
 
 	boolean hasSessionHadExecutable();
+
+	// 本会话是否见过与启用交易对匹配的 offer（不论可执行性；供缓存分级）
+	boolean hasSessionHadPairMatch();
 }

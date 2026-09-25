@@ -55,9 +55,12 @@ public class Configs implements IConfigHandler {
 		/** 输出操作单次搬运的最大组数（999 = 全部匹配物品）；防极端场景同 tick 点击风暴 */
 		public static final ConfigInteger OUTPUT_MOVE_CAP = new ConfigInteger("outputMoveCap", 999, 1, 9999,
 				"Maximum item stacks moved in a single output container-IO operation (999 = move all matching stacks)");
-		/** 9.8 村民交易缓存：已知无可执行匹配交易的村民跳过开窗的复查间隔（tick）；0 = 完全禁用缓存 */
+		/** 9.8 村民交易缓存：无匹配交易对的村民跳过开窗的复查间隔（tick）；0 = 完全禁用缓存 */
 		public static final ConfigInteger TRADE_CACHE_TTL = new ConfigInteger("tradeCacheTtl", 3000, 0, 36000,
-				"Ticks a villager with no executable matching offer is skipped before re-checking its trades (3000 ticks = 2.5 min; 0 = disable the cache entirely)");
+				"Ticks a villager with no matching trade pair is skipped before re-checking its trades (3000 ticks = 2.5 min; 0 = disable the cache entirely)");
+		/** 「有匹配交易对但本会话无可执行交易」（耗尽 / 成本不足）的村民跳过开窗的复查间隔（tick）；0 = 不跳过（每轮重试） */
+		public static final ConfigInteger SKIP_OPEN_TTL = new ConfigInteger("skipOpenTtl", 3000, 0, 36000,
+				"Ticks a villager whose latest session had a matching trade pair but no executable trade (depleted offers / insufficient costs) is skipped before reopening its trades (0 = never skip; distinct from Trade Cache TTL, which covers villagers with no matching pair at all)");
 
 		public static final ConfigJsonArray TRADE_PAIRS = new ConfigJsonArray("tradePairs", "[]",
 				"Trade pair list (JSON). Use the in-game GUI to manage.");
@@ -65,7 +68,7 @@ public class Configs implements IConfigHandler {
 				"Item container IO list (JSON). Use the in-game GUI to manage.");
 		public static final ImmutableList<IConfigValue> OPTIONS = ImmutableList.of(ENABLED, TRADE_MODE,
 				TRADE_EXECUTOR_MODE, VILLAGER_SCAN_RANGE, OPEN_TIMEOUT, TASK_TIMEOUT, DEBUG_HUD, DEBUG_HUD_POSITION,
-				IDLE_SCAN_INTERVAL, CONTAINER_REACH, OUTPUT_MOVE_CAP, TRADE_CACHE_TTL);
+				IDLE_SCAN_INTERVAL, CONTAINER_REACH, OUTPUT_MOVE_CAP, TRADE_CACHE_TTL, SKIP_OPEN_TTL);
 	}
 
 	/** 静止交易设置页：仅静止模式生效的选项 */
@@ -138,8 +141,8 @@ public class Configs implements IConfigHandler {
 	public static final ImmutableSet<IConfigBase> ADVANCED_OPTIONS = ImmutableSet.of(Generic.TRADE_EXECUTOR_MODE,
 			Generic.OPEN_TIMEOUT, Generic.TASK_TIMEOUT, Generic.DEBUG_HUD, Generic.DEBUG_HUD_POSITION,
 			Generic.IDLE_SCAN_INTERVAL, Generic.CONTAINER_REACH, Generic.OUTPUT_MOVE_CAP, Generic.TRADE_CACHE_TTL,
-			Static.CONTAINER_IO_INTERVAL, Static.CONTAINER_IO_IDLE_INTERVAL, Moving.MOVING_RANGE_MULTIPLIER,
-			Moving.MOVING_INTERACT_RANGE, Moving.MOVING_STARVATION_AGING_INTERVAL,
+			Generic.SKIP_OPEN_TTL, Static.CONTAINER_IO_INTERVAL, Static.CONTAINER_IO_IDLE_INTERVAL,
+			Moving.MOVING_RANGE_MULTIPLIER, Moving.MOVING_INTERACT_RANGE, Moving.MOVING_STARVATION_AGING_INTERVAL,
 			Moving.MOVING_STARVATION_HINT_THRESHOLD, Void.VOID_TELEPORT_TIMEOUT, Void.VOID_UNLOAD_DELAY,
 			Void.VOID_RETURN_DIM, Void.VOID_RETURN_STRICT);
 

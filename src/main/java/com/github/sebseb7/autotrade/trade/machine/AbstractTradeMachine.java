@@ -295,9 +295,11 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	protected void onTaskEnded(Task task, TaskResult result) {
 		// 9.8 村民交易缓存：仅「确已扫描」的会话写入学习结果——未进入 TRADING 的会话（开窗失败/传送超时/让位于 tick 入口）天然被
 		// sessionScanned 排除；result.isSucceeded() 为双保险（TradeTask 从 CLOSING_SCREEN 返回
-		// SUCCEEDED 或 INVENTORY_BLOCKED）
+		// SUCCEEDED 或 INVENTORY_BLOCKED）。学习时同时写入两类不命中标记：isSessionMatched =
+		// 有可执行交易（命中）；isSessionPairMatched = 有匹配交易对但无执行（耗尽/成本不足，供分级跳过）
 		if (task instanceof TradeTask ts && result.isSucceeded() && ts.isSessionScanned()) {
-			VillagerTradeCache.learn(ts.getVillagerUuid(), ts.isSessionMatched(), ts.getSessionMatchedTick());
+			VillagerTradeCache.learn(ts.getVillagerUuid(), ts.isSessionMatched(), ts.isSessionPairMatched(),
+					ts.getSessionMatchedTick());
 		}
 		// 容器成功：记录统计，并解除该容器的开窗失败/非容器告警与全局背包满告警（故障已恢复 → 解除武装）
 		if (task instanceof ContainerIOTask op && result.isSucceeded()) {
