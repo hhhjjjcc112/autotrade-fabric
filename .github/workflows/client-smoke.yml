@@ -1,0 +1,74 @@
+name: Client Smoke Test
+
+# 用 mc-runtime-test（HeadlessMC + Xvfb）无头启动带 mod 的真实 MC 1.20.4 Fabric 客户端，
+# 进入单人世界、等待区块加载后退出；用于捕捉「能启动 / 能进世界 / 不崩溃」级别的回归。
+# 注意：hmc-specifics 的 GUI 命令（gui/click/text）不支持 MC 1.20.4，故本工作流不做 GUI 驱动。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - 'src/**'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/client-smoke.yml'
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'src/**'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - '.github/workflows/client-smoke.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  client-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 构建用 JDK 21（Loom 1.14.x 插件类路径要求 21+）
+      - name: Set up JDK 21 (build)
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build mod (MC 1.20.4)
+        run: ./gradlew --no-daemon build
+
+      # 组装测试客户端的 mods 目录：本 mod + 运行期依赖（malilib、fabric-api）
+      # mc-runtime-test 会设置 hmc.gamedir=$PWD/run，因此把 jar 放进 run/mods 即被加载
+      - name: Stage mods for the test client
+        run: |
+          mkdir -p run/mods
+          cp build/libs/*.jar run/mods/
+          curl -fsSL -o run/mods/malilib-fabric-1.20.4-0.18.0.jar \
+            "https://cdn.modrinth.com/data/GcWjdA9I/versions/66WY7ZfT/malilib-fabric-1.20.4-0.18.0.jar"
+          curl -fsSL -o "run/mods/fabric-api-0.92.1+1.20.4.jar" \
+            "https://cdn.modrinth.com/data/P7dR8mSH/versions/cAJWRbQt/fabric-api-0.92.1%2B1.20.4.jar"
+          ls -l run/mods
+
+      # 游戏运行用 JDK 17（MC 1.20.4 需要 Java 17）
+      - name: Set up JDK 17 (game runtime)
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Run Minecraft client smoke test
+        uses: headlesshq/mc-runtime-test@4.5.1
+        with:
+          mc: 1.20.4
+          modloader: fabric
+          regex: .*fabric.*
+          mc-runtime-test: fabric
+          java: 17
