@@ -8,3 +8,8 @@ run/
 .project
 .settings/
 bin/
+
+# Python 缓存与本地日志（测试工具链运行产物）
+__pycache__/
+*.pyc
+*.log

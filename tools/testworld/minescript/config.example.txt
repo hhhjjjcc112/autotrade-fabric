@@ -1,0 +1,21 @@
+# Minescript 配置模板（由 tools/testworld/launch_testclient.py 在 run/minescript/config.txt 缺失时按本文件生成）
+# 参考: https://github.com/maxuser0/minescript/blob/main/docs/v4.0/README.md
+# 说明: Minescript 首次启动时会自动安装 Python 库到 minescript/system/lib/minescript.py
+
+# 外部 Python 解释器（Minescript 4.0 需要外部 Python；内置 Pyjinn 仅 5.0+）
+# 生成时自动填入当前 Python 解释器路径；如需改用其它解释器，直接修改 run/minescript/config.txt
+# （该文件已存在时不会被覆盖）
+python="__PYTHON__"
+
+# 将脚本调试输出写入 logs/latest.log（便于排查）
+debug_output=true
+
+# 进入世界时自动运行的命令
+# 注意：Minescript 4.0-beta2 在缺少 `autorun[*]` 通配键时，handleAutorun 会抛 NPE 崩溃
+#       （wildcardCommands is null，Minescript.java:3764）→ 必须保留一条通配项。
+#       _noop 为空操作脚本；观测脚本只在对应测试世界运行。
+autorun[*]=_noop
+# 进入 AutoTradeTest 测试世界时自动运行 STATIC 观测脚本（90s；省略参数时脚本默认 180s）
+autorun[AutoTradeTest]=static_test 90
+# 进入 AutoTradeVoidTest 测试世界时自动运行 VOID 观测脚本（240s；省略参数时脚本默认 240s）
+autorun[AutoTradeVoidTest]=void_test 240

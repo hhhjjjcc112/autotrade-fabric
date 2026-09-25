@@ -14,7 +14,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 
 与上游（sebseb7 的 autotrade-fabric，fork 时 v0.0.11）相比，本 fork 的主要差异：
 
-- **支持更低版本**：上游仅支持 MC 1.20.3 – 1.20.4；本 fork 新增多版本构建，支持 MC 1.20 – 1.20.4（含 1.20 / 1.20.1 / 1.20.2），一键脚本 `build-versions.ps1`
+- **支持更低版本**：上游仅支持 MC 1.20.3 – 1.20.4；本 fork 新增多版本构建，支持 MC 1.20 – 1.20.4（含 1.20 / 1.20.1 / 1.20.2），一键脚本 `build-versions.py`
 - **多交易对**：可同时添加并执行多个交易对（上游仅单交易对），并新增交易对编辑 / 列表 GUI
 - **双物品交易（give2）**：单个交易可包含两个输入物品，容器 IO 按物品配置（ItemIO 条目）
 - **设置页选项卡化**：交易对与物品 IO 配置改为设置页内的选项卡（通用 / 交易对 / IO输入 / IO输出 / 静止交易 / 虚空交易 / 快捷键），不再弹出独立配置窗口
@@ -144,14 +144,16 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 
 ### 多版本构建（MC 1.20 – 1.20.4）
 
-一键脚本（推荐，依次构建 3 个版本）：
-
-```powershell
-.\build-versions.ps1        # Windows PowerShell
-```
+一键脚本（推荐，依次构建 3 个版本）。跨 OS，Windows / macOS / Linux 通用；在 `autotrade-fabric/` 下执行：
 
 ```bash
-./build-versions.sh         # bash 环境（Git Bash / WSL / macOS / Linux）
+python build-versions.py
+```
+
+仅打印将执行的命令、不实际构建：
+
+```bash
+python build-versions.py --dry-run
 ```
 
 手工执行（示例：MC 1.20.1）：
@@ -160,7 +162,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 .\gradlew build -Pminecraft_version=1.20.1 -Pmappings_version=1.20.1+build.10 -Pminecraft_version_out=1.20.1 -Pmalilib_version=0.16.1 -Pfabric_api_version=0.92.6+1.20.1 -Pfabric_api_version_min=0.83.0 -Pmod_menu_version=7.2.2 "-Pminecraft_version_range=>=1.20 <1.20.2"
 ```
 
-代码对 1.20 – 1.20.4 零改动；各版本参数矩阵见 `build-versions.ps1` 与 `build-versions.sh`（两处须同步维护）。
+代码对 1.20 – 1.20.4 零改动；各版本参数矩阵见 `build-versions.py`（单一来源；CI 工作流内联同一份矩阵，须保持同步）。
 
 ## 持续集成（GitHub Actions）
 
@@ -169,7 +171,7 @@ AutoTrade 是一个 Fabric 客户端模组，用于 AFK（挂机）自动与村�
 ### Build（自动构建）
 
 - **触发**：push / PR 到 `master` 分支
-- **行为**：并行构建 3 个 MC 版本（1.20.1 / 1.20.2 / 1.20.4，参数与 `build-versions.ps1` 一致），将 jar 与 md5 校验文件上传为 Actions artifacts，可在工作流运行页面的 Summary 中下载
+- **行为**：并行构建 3 个 MC 版本（1.20.1 / 1.20.2 / 1.20.4，参数与 `build-versions.py` 一致），将 jar 与 md5 校验文件上传为 Actions artifacts，可在工作流运行页面的 Summary 中下载
 - 构建失败会在 PR 上直接显示状态标记（`spotlessCheck` 已接入 `build`，格式问题会导致失败）
 
 ### Release (Manual)（手动发布）

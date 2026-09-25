@@ -1,0 +1,23 @@
+// 测试用 Gradle init script：给 runClient 注入 quickPlay 世界参数（不修改仓库 build 文件）。
+//
+// 用法（工作目录 = autotrade-fabric）：
+//   .\gradlew.bat --no-daemon -I tools\testworld\testworld.init.gradle runClient
+//
+// 世界名可用环境变量 TESTWORLD_WORLD 覆盖（默认 AutoTradeTest）。
+// 背景：`--args=...` 经 PowerShell → cmd → Gradle 链路时会被 cmd 的 `=` 分词破坏（值丢失），
+// 因此改用 init script 在任务执行前直接追加程序参数，绕开 CLI 引号问题。
+// 世界名来源优先级：-Ptestworld.world=<名>（命令行属性，最可靠） > 环境变量 TESTWORLD_WORLD > 默认 AutoTradeTest
+def world = gradle.startParameter.projectProperties['testworld.world'] ?: System.getenv('TESTWORLD_WORLD') ?: 'AutoTradeTest'
+println("[testworld] resolved world = ${world}")
+
+allprojects {
+	tasks.configureEach { task ->
+		if (task.name == 'runClient') {
+			// doFirst 在任务主动作（Loom 的 exec）之前执行：追加 quickPlay 程序参数
+			task.doFirst {
+				task.args('--quickPlaySingleplayer', world)
+				task.logger.lifecycle("[testworld] runClient 追加程序参数: --quickPlaySingleplayer ${world}")
+			}
+		}
+	}
+}
