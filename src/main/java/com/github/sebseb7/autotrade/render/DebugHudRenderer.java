@@ -35,8 +35,15 @@ public class DebugHudRenderer implements IRenderer {
 	private static final int TEXT_COLOR = 0xE0FFFFFF;
 	/** 背景色（半透明黑） */
 	private static final int BG_COLOR = 0x90000000;
+	/** 文本行缓存刷新间隔（tick）：HUD 每帧渲染，文本每 5 tick 才重建一次（避免每帧分配） */
+	private static final int CACHE_REFRESH_TICKS = 5;
 
 	private static final DebugHudRenderer INSTANCE = new DebugHudRenderer();
+
+	/** 缓存的文本行列表：渲染期直接复用，仅在超过刷新间隔时重建 */
+	private List<String> cachedLines;
+	/** 上次重建缓存的行缓存世界时间（tick）；Long.MIN_VALUE 保证首帧必刷新 */
+	private long lastRefreshTick = Long.MIN_VALUE;
 
 	private DebugHudRenderer() {
 	}
@@ -58,15 +65,21 @@ public class DebugHudRenderer implements IRenderer {
 		if (mc.player == null || mc.world == null) {
 			return;
 		}
+		// 行缓存：仅当缓存为空或已过刷新间隔时重建，渲染期复用 cachedLines（零每帧分配）
+		long now = mc.world.getTime();
+		if (cachedLines == null || now - lastRefreshTick >= CACHE_REFRESH_TICKS) {
+			cachedLines = buildLines(mc);
+			lastRefreshTick = now;
+		}
 		// 10 参 renderText：位置 = MARGIN 边距、缩放 1.0、背景与阴影均开启
 		RenderUtils.renderText(MARGIN, MARGIN, 1.0, TEXT_COLOR, BG_COLOR,
 				((HudPosition) Configs.Generic.DEBUG_HUD_POSITION.getOptionListValue()).toHudAlignment(), true, true,
-				buildLines(mc), drawContext);
+				cachedLines, drawContext);
 	}
 
 	/**
-	 * 组装调试面板文本行（最多 8 行）：标题 / 开关与模式 / 机器状态 / 当前任务 / 会话与累计成交 / IO 计数 / 缓存统计 / 模式特有行。
-	 * mod 关闭（机器为 null）时只返回前两行，不显示机器与计数信息。
+	 * 组装调试面板文本行（最多 9 行）：标题 / 开关与模式 / 机器状态 / 当前任务 / 空闲原因 / 会话与累计成交 / IO 计数 / 缓存统计 /
+	 * 模式特有行。 mod 关闭（机器为 null）时只返回前两行，不显示机器与计数信息。
 	 */
 	private List<String> buildLines(MinecraftClient mc) {
 		List<String> lines = new ArrayList<>();
@@ -101,6 +114,10 @@ public class DebugHudRenderer implements IRenderer {
 		}
 		lines.add(StringUtils.translate("autotrade.debug.task", task == null ? "-" : task.getClass().getSimpleName(),
 				taskState));
+
+		// 空闲原因行：原因枚举先翻译为本地化短名，再作为参数填入行模板（有任务时由 getter 派生为 交易中/搬运中/回程中）
+		lines.add(StringUtils.translate("autotrade.debug.idle_line",
+				StringUtils.translate(am.getIdleReason().translationKey())));
 
 		lines.add(StringUtils.translate("autotrade.debug.trades", TradeStats.getInstance().getLastSessionTrades(),
 				TradeStats.getInstance().getTotalTrades()));

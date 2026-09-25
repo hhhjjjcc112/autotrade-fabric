@@ -200,5 +200,21 @@
     "autotrade.debug.static_line": "静止: %d/%d 村民 | 交易冷却 %dt | IO %dt",
     "autotrade.debug.moving_line": "移动: %d 已处理 | %d 饥饿",
     "autotrade.debug.void_line": "虚空: 回程触发 %s",
-    "autotrade.debug.cache_line": "缓存: %d 条 | 跳过 %d 次"
+    "autotrade.debug.cache_line": "缓存: %d 条 | 跳过 %d 次",
+    "autotrade.debug.idle_line": "空闲: %s",
+    "autotrade.debug.idle.none": "无",
+    "autotrade.debug.idle.trading": "交易中",
+    "autotrade.debug.idle.container_io": "搬运中",
+    "autotrade.debug.idle.return_trigger": "回程中",
+    "autotrade.debug.idle.inventory_full": "背包满",
+    "autotrade.debug.idle.round_cooldown": "轮冷却",
+    "autotrade.debug.idle.io_interval": "IO间隔",
+    "autotrade.debug.idle.no_villager": "无村民",
+    "autotrade.debug.idle.all_processed": "已处理完",
+    "autotrade.debug.idle.cache_skip": "缓存跳过",
+    "autotrade.debug.idle.villager_gone": "村民消失",
+    "autotrade.debug.idle.no_candidate": "无候选",
+    "autotrade.debug.idle.villager_retry": "村民重试",
+    "autotrade.debug.idle.return_trigger_not_configured": "未配回程",
+    "autotrade.debug.idle.return_trigger_wait": "回程等待"
 }

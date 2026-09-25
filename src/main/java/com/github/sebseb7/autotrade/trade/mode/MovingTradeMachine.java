@@ -7,6 +7,7 @@ import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.CompetitorChec
 import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler.ContainerCandidate;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
+import com.github.sebseb7.autotrade.trade.machine.IdleReason;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import fi.dy.masa.malilib.gui.Message;
@@ -105,6 +106,13 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	private final List<Candidate> candidates = new ArrayList<>();
 	private final Set<StarvationKey> candidateKeys = new HashSet<>();
 	private final List<Entity> unprocessedVillagers = new ArrayList<>();
+
+	/**
+	 * 本 tick 空闲扫描中因交易缓存跳过（TTL 内已知不匹配）的村民计数：tickIdle 入口清零、findUnprocessedVillagers
+	 * 缓存跳过点自增，用于区分「候选全因缓存跳过」（CACHE_SKIP）与「范围内无可服务目标」（NO_CANDIDATE）。 仅本 tick 计数的
+	 * int，无分配。
+	 */
+	private int cacheSkipThisTick;
 
 	/** 安全点让位检查器（村民任务注入）：候选内存在「饥饿 ≥ 阈值 且 > 当前村民」的未处理村民（排除自己）→ 让位 */
 	private final CompetitorChecker villagerCompetitorChecker;
@@ -233,6 +241,8 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 
 	@Override
 	protected void tickIdle(MinecraftClient mc) {
+		// 每 tick 空闲扫描开始：缓存跳过计数清零（供本次扫描后区分 CACHE_SKIP / NO_CANDIDATE）
+		cacheSkipThisTick = 0;
 		// 残留窗口兜底：让位/异常路径可能遗留「交互在途、窗口晚到」的窗口（任务已结束）→ 检测到即关闭
 		// （关闭链路说明见 closeResidualScreen——1.20.4 源码核实，等效阻止窗口出现）
 		if (closeResidualScreen(mc)) {
@@ -297,6 +307,8 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 		seenKeys.addAll(candidateKeys);
 
 		if (candidates.isEmpty()) {
+			// 无候选可派发：本 tick 有缓存跳过 → CACHE_SKIP；范围内本就无可服务目标 → NO_CANDIDATE
+			setIdleReason(cacheSkipThisTick > 0 ? IdleReason.CACHE_SKIP : IdleReason.NO_CANDIDATE);
 			return;
 		}
 
@@ -373,6 +385,8 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 				// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
 				// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
 				if (isCachedMiss(e.getUuid(), mc.world.getTime())) {
+					// 本 tick 缓存跳过计数 +1（空闲分支据此区分 CACHE_SKIP 与 NO_CANDIDATE）
+					cacheSkipThisTick++;
 					continue;
 				}
 				unprocessedVillagers.add(e);

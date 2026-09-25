@@ -200,5 +200,21 @@
     "autotrade.debug.static_line": "Static: %d/%d villagers | trade %dt | io %dt",
     "autotrade.debug.moving_line": "Moving: %d processed | %d starving",
     "autotrade.debug.void_line": "Void: return trigger %s",
-    "autotrade.debug.cache_line": "Cache: %d entries | %d skips"
+    "autotrade.debug.cache_line": "Cache: %d entries | %d skips",
+    "autotrade.debug.idle_line": "Idle: %s",
+    "autotrade.debug.idle.none": "none",
+    "autotrade.debug.idle.trading": "trading",
+    "autotrade.debug.idle.container_io": "container IO",
+    "autotrade.debug.idle.return_trigger": "return trigger",
+    "autotrade.debug.idle.inventory_full": "inventory full",
+    "autotrade.debug.idle.round_cooldown": "round cooldown",
+    "autotrade.debug.idle.io_interval": "IO interval",
+    "autotrade.debug.idle.no_villager": "no villager",
+    "autotrade.debug.idle.all_processed": "all processed",
+    "autotrade.debug.idle.cache_skip": "cache skip",
+    "autotrade.debug.idle.villager_gone": "villager gone",
+    "autotrade.debug.idle.no_candidate": "no candidate",
+    "autotrade.debug.idle.villager_retry": "villager retry",
+    "autotrade.debug.idle.return_trigger_not_configured": "return not set",
+    "autotrade.debug.idle.return_trigger_wait": "return wait"
 }

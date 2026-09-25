@@ -6,6 +6,7 @@ import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOScheduler;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.stats.TradeStats;
+import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
@@ -50,6 +51,9 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 
 	/** 当前任务（交易会话或容器 IO，均为 Task 子类） */
 	private Task currentTask;
+
+	/** 空闲原因（HUD 只读展示用）：tick 入口默认 NONE，各空闲分支就地写入；有任务时由 getIdleReason 按任务类型派生 */
+	private IdleReason idleReason = IdleReason.NONE;
 
 	/** 当前任务已持续运行的 tick 数（看门狗计数，任务完成/强杀时归零） */
 	private int taskTicks = 0;
@@ -209,7 +213,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 			}
 		}
 
-		// 空闲：由子类决定下一个任务
+		// 空闲：由子类决定下一个任务；先清空原因，保证未覆盖分支暴露为 NONE（而非陈旧值）
+		idleReason = IdleReason.NONE;
 		tickIdle(mc);
 	}
 
@@ -502,6 +507,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		if (!isContainerIoThrottled(mc) && containerIOScheduler.startOutputFirst(mc, this::setTaskIfEmpty))
 			return true;
 
+		// 仍处暂停期（未启动输出优先 IO）：原因置背包满，供 HUD 展示
+		idleReason = IdleReason.INVENTORY_FULL;
 		inventoryPauseCooldown--;
 		return true;
 	}
@@ -514,6 +521,7 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 		currentTask = null;
 		taskTicks = 0;
 		inventoryPauseCooldown = 0;
+		idleReason = IdleReason.NONE;
 		// 告警武装集合重置：重置视为全新状态，故障在下次出现时重新提示（状态边沿重新武装）
 		armedAlerts.clear();
 		// 重置后背包状态可能已变（清空/转移）→ 缓存立即失效，避免复用过期扫描结果
@@ -526,6 +534,8 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 			return "IDLE";
 		if (currentTask instanceof TradeTask)
 			return "TRADE_SESSION";
+		if (currentTask instanceof BlockTriggerTask)
+			return "RETURN_TRIGGER";
 		return "CONTAINER_IO";
 	}
 
@@ -542,5 +552,24 @@ public abstract class AbstractTradeMachine implements TradingMachine {
 	/** 返回背包满暂停冷却剩余 tick（HUD 只读展示用；>0 表示暂停中） */
 	public int getInventoryPauseCooldown() {
 		return inventoryPauseCooldown;
+	}
+
+	/** 写入空闲原因（供子类在空闲分支就地设置；有任务运行时不生效——getter 优先派生 BUSY 值） */
+	protected void setIdleReason(IdleReason reason) {
+		idleReason = reason;
+	}
+
+	/**
+	 * 返回当前空闲原因（HUD 只读展示用）：有运行中任务时按任务类型派生 BUSY 值 —— TradeTask→TRADING、
+	 * ContainerIOTask→CONTAINER_IO、BlockTriggerTask→RETURN_TRIGGER；无任务时返回最近一次写入的空闲原因。
+	 */
+	public IdleReason getIdleReason() {
+		if (currentTask instanceof TradeTask)
+			return IdleReason.TRADING;
+		if (currentTask instanceof ContainerIOTask)
+			return IdleReason.CONTAINER_IO;
+		if (currentTask instanceof BlockTriggerTask)
+			return IdleReason.RETURN_TRIGGER;
+		return idleReason;
 	}
 }

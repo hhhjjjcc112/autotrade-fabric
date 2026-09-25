@@ -7,6 +7,7 @@ import com.github.sebseb7.autotrade.trade.data.ItemIOCache;
 import com.github.sebseb7.autotrade.trade.data.ItemIOLocation;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
+import com.github.sebseb7.autotrade.trade.machine.IdleReason;
 import com.github.sebseb7.autotrade.trade.task.BlockTriggerTask;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
@@ -74,11 +75,21 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 		if (containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
 			return;
 
+		// 空闲原因尾部判定的局部标志：本 tick 未派发任何任务时，方法尾按优先级落原因（回程触发原因优先）
+		// 单次调用 isReturnTriggerConfigured()（避免尾部重复调用；该访问器有一次性的非法维度告警副作用）
+		boolean returnTriggerConfigured = isReturnTriggerConfigured();
+		boolean returnTriggerWait = false;
+		boolean sawCacheSkip = false;
+		boolean sawVillagerRetry = false;
+
 		// 返回触发：已配置时先做交接与可达性判定（空间相位：玩家在岛侧 ⇔ 返回块可达），优先级高于找村民（决策 2）
-		if (isReturnTriggerConfigured()) {
+		if (returnTriggerConfigured) {
 			// H.6 风险 3：当前 screen 必须已关闭（null）才能开箱，否则服务端会先 close 旧 handler
-			if (mc.currentScreen != null)
+			if (mc.currentScreen != null) {
+				// 屏幕未关闭（交易/容器界面仍开着）→ 空闲原因为「回程等待」
+				setIdleReason(IdleReason.RETURN_TRIGGER_WAIT);
 				return;
+			}
 			BlockPos pos = parseReturnPos();
 			if (isReturnTriggerUsable()) {
 				// 单次读取：可达性判定与 STRICT 类型门控共用同一 BlockState（无重复读取）
@@ -89,19 +100,27 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 							&& !BlockTriggerTask.matchesBlockType(type, state)) {
 						// STRICT 门控：类型不符 → 不派发、不落村民（零失败循环），等待玩家修正；状态边沿告警
 						showFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
+						setIdleReason(IdleReason.RETURN_TRIGGER_WAIT);
 						return;
 					}
 					clearFaultAlert(AlertType.RETURN_TRIGGER_STRICT);
 					// 显式重试节流：瞬态类失败/看门狗强杀后 100t 内不重派（冷却期同样 return，避免空转）
+					boolean triggerStarted = false;
 					if (mc.world.getTime() >= returnTriggerRetryAtTick) {
-						setTaskIfEmpty(new BlockTriggerTask(pos, type));
+						triggerStarted = setTaskIfEmpty(new BlockTriggerTask(pos, type));
 						AutoTrade.logger.info("[VoidMode] IDLE → RETURN_TRIGGER (pos={}, type={})", pos.toShortString(),
 								type.getStringValue());
+					}
+					if (!triggerStarted) {
+						// 节流中未派发任务 → 空闲原因为「回程等待」；派发成功则保持 BUSY（由 getter 派生）
+						setIdleReason(IdleReason.RETURN_TRIGGER_WAIT);
 					}
 					return;
 				}
 			}
-			// 不可达（玩家在原侧）或不可用（冲突/坐标非法）→ 落入下方找村民
+			// 不可达（玩家在原侧）或不可用（冲突/坐标非法）→ 落入下方找村民；
+			// 本 tick 未派发时尾部落 RETURN_TRIGGER_WAIT（配置正常但本次等待移交）
+			returnTriggerWait = true;
 		}
 
 		// 取范围内第一个村民/流浪商人（单村民语义：无需区分是否已处理，交易完成后下轮自然重选；
@@ -112,14 +131,30 @@ public class VoidTradeMachine extends AbstractTradeMachine {
 			// 流浪商人说明：findNearby 含流浪商人——无匹配交易的商人学到不匹配（TTL）是正确的（其交易终身固定）；
 			// 已命中的商人若消失仅留下无害的死条目（UUID 永不复用），不做特殊处理
 			if (isCachedMiss(e.getUuid(), mc.world.getTime())) {
+				sawCacheSkip = true;
 				continue;
 			}
 			if (isVillagerOnRetryCooldown(e.getUuid(), mc.world.getTime())) {
+				sawVillagerRetry = true;
 				continue;
 			}
 			setTaskIfEmpty(new VoidTradeTask(e.getUuid()));
 			AutoTrade.logger.info("[VoidMode] IDLE → TRADE_SESSION (villager id={})", e.getUuid());
 			return;
+		}
+
+		// 尾部：村民循环未派发任何任务 → 按严格优先级落空闲原因并显式 return（回程触发原因优先：
+		// VOID 下缺回程/回程不可用是硬阻断根因，优先于村民侧原因展示）
+		if (!returnTriggerConfigured) {
+			setIdleReason(IdleReason.RETURN_TRIGGER_NOT_CONFIGURED);
+		} else if (returnTriggerWait) {
+			setIdleReason(IdleReason.RETURN_TRIGGER_WAIT);
+		} else if (sawVillagerRetry) {
+			setIdleReason(IdleReason.VILLAGER_RETRY);
+		} else if (sawCacheSkip) {
+			setIdleReason(IdleReason.CACHE_SKIP);
+		} else {
+			setIdleReason(IdleReason.NO_VILLAGER);
 		}
 	}
 

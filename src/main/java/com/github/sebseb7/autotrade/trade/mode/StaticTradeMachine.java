@@ -6,6 +6,7 @@ import com.github.sebseb7.autotrade.trade.data.VillagerTradeCache;
 import com.github.sebseb7.autotrade.trade.helper.VillagerHelper;
 import com.github.sebseb7.autotrade.trade.io.ContainerIOTask;
 import com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine;
+import com.github.sebseb7.autotrade.trade.machine.IdleReason;
 import com.github.sebseb7.autotrade.trade.task.Task;
 import com.github.sebseb7.autotrade.trade.task.TaskResult;
 import com.github.sebseb7.autotrade.trade.task.TradeTask;
@@ -125,12 +126,17 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 				targetIndex = 0;
 				scanned = true;
 			}
+			// 空闲原因局部标记：区分循环耗尽的三种情形（全部已处理 / 全部缓存跳过 / 村民实体消失），仅本 tick 有效、无分配
+			boolean sawProcessed = false;
+			boolean sawCacheSkip = false;
+			boolean sawVillagerGone = false;
 			// 按名单顺序派发下一个未处理村民（实体已消失的跳过，不标记）
 			while (targetIndex < targetVillagers.size()) {
 				UUID id = targetVillagers.get(targetIndex++);
 				if (!processedVillagers.contains(id)) {
 					// 9.8 缓存：TTL 内已知不匹配 → 跳过不开窗（不标记已处理——缓存为唯一事实源，TTL 到期自动复查）
 					if (isCachedMiss(id, mc.world.getTime())) {
+						sawCacheSkip = true;
 						continue;
 					}
 					Entity e = VillagerHelper.findByUuid(mc, id);
@@ -139,8 +145,13 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 						setTaskIfEmpty(new StaticTradeTask(id));
 						AutoTrade.logger.info("[StaticMode] IDLE → TRADE_SESSION (villager={}) at tick {}",
 								dispatchedVillagerId, mc.world.getTime());
+						// 派发成功直接返回：空闲原因由 getIdleReason 按任务类型派生 BUSY，不写 idle 原因
 						return;
 					}
+					sawVillagerGone = true;
+				} else {
+					// 候选已在已处理名单 → 本轮无进展
+					sawProcessed = true;
 				}
 			}
 			// 名单空（无村民可派发：扫描无村民 或 全部已处理）→ 进入交易冷却（等价于现状「名单处理完 → COMPLETED →
@@ -148,16 +159,34 @@ public class StaticTradeMachine extends AbstractTradeMachine {
 			tradeCooldown = Configs.Static.TRADE_INTERVAL.getIntegerValue();
 			containerIOCooldown = 0;
 			scanned = false;
+			// 循环耗尽：按优先级写入空闲原因——名单为空 > 全部已处理 > 全部缓存跳过 > 村民消失 > 保持 NONE（未覆盖分支显示 none）
+			if (targetVillagers.isEmpty()) {
+				setIdleReason(IdleReason.NO_VILLAGER);
+			} else if (sawProcessed) {
+				setIdleReason(IdleReason.ALL_PROCESSED);
+			} else if (sawCacheSkip && !sawVillagerGone) {
+				setIdleReason(IdleReason.CACHE_SKIP);
+			} else if (sawVillagerGone) {
+				setIdleReason(IdleReason.VILLAGER_GONE);
+			}
 			AutoTrade.logger.info("[StaticMode] Round done, cooldown={}", tradeCooldown);
 			return;
 		}
 
 		// 交易冷却期间（非交易中）→ 尝试容器 IO；无 IO 需求则重置为闲置间隔
 		if (containerIOCooldown == 0) {
+			// 成功启动 IO 任务直接返回：空闲原因由 getIdleReason 按任务类型派生 BUSY，不写 idle 原因
 			if (containerIOScheduler.startNearest(mc, this::setTaskIfEmpty))
 				return;
 			containerIOCooldown = Configs.Static.CONTAINER_IO_IDLE_INTERVAL.getIntegerValue();
+			// 未启动 IO 任务：显式写入 IO 间隔原因并返回（原隐式落空改为显式）
+			setIdleReason(IdleReason.IO_INTERVAL);
+			return;
 		}
+
+		// 两个冷却均 > 0（交易轮冷却等待中且 IO 未到间隔）→ 显式写入轮冷却原因并返回（原隐式落空改为显式）
+		setIdleReason(IdleReason.ROUND_COOLDOWN);
+		return;
 	}
 
 	// 扫描范围内全部村民/流浪商人建立本轮名单（与现状 StaticTradeTask 首扫逻辑一致）
