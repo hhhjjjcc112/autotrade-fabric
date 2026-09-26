@@ -11,12 +11,12 @@
 	      世界默认 `AutoTradeVoidTest`
 
 用法：
-	python tools/testworld/setup_testworld.py                       # static：生成世界 + 备份并写测试配置 + 校验
-	python tools/testworld/setup_testworld.py --verify              # 仅校验（默认 static 世界）
-	python tools/testworld/setup_testworld.py --mode void           # VOID：生成 AutoTradeVoidTest + VOID 配置
-	python tools/testworld/setup_testworld.py --mode void --verify  # 仅校验 VOID 世界
-	python tools/testworld/setup_testworld.py --skip-config
-	python tools/testworld/setup_testworld.py --fresh
+	python test/lib/setup_testworld.py                       # static：生成世界 + 备份并写测试配置 + 校验
+	python test/lib/setup_testworld.py --verify              # 仅校验（默认 static 世界）
+	python test/lib/setup_testworld.py --mode void           # VOID：生成 AutoTradeVoidTest + VOID 配置
+	python test/lib/setup_testworld.py --mode void --verify  # 仅校验 VOID 世界
+	python test/lib/setup_testworld.py --skip-config
+	python test/lib/setup_testworld.py --fresh
 
 说明：脚本从仓库根目录（autotrade-fabric/）运行；脚本会自行定位仓库根目录，任意 cwd 均可。
 
@@ -51,12 +51,13 @@ for _stream in (sys.stdout, sys.stderr):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nbt_min as nbt  # noqa: E402
 
-# 仓库根目录（autotrade-fabric/）：<repo>/tools/testworld/setup_testworld.py -> parents[2]
+# 仓库根目录（autotrade-fabric/）：<repo>/test/lib/setup_testworld.py -> parents[2]
 ROOT = Path(__file__).resolve().parents[2]
 RUN_DIR = ROOT / "run"
 SAVES_DIR = RUN_DIR / "saves"
 CONFIG_PATH = RUN_DIR / "config" / "autotrade.json"
-DATAPACK_SRC = Path(__file__).resolve().parent / "datapack_src"
+# datapack 源位于 test/datapack_src（lib 的兄弟目录）：<repo>/test/lib/setup_testworld.py -> parents[1] = test
+DATAPACK_SRC = Path(__file__).resolve().parents[1] / "datapack_src"
 
 class Layout(NamedTuple):
 	"""一套测试装置主基地的固定坐标（VOID 岛侧坐标另见 VOID_* 常量）。"""

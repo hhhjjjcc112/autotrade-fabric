@@ -11,10 +11,12 @@
 输出：echo（本地聊天，可见）+ log（logs/latest.log，供 agent/用户事后查看）。
 
 用法：
-  - 自动：run/minescript/config.txt 中 `autorun[AutoTradeTest]=static_test`
+  - 自动：run/minescript/config.txt 中 `autorun[AutoTradeTest]=static_test 90`
   - 手动：游戏内聊天框输入 `\\static_test 180`（时长秒数，可省略）
+  - 保留客户端：`\\static_test 180 noquit`（默认观测结束后自动关闭客户端）
 
 注意：
+  - 观测结束后默认自动调用 MinecraftClient.scheduleStop() 关闭客户端；传 noquit 可保留。
   - minescript 库由 Minescript mod 运行时注入 sys.path；IDE 静态检查报未知导入属预期现象。
   - java_* 反射的调用约定：方法要先经 `java_member(cls, "name")` 取句柄，再 `java_call_method(target, handle)`。
 """
@@ -42,7 +44,7 @@ from minescript import (
 	screenshot,
 )
 
-# 装置固定坐标（与 tools/testworld/setup_testworld.py 保持一致）
+# 装置固定坐标（与 test/lib/setup_testworld.py 保持一致）
 RIG_CHECKS = [
 	("ground(0,-61,0)", (0, -61, 0), "minecraft:grass_block"),
 	("in-chest(-2,-60,0)", (-2, -60, 0), "minecraft:chest"),
@@ -193,8 +195,24 @@ def _enable_mod():
 	java_call_method(_enabled_handle(), java_member(cb, "toggleBooleanValue"))
 
 
-def main(seconds=DEFAULT_SECONDS):
-	"""主流程：就绪检查 → 自动启用 mod → 事件/轮询观测 → 汇总判定。"""
+def _quit_client(noquit: bool) -> None:
+	"""观测结束后自动关闭客户端（noquit=True 时跳过）；失败仅提示，绝不抛异常。"""
+	if noquit:
+		log("[quit] 已指定 noquit（保留客户端，不自动关闭）")
+		return
+	log("[quit] 2 秒后自动关闭 Minecraft 客户端…")
+	try:
+		time.sleep(2.0)
+		cls = java_class("net.minecraft.client.MinecraftClient")
+		inst = java_call_method(cls, java_member(cls, "getInstance"))
+		java_call_method(inst, java_member(cls, "scheduleStop"))
+		log("[quit] 已调用 MinecraftClient.scheduleStop()")
+	except Exception as exc:  # noqa: BLE001
+		log(f"[quit] 自动关闭失败: {exc} → 请手动关闭游戏窗口")
+
+
+def main(seconds=DEFAULT_SECONDS, noquit=False):
+	"""主流程：就绪检查 → 自动启用 mod → 事件/轮询观测 → 汇总判定 →（默认）自动关闭客户端。"""
 	log("=== AutoTradeTest STATIC 观测开始（Minescript autorun）===")
 	echo(f"[Test] STATIC 观测开始，最长 {int(seconds)}s；结果写入 logs/latest.log")
 
@@ -291,16 +309,19 @@ def main(seconds=DEFAULT_SECONDS):
 	echo(f"[Test] 观测结束：{'PASS' if verdict_ok else 'FAIL'}（详见 logs/latest.log）")
 	log("=== AutoTradeTest STATIC 观测结束 ===")
 
+	_quit_client(noquit)
+
 
 if __name__ == "__main__":
 	secs = DEFAULT_SECONDS
+	noquit = "noquit" in sys.argv[1:]
 	if len(sys.argv) > 1:
 		try:
 			secs = float(sys.argv[1])
 		except ValueError:
 			pass
 	try:
-		main(secs)
+		main(secs, noquit)
 	except Exception as exc:  # noqa: BLE001
 		import traceback
 

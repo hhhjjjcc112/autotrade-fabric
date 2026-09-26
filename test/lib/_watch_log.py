@@ -1,6 +1,6 @@
 """等待并过滤打印 run/logs/latest.log 中的测试关键行（供 agent 轮询，也便于用户自查）。
 
-用法: python tools/testworld/_watch_log.py [等待秒数] [--all]
+用法: python test/lib/_watch_log.py [等待秒数] [--all]
   - 默认等待到出现 "[verdict]"（或超时）后，打印过滤后的关键行（最后 150 行）
   - --all 时不等待，直接打印当前过滤结果
 """

@@ -2,21 +2,23 @@
 """启动 dev 客户端并自动进入指定测试世界（正常窗口模式，跨平台，非 headless）。
 
 用法（从仓库根目录 autotrade-fabric/ 运行）：
-	python tools/testworld/launch_testclient.py                        # static：部署脚本 → 重建 AutoTradeTest 世界与 STATIC 配置 → 启动
-	python tools/testworld/launch_testclient.py --world AutoTradeTest
-	python tools/testworld/launch_testclient.py --world AutoTradeVoidTest   # 世界名含 Void → 自动按 void 模式
-	python tools/testworld/launch_testclient.py --mode void                # 世界默认 AutoTradeVoidTest
-	python tools/testworld/launch_testclient.py --mode void --no-rebuild   # 跳过重建（沿用现有世界/配置）
-	python tools/testworld/launch_testclient.py --deploy-only              # 只部署 Minescript 脚本，不重建/不启动
-	python tools/testworld/launch_testclient.py --dry-run                  # 只打印将执行的命令，无任何副作用
+	python test/lib/launch_testclient.py                        # static：部署脚本 → 重建 AutoTradeTest 世界与 STATIC 配置 → 启动
+	python test/lib/launch_testclient.py --world AutoTradeTest
+	python test/lib/launch_testclient.py --world AutoTradeVoidTest   # 世界名含 Void → 自动按 void 模式
+	python test/lib/launch_testclient.py --mode void                # 世界默认 AutoTradeVoidTest
+	python test/lib/launch_testclient.py --mode void --no-rebuild   # 跳过重建（沿用现有世界/配置）
+	python test/lib/launch_testclient.py --deploy-only              # 只部署 Minescript 脚本，不重建/不启动
+	python test/lib/launch_testclient.py --dry-run                  # 只打印将执行的命令，无任何副作用
 
 默认行为（依次执行）：
-	1) 部署：把 tools/testworld/minescript/*.py 复制到 run/minescript/；若 run/minescript/config.txt
-	   不存在，则按 tools/testworld/minescript/config.example.txt 生成（__PYTHON__ 替换为当前解释器）。
+	1) 部署：把 test/minescript/*.py 复制到 run/minescript/；若 run/minescript/config.txt
+	   不存在，则按 test/minescript/config.example.txt 生成（__PYTHON__ 替换为当前解释器）；
+	   若已存在，则把 config.example.txt 中缺失的 autorun[<key>]=<cmd> 规则追加到 config.txt
+	   末尾（**只增不改**：绝不修改或删除既有行，python= 等其它设置原样保留）。
 	2) 重建：执行 setup_testworld.py --mode <mode> --world-name <world> --fresh
 	   （删除并重新生成世界 level.dat + datapack，备份并重写 run/config/autotrade.json，自校验；
 	   校验失败则中止启动）。
-	3) 启动：gradlew --no-daemon -Ptestworld.world=<world> -I tools/testworld/testworld.init.gradle runClient
+	3) 启动：gradlew --no-daemon -Ptestworld.world=<world> -I test/lib/testworld.init.gradle runClient
 
 参数：
 	--world NAME     世界名（优先级：本参数 > 环境变量 TESTWORLD_WORLD > 按模式默认）
@@ -27,7 +29,7 @@
 	--deploy-only    只执行部署并退出（不重建、不启动）
 	--dry-run        只打印将执行的部署/重建/启动命令，不产生任何副作用（不写日志、不复制文件）
 
-日志：重建与 Gradle 的子进程输出实时打印并追加写入 tools/testworld/launch.log。
+日志：重建与 Gradle 的子进程输出实时打印并追加写入 test/launch.log。
 
 说明：世界名经 Gradle init script（-Ptestworld.world）注入 runClient 的 --quickPlaySingleplayer 程序参数，
 	而非 `--args`——因为 `--args` 经「命令行 → cmd → Gradle/Loom」链路时值会丢失。另设环境变量
@@ -38,6 +40,7 @@
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -53,13 +56,17 @@ for _stream in (sys.stdout, sys.stderr):
 		except Exception:
 			pass
 
-# 仓库根目录（autotrade-fabric/）：<repo>/tools/testworld/launch_testclient.py -> parents[2]
+# 仓库根目录（autotrade-fabric/）：<repo>/test/lib/launch_testclient.py -> parents[2]
 TOOL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LOG_PATH = TOOL_DIR / "launch.log"
-MINESCRIPT_SRC = TOOL_DIR / "minescript"
+# 日志与实时脚本源均在 test/ 下（lib 的上一级）：test/launch.log、test/minescript
+LOG_PATH = Path(__file__).resolve().parents[1] / "launch.log"
+MINESCRIPT_SRC = Path(__file__).resolve().parents[1] / "minescript"
 MINESCRIPT_DST = REPO_ROOT / "run" / "minescript"
 GRADLE = REPO_ROOT / ("gradlew.bat" if os.name == "nt" else "gradlew")
+
+# autorun 行匹配：autorun[<key>]=<cmd>（key 已含 autorun[...] 前缀）
+AUTORUN_RE = re.compile(r"^\s*(autorun\[[^\]]+\])\s*=\s*(.*?)\s*$")
 
 DEFAULT_WORLD_NAMES = {"static": "AutoTradeTest", "void": "AutoTradeVoidTest"}
 
@@ -80,6 +87,44 @@ def _minescript_files() -> list[Path]:
 	return sorted(MINESCRIPT_SRC.glob("*.py"))
 
 
+def _parse_autorun_rules(text: str) -> dict[str, str]:
+	"""解析文本中所有 `autorun[<key>]=<cmd>` 行，返回 {完整键: 命令值}（保持出现顺序）。"""
+	rules: dict[str, str] = {}
+	for line in text.splitlines():
+		match = AUTORUN_RE.match(line)
+		if match:
+			rules[match.group(1)] = match.group(2)
+	return rules
+
+
+def _missing_autorun_rules() -> dict[str, str]:
+	"""对比模板与现有 config.txt，返回需要追加的 autorun 规则 {完整键: 命令值}。
+
+	规则：
+		- 以 test/minescript/config.example.txt 为准（模板顺序）；
+		- 只返回现有 config.txt 中**缺失**的键；已存在的键一律不动。
+	若模板不存在或 config.txt 不存在（首启由模板生成）则返回空。
+	"""
+	template = MINESCRIPT_SRC / "config.example.txt"
+	config = MINESCRIPT_DST / "config.txt"
+	if not template.is_file() or not config.is_file():
+		return {}
+	template_rules = _parse_autorun_rules(template.read_text(encoding="utf-8"))
+	existing_rules = _parse_autorun_rules(config.read_text(encoding="utf-8"))
+	return {key: value for key, value in template_rules.items() if key not in existing_rules}
+
+
+def _append_autorun_rules(config_path: Path, rules: dict[str, str]) -> None:
+	"""仅追加：向 config.txt 末尾逐行写入缺失的 autorun 规则（绝不改动既有任何行）。"""
+	raw = config_path.read_bytes()
+	# 以字节追加，保持既有内容（含换行风格）原封不动
+	with config_path.open("a", encoding="utf-8", newline="") as handle:
+		if raw and not raw.endswith(b"\n"):
+			handle.write("\n")
+		for key, value in rules.items():
+			handle.write(f"{key}={value}\n")
+
+
 def print_deploy_plan() -> None:
 	"""--dry-run：打印部署计划（不产生任何文件操作）。"""
 	print(f"[dry-run] deploy: mkdir {MINESCRIPT_DST}")
@@ -88,6 +133,12 @@ def print_deploy_plan() -> None:
 	config = MINESCRIPT_DST / "config.txt"
 	if config.exists():
 		print(f"[dry-run] deploy: 保留现有 {config}（不覆盖）")
+		missing = _missing_autorun_rules()
+		if missing:
+			for key, value in missing.items():
+				print(f"[dry-run] deploy: 将追加 autorun 规则: {key}={value}")
+		else:
+			print("[dry-run] deploy: autorun 规则已齐全（无需追加）")
 	else:
 		template = MINESCRIPT_SRC / "config.example.txt"
 		python_path = sys.executable.replace("\\", "/")
@@ -95,21 +146,28 @@ def print_deploy_plan() -> None:
 
 
 def deploy() -> None:
-	"""把 minescript 脚本复制进 run/minescript/，并在 config.txt 缺失时按模板生成。"""
+	"""把 minescript 脚本复制进 run/minescript/；config.txt 缺失时按模板生成、存在时按需追加 autorun。"""
 	MINESCRIPT_DST.mkdir(parents=True, exist_ok=True)
 	files = _minescript_files()
 	for src in files:
 		shutil.copy2(src, MINESCRIPT_DST / src.name)
 	print(f"[deploy] 已复制 {len(files)} 个脚本到 {MINESCRIPT_DST}")
 	config = MINESCRIPT_DST / "config.txt"
-	if config.exists():
-		print(f"[deploy] 保留现有 {config}（不覆盖）")
+	if not config.exists():
+		template = MINESCRIPT_SRC / "config.example.txt"
+		python_path = sys.executable.replace("\\", "/")
+		text = template.read_text(encoding="utf-8").replace("__PYTHON__", python_path)
+		config.write_text(text, encoding="utf-8", newline="\n")
+		print(f"[deploy] 生成 {config}（python={python_path}）")
 		return
-	template = MINESCRIPT_SRC / "config.example.txt"
-	python_path = sys.executable.replace("\\", "/")
-	text = template.read_text(encoding="utf-8").replace("__PYTHON__", python_path)
-	config.write_text(text, encoding="utf-8", newline="\n")
-	print(f"[deploy] 生成 {config}（python={python_path}）")
+	print(f"[deploy] 保留现有 {config}（不覆盖）")
+	missing = _missing_autorun_rules()
+	if not missing:
+		print("[deploy] autorun 规则已齐全（无需追加）")
+		return
+	_append_autorun_rules(config, missing)
+	for key, value in missing.items():
+		print(f"[deploy] 追加 autorun 规则: {key}={value}")
 
 
 def run_streamed(cmd: list[str], log_handle, env: dict[str, str] | None = None) -> int:

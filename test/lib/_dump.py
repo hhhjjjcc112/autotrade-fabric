@@ -1,11 +1,11 @@
 """调试助手：打印 NBT 文件（level.dat）的可读结构。
 
-用法:
-  python _dump.py <file.dat> [路径表达式] [--depth N]
+用法（在 test/lib/ 下与 nbt_min.py 同目录，可直接运行；参数中的路径相对当前工作目录）:
+  python test/lib/_dump.py <file.dat> [路径表达式] [--depth N]
 示例:
-  python _dump.py "run/saves/New World/level.dat"                       # 全量（可能很长）
-  python _dump.py "run/saves/New World/level.dat" Data.GameRules
-  python _dump.py "run/saves/New World/level.dat" Data.WorldGenSettings --depth 3
+  python test/lib/_dump.py "run/saves/New World/level.dat"                       # 全量（可能很长）
+  python test/lib/_dump.py "run/saves/New World/level.dat" Data.GameRules
+  python test/lib/_dump.py "run/saves/New World/level.dat" Data.WorldGenSettings --depth 3
 """
 
 import sys

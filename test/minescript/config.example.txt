@@ -1,4 +1,5 @@
-# Minescript 配置模板（由 tools/testworld/launch_testclient.py 在 run/minescript/config.txt 缺失时按本文件生成）
+# Minescript 配置模板（由 test/lib/launch_testclient.py 在 run/minescript/config.txt 缺失时按本文件生成；
+# 已存在时只追加缺失的 autorun[...] 规则，绝不改动既有行）
 # 参考: https://github.com/maxuser0/minescript/blob/main/docs/v4.0/README.md
 # 说明: Minescript 首次启动时会自动安装 Python 库到 minescript/system/lib/minescript.py
 
@@ -19,3 +20,5 @@ autorun[*]=_noop
 autorun[AutoTradeTest]=static_test 90
 # 进入 AutoTradeVoidTest 测试世界时自动运行 VOID 观测脚本（240s；省略参数时脚本默认 240s）
 autorun[AutoTradeVoidTest]=void_test 240
+# 进入 AutoTradeSmokeTest 冒烟世界时自动运行冒烟观测脚本（30s；默认结束后自动关闭客户端，加 noquit 可保留）
+autorun[AutoTradeSmokeTest]=smoke_test 30

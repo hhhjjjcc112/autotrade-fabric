@@ -1,7 +1,7 @@
 // 测试用 Gradle init script：给 runClient 注入 quickPlay 世界参数（不修改仓库 build 文件）。
 //
 // 用法（工作目录 = autotrade-fabric）：
-//   .\gradlew.bat --no-daemon -I tools\testworld\testworld.init.gradle runClient
+//   .\gradlew.bat --no-daemon -I test\lib\testworld.init.gradle runClient
 //
 // 世界名可用环境变量 TESTWORLD_WORLD 覆盖（默认 AutoTradeTest）。
 // 背景：`--args=...` 经 PowerShell → cmd → Gradle 链路时会被 cmd 的 `=` 分词破坏（值丢失），
