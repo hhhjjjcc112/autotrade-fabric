@@ -4,19 +4,22 @@
 流程：
 	1) 部署 Minescript 脚本（test/minescript/*.py → run/minescript/，并按需追加 autorun 规则）；
 	2) 重建 AutoTradeVoidTest 世界与 VOID 配置（setup_testworld.py --mode void --fresh）；
-	3) 启动 dev 客户端（进图后 Minescript autorun 运行 void_test 观测；观测结束后默认自动关游戏）；
-	4) 等待游戏退出后，解析本轮 run/logs/latest.log 的 [verdict] 并据此返回退出码。
+	3) 启动客户端（进图后 Minescript autorun 运行 void_test 观测；观测结束后默认自动关游戏）；
+	   默认 gradlew runClient，--headless 时改经本地 HeadlessMC 无头启动；
+	4) 等待游戏退出后，解析本轮日志（dev：run/logs/latest.log；--headless：HeadlessMC 游戏日志）的 [verdict] 并据此返回退出码。
 
 用法（从仓库根目录 autotrade-fabric/ 运行）：
 	python test/void.py                 # 完整：部署 + 重建 + 启动 + 判定
 	python test/void.py --no-rebuild    # 跳过世界/配置重建（沿用现有世界/配置）
 	python test/void.py --no-deploy     # 跳过 Minescript 脚本部署
 	python test/void.py --world NAME    # 覆盖世界名（默认 AutoTradeVoidTest）
+	python test/void.py --headless      # 经本地 HeadlessMC 无头启动（替代 gradlew runClient），默认超时 480s
+	python test/void.py --headless --headless-timeout 600
 	python test/void.py --dry-run       # 只打印将执行的命令，无任何副作用
 
 退出码：0 = PASS / 1 = FAIL / 2 = 未见本轮 verdict（或启动前准备失败）。
 
-注意：本脚本会启动 Minecraft dev 客户端；按项目规则（AGENTS.md 规则 7），启动测试须先获用户批准。
+注意：本脚本会启动 Minecraft 客户端（dev 或 headless）；按项目规则（AGENTS.md 规则 7），启动测试须先获用户批准。
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from pathlib import Path
 # 使 `python test/void.py` 能 import lib.*（脚本目录 test/ 即包父目录）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import lib.headless as headless  # noqa: E402
 import lib.launch_testclient as launcher  # noqa: E402
 from lib.verdict import parse_verdict  # noqa: E402
 
@@ -36,6 +40,7 @@ from lib.verdict import parse_verdict  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOG_PATH = REPO_ROOT / "run" / "logs" / "latest.log"
 DEFAULT_WORLD = "AutoTradeVoidTest"
+DEFAULT_HEADLESS_TIMEOUT = 480
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -44,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--world", default=DEFAULT_WORLD, help=f"世界名（默认 {DEFAULT_WORLD}）")
 	parser.add_argument("--no-rebuild", action="store_true", help="跳过世界/配置重建")
 	parser.add_argument("--no-deploy", action="store_true", help="跳过 Minescript 脚本部署")
+	parser.add_argument("--headless", action="store_true", help="经本地 HeadlessMC（.tools/headlessmc）无头启动并解析其日志")
+	parser.add_argument("--headless-timeout", type=int, default=DEFAULT_HEADLESS_TIMEOUT, help=f"无头启动看门狗超时秒数（默认 {DEFAULT_HEADLESS_TIMEOUT}）")
+	parser.add_argument("--stage-only", action="store_true", help="仅 --headless：完成暂存后退出 0（不启动游戏）")
 	parser.add_argument("--dry-run", action="store_true", help="只打印将执行的命令，无任何副作用")
 	return parser
 
@@ -56,8 +64,15 @@ def main(argv: list[str]) -> int:
 		launch_argv.append("--no-rebuild")
 	if args.no_deploy:
 		launch_argv.append("--no-deploy")
+	if args.headless:
+		launch_argv += ["--headless", "--headless-timeout", str(args.headless_timeout)]
+	if args.stage_only:
+		launch_argv.append("--stage-only")
 	if args.dry_run:
 		launch_argv.append("--dry-run")
+
+	if args.dry_run:
+		print(f"[dry-run] void world={args.world} headless={args.headless}")
 
 	# 起始时间戳须在启动之前记录：用于 stale-run 保护（只认本轮写出的 verdict）
 	start = time.time()
@@ -66,15 +81,19 @@ def main(argv: list[str]) -> int:
 		return code
 	if code != 0:
 		print(f"[warn] 启动器返回非零退出码 {code}（可能为重建/启动失败）")
+	if args.stage_only:
+		return code
 
-	verdict = parse_verdict(LOG_PATH, since=start)
+	# 无头模式解析 HeadlessMC 游戏日志，dev 模式解析 run/logs/latest.log
+	verdict_log = headless.log_path() if args.headless else LOG_PATH
+	verdict = parse_verdict(verdict_log, since=start)
 	if verdict == "PASS":
 		print("[result] PASS")
 		return 0
 	if verdict == "FAIL":
 		print("[result] FAIL")
 		return 1
-	print(f"[result] 未见本轮 [verdict]（日志：{LOG_PATH}）")
+	print(f"[result] 未见本轮 [verdict]（日志：{verdict_log}）")
 	print("提示：确认客户端已进入世界且 Minescript 已运行 void_test（见 run/minescript/config.txt 的 autorun 规则）")
 	return 2
 

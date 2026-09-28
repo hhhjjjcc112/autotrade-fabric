@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import shutil
 import sys
@@ -47,9 +48,53 @@ for _stream in (sys.stdout, sys.stderr):
 		except Exception:
 			pass
 
-# 复用同目录下的最小 NBT 库
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import nbt_min as nbt  # noqa: E402
+# NBT 读写依赖第三方库 pynbt（无内建 gzip，需用标准库 gzip 包裹）
+try:
+	import pynbt
+except ImportError:
+	print("错误：缺少依赖 pynbt（请执行 pip install pynbt）")
+	sys.exit(2)
+
+
+def _nbt_load(path):
+	"""读 gzip 压缩的 .dat 为 pynbt.NBTFile（根为 TAG_Compound）。"""
+	with gzip.open(path, "rb") as f:
+		return pynbt.NBTFile(io=f)
+
+
+def _nbt_save(doc: pynbt.NBTFile, path) -> None:
+	"""把 pynbt.NBTFile 以 gzip 压缩写回 .dat。"""
+	with gzip.open(path, "wb") as f:
+		doc.save(f)
+
+
+def get_path(root, expr: str):
+	"""按 "a.b.c"（列表用数字下标）取子标签，返回 pynbt 标签对象。
+
+	注意：pynbt 的 TAG_Compound / TAG_List 的 `.value` 即自身，
+	取标量的 Python 原生值请用 get_value()。
+	"""
+	current = root
+	for part in expr.split("."):
+		if isinstance(current, pynbt.TAG_Compound):
+			if part not in current:
+				raise KeyError(f"路径不存在：{expr}（在 {part} 处失败）")
+			current = current[part]
+		elif isinstance(current, pynbt.TAG_List):
+			current = current[int(part)]
+		else:
+			raise TypeError(f"路径 {expr} 在 {part} 处不可继续（{type(current).__name__}）")
+	return current
+
+
+def get_value(root, expr: str):
+	"""取路径终点的 Python 原生值（标量取 .value；容器返回自身）。"""
+	return get_path(root, expr).value
+
+
+def _set(compound: pynbt.TAG_Compound, key: str, value) -> None:
+	"""在 Compound 上设置键（pynbt 会自动补标签名；保持既有键顺序，新键追加到末尾）。"""
+	compound[key] = value
 
 # 仓库根目录（autotrade-fabric/）：<repo>/test/lib/setup_testworld.py -> parents[2]
 ROOT = Path(__file__).resolve().parents[2]
@@ -132,44 +177,39 @@ EXPECTED_DATAPACK_FILES = {
 }
 
 
-def _set(compound: nbt.Compound, key: str, value) -> None:
-	"""在 Compound 上设置键（保持既有键顺序，新键追加到末尾）。"""
-	compound[key] = value
-
-
-def patch_level_dat(doc: nbt.Document, world_name: str, layout: Layout) -> None:
+def patch_level_dat(doc: pynbt.NBTFile, world_name: str, layout: Layout) -> None:
 	"""按测试世界需求就地补丁 level.dat 的 Data（及可选的 Data.Player）；坐标随模式布局。"""
-	data = doc.root["Data"]
+	data = doc["Data"]
 
 	# 基础世界元数据
-	_set(data, "LevelName", nbt.String(world_name))
-	_set(data, "GameType", nbt.Int(1))  # 创造模式（村民交易仍会消耗成本物品）
-	_set(data, "Difficulty", nbt.Byte(0))  # 和平
-	_set(data, "allowCommands", nbt.Byte(1))
-	_set(data, "hardcore", nbt.Byte(0))
-	_set(data, "initialized", nbt.Byte(1))
+	_set(data, "LevelName", pynbt.TAG_String(world_name))
+	_set(data, "GameType", pynbt.TAG_Int(1))  # 创造模式（村民交易仍会消耗成本物品）
+	_set(data, "Difficulty", pynbt.TAG_Byte(0))  # 和平
+	_set(data, "allowCommands", pynbt.TAG_Byte(1))
+	_set(data, "hardcore", pynbt.TAG_Byte(0))
+	_set(data, "initialized", pynbt.TAG_Byte(1))
 
 	# 出生点：地面 (0, -60, 0)
-	_set(data, "SpawnX", nbt.Int(0))
-	_set(data, "SpawnY", nbt.Int(-60))
-	_set(data, "SpawnZ", nbt.Int(0))
-	_set(data, "SpawnAngle", nbt.Float(0.0))
+	_set(data, "SpawnX", pynbt.TAG_Int(0))
+	_set(data, "SpawnY", pynbt.TAG_Int(-60))
+	_set(data, "SpawnZ", pynbt.TAG_Int(0))
+	_set(data, "SpawnAngle", pynbt.TAG_Float(0.0))
 
 	# 时间固定为白天正午
-	_set(data, "Time", nbt.Long(6000))
-	_set(data, "DayTime", nbt.Long(6000))
+	_set(data, "Time", pynbt.TAG_Long(6000))
+	_set(data, "DayTime", pynbt.TAG_Long(6000))
 
 	# 天气固定晴朗
-	_set(data, "raining", nbt.Byte(0))
-	_set(data, "thundering", nbt.Byte(0))
-	_set(data, "clearWeatherTime", nbt.Int(1000000))
-	_set(data, "rainTime", nbt.Int(1000000))
-	_set(data, "thunderTime", nbt.Int(1000000))
+	_set(data, "raining", pynbt.TAG_Byte(0))
+	_set(data, "thundering", pynbt.TAG_Byte(0))
+	_set(data, "clearWeatherTime", pynbt.TAG_Int(1000000))
+	_set(data, "rainTime", pynbt.TAG_Int(1000000))
+	_set(data, "thunderTime", pynbt.TAG_Int(1000000))
 
 	# 游戏规则（值均为字符串）
 	rules = data.get("GameRules")
-	if not isinstance(rules, nbt.Compound):
-		rules = nbt.Compound()
+	if not isinstance(rules, pynbt.TAG_Compound):
+		rules = pynbt.TAG_Compound()
 		_set(data, "GameRules", rules)
 	for key, value in {
 		"doMobSpawning": "false",
@@ -192,76 +232,83 @@ def patch_level_dat(doc: nbt.Document, world_name: str, layout: Layout) -> None:
 		"naturalRegeneration": "true",
 		"commandBlockOutput": "false",
 	}.items():
-		_set(rules, key, nbt.String(value))
+		_set(rules, key, pynbt.TAG_String(value))
 
 	# 世界生成：固定种子 + 超平坦（三层）+ 无结构
 	wgs = data["WorldGenSettings"]
-	_set(wgs, "seed", nbt.Long(12345))
-	_set(wgs, "generate_features", nbt.Byte(0))
-	generator = nbt.Compound()
-	generator["type"] = nbt.String("minecraft:flat")
-	settings = nbt.Compound()
-	settings["layers"] = nbt.List(
+	_set(wgs, "seed", pynbt.TAG_Long(12345))
+	_set(wgs, "generate_features", pynbt.TAG_Byte(0))
+	generator = pynbt.TAG_Compound()
+	generator["type"] = pynbt.TAG_String("minecraft:flat")
+	settings = pynbt.TAG_Compound()
+	settings["layers"] = pynbt.TAG_List(
+		pynbt.TAG_Compound,
 		[
-			nbt.Compound({"block": nbt.String("minecraft:bedrock"), "height": nbt.Int(1)}),
-			nbt.Compound({"block": nbt.String("minecraft:dirt"), "height": nbt.Int(2)}),
-			nbt.Compound({"block": nbt.String("minecraft:grass_block"), "height": nbt.Int(1)}),
+			pynbt.TAG_Compound({"block": pynbt.TAG_String("minecraft:bedrock"), "height": pynbt.TAG_Int(1)}),
+			pynbt.TAG_Compound({"block": pynbt.TAG_String("minecraft:dirt"), "height": pynbt.TAG_Int(2)}),
+			pynbt.TAG_Compound({"block": pynbt.TAG_String("minecraft:grass_block"), "height": pynbt.TAG_Int(1)}),
 		],
-		nbt.TAG_COMPOUND,
 	)
-	settings["biome"] = nbt.String("minecraft:plains")
-	settings["features"] = nbt.Byte(0)
-	settings["lakes"] = nbt.Byte(0)
-	settings["structure_overrides"] = nbt.List([], nbt.TAG_END)
+	settings["biome"] = pynbt.TAG_String("minecraft:plains")
+	settings["features"] = pynbt.TAG_Byte(0)
+	settings["lakes"] = pynbt.TAG_Byte(0)
+	settings["structure_overrides"] = pynbt.TAG_List(pynbt.TAG_End)
 	generator["settings"] = settings
 	wgs["dimensions"]["minecraft:overworld"]["generator"] = generator
 
 	# 宿主玩家：单人模式加载 level.dat 中的 Player 状态（位置/背包/游戏模式）
 	player = data.get("Player")
-	if isinstance(player, nbt.Compound):
+	if isinstance(player, pynbt.TAG_Compound):
 		# 去掉模板 UUID：让主机玩家沿用自身档案 UUID，避免身份键（统计/进度）不一致
 		player.pop("UUID", None)
-		_set(player, "Pos", nbt.List([nbt.Double(v) for v in layout.player_pos], nbt.TAG_DOUBLE))
-		_set(player, "Dimension", nbt.String("minecraft:overworld"))
-		_set(player, "Rotation", nbt.List([nbt.Float(0.0), nbt.Float(0.0)], nbt.TAG_FLOAT))
-		_set(player, "Motion", nbt.List([nbt.Double(0.0), nbt.Double(-0.0784000015258789), nbt.Double(0.0)], nbt.TAG_DOUBLE))
-		_set(player, "playerGameType", nbt.Int(1))
-		_set(player, "Health", nbt.Float(20.0))
-		_set(player, "foodLevel", nbt.Int(20))
-		_set(player, "foodSaturationLevel", nbt.Float(5.0))
-		_set(player, "foodExhaustionLevel", nbt.Float(0.0))
-		_set(player, "foodTickTimer", nbt.Int(0))
-		_set(player, "Inventory", nbt.List([], nbt.TAG_END))
-		_set(player, "EnderItems", nbt.List([], nbt.TAG_END))
-		_set(player, "XpLevel", nbt.Int(0))
-		_set(player, "XpTotal", nbt.Int(0))
-		_set(player, "XpP", nbt.Float(0.0))
-		_set(player, "Score", nbt.Int(0))
-		_set(player, "XpSeed", nbt.Int(0))
-		_set(player, "SelectedItemSlot", nbt.Int(0))
-		_set(player, "SpawnX", nbt.Int(layout.player_spawn[0]))
-		_set(player, "SpawnY", nbt.Int(layout.player_spawn[1]))
-		_set(player, "SpawnZ", nbt.Int(layout.player_spawn[2]))
-		_set(player, "SpawnAngle", nbt.Float(0.0))
-		_set(player, "SpawnDimension", nbt.String("minecraft:overworld"))
-		_set(player, "HurtTime", nbt.Short(0))
-		_set(player, "DeathTime", nbt.Short(0))
-		_set(player, "HurtByTimestamp", nbt.Int(0))
-		_set(player, "Fire", nbt.Short(-20))
-		_set(player, "Air", nbt.Short(300))
-		_set(player, "PortalCooldown", nbt.Int(0))
-		_set(player, "SleepTimer", nbt.Short(0))
-		_set(player, "FallDistance", nbt.Float(0.0))
-		_set(player, "OnGround", nbt.Byte(1))
-		_set(player, "seenCredits", nbt.Byte(0))
-		abilities = nbt.Compound()
-		abilities["invulnerable"] = nbt.Byte(1)
-		abilities["mayfly"] = nbt.Byte(1)
-		abilities["instabuild"] = nbt.Byte(1)
-		abilities["mayBuild"] = nbt.Byte(1)
-		abilities["flying"] = nbt.Byte(0)
-		abilities["walkSpeed"] = nbt.Float(0.1)
-		abilities["flySpeed"] = nbt.Float(0.05)
+		_set(player, "Pos", pynbt.TAG_List(pynbt.TAG_Double, [pynbt.TAG_Double(v) for v in layout.player_pos]))
+		_set(player, "Dimension", pynbt.TAG_String("minecraft:overworld"))
+		_set(player, "Rotation", pynbt.TAG_List(pynbt.TAG_Float, [pynbt.TAG_Float(0.0), pynbt.TAG_Float(0.0)]))
+		_set(
+			player,
+			"Motion",
+			pynbt.TAG_List(
+				pynbt.TAG_Double,
+				[pynbt.TAG_Double(0.0), pynbt.TAG_Double(-0.0784000015258789), pynbt.TAG_Double(0.0)],
+			),
+		)
+		_set(player, "playerGameType", pynbt.TAG_Int(1))
+		_set(player, "Health", pynbt.TAG_Float(20.0))
+		_set(player, "foodLevel", pynbt.TAG_Int(20))
+		_set(player, "foodSaturationLevel", pynbt.TAG_Float(5.0))
+		_set(player, "foodExhaustionLevel", pynbt.TAG_Float(0.0))
+		_set(player, "foodTickTimer", pynbt.TAG_Int(0))
+		_set(player, "Inventory", pynbt.TAG_List(pynbt.TAG_End))
+		_set(player, "EnderItems", pynbt.TAG_List(pynbt.TAG_End))
+		_set(player, "XpLevel", pynbt.TAG_Int(0))
+		_set(player, "XpTotal", pynbt.TAG_Int(0))
+		_set(player, "XpP", pynbt.TAG_Float(0.0))
+		_set(player, "Score", pynbt.TAG_Int(0))
+		_set(player, "XpSeed", pynbt.TAG_Int(0))
+		_set(player, "SelectedItemSlot", pynbt.TAG_Int(0))
+		_set(player, "SpawnX", pynbt.TAG_Int(layout.player_spawn[0]))
+		_set(player, "SpawnY", pynbt.TAG_Int(layout.player_spawn[1]))
+		_set(player, "SpawnZ", pynbt.TAG_Int(layout.player_spawn[2]))
+		_set(player, "SpawnAngle", pynbt.TAG_Float(0.0))
+		_set(player, "SpawnDimension", pynbt.TAG_String("minecraft:overworld"))
+		_set(player, "HurtTime", pynbt.TAG_Short(0))
+		_set(player, "DeathTime", pynbt.TAG_Short(0))
+		_set(player, "HurtByTimestamp", pynbt.TAG_Int(0))
+		_set(player, "Fire", pynbt.TAG_Short(-20))
+		_set(player, "Air", pynbt.TAG_Short(300))
+		_set(player, "PortalCooldown", pynbt.TAG_Int(0))
+		_set(player, "SleepTimer", pynbt.TAG_Short(0))
+		_set(player, "FallDistance", pynbt.TAG_Float(0.0))
+		_set(player, "OnGround", pynbt.TAG_Byte(1))
+		_set(player, "seenCredits", pynbt.TAG_Byte(0))
+		abilities = pynbt.TAG_Compound()
+		abilities["invulnerable"] = pynbt.TAG_Byte(1)
+		abilities["mayfly"] = pynbt.TAG_Byte(1)
+		abilities["instabuild"] = pynbt.TAG_Byte(1)
+		abilities["mayBuild"] = pynbt.TAG_Byte(1)
+		abilities["flying"] = pynbt.TAG_Byte(0)
+		abilities["walkSpeed"] = pynbt.TAG_Float(0.1)
+		abilities["flySpeed"] = pynbt.TAG_Float(0.05)
 		_set(player, "abilities", abilities)
 	else:
 		print("警告：模板 level.dat 中不存在 Data.Player，跳过玩家状态补丁（不视为失败）")
@@ -536,19 +583,20 @@ def verify(world_name: str, mode: str) -> bool:
 		_print_results(results)
 		return False
 
-	doc = nbt.load(level_path)
-	data = doc.root["Data"]
-	_get = nbt.get_path
+	doc = _nbt_load(level_path)
+	root = doc
+	data = root["Data"]
+	_get = get_value
 
-	_check(results, "Data.LevelName", _get(doc.root, "Data.LevelName") == world_name, repr(_get(doc.root, "Data.LevelName")))
-	_check(results, "Data.GameType == 1", _get(doc.root, "Data.GameType") == 1, str(_get(doc.root, "Data.GameType")))
-	_check(results, "Data.allowCommands == 1", _get(doc.root, "Data.allowCommands") == 1, str(_get(doc.root, "Data.allowCommands")))
+	_check(results, "Data.LevelName", _get(root, "Data.LevelName") == world_name, repr(_get(root, "Data.LevelName")))
+	_check(results, "Data.GameType == 1", _get(root, "Data.GameType") == 1, str(_get(root, "Data.GameType")))
+	_check(results, "Data.allowCommands == 1", _get(root, "Data.allowCommands") == 1, str(_get(root, "Data.allowCommands")))
 	# 世界出生点两种模式均保持 (0,-60,0)（VOID 的玩家重生点由 Player.SpawnX/Y/Z 承担）
-	_check(results, "Data.SpawnX == 0", _get(doc.root, "Data.SpawnX") == 0, str(_get(doc.root, "Data.SpawnX")))
-	_check(results, "Data.SpawnY == -60", _get(doc.root, "Data.SpawnY") == -60, str(_get(doc.root, "Data.SpawnY")))
-	_check(results, "Data.SpawnZ == 0", _get(doc.root, "Data.SpawnZ") == 0, str(_get(doc.root, "Data.SpawnZ")))
-	_check(results, "Data.DayTime == 6000", _get(doc.root, "Data.DayTime") == 6000, str(_get(doc.root, "Data.DayTime")))
-	_check(results, "Data.initialized == 1", _get(doc.root, "Data.initialized") == 1, str(_get(doc.root, "Data.initialized")))
+	_check(results, "Data.SpawnX == 0", _get(root, "Data.SpawnX") == 0, str(_get(root, "Data.SpawnX")))
+	_check(results, "Data.SpawnY == -60", _get(root, "Data.SpawnY") == -60, str(_get(root, "Data.SpawnY")))
+	_check(results, "Data.SpawnZ == 0", _get(root, "Data.SpawnZ") == 0, str(_get(root, "Data.SpawnZ")))
+	_check(results, "Data.DayTime == 6000", _get(root, "Data.DayTime") == 6000, str(_get(root, "Data.DayTime")))
+	_check(results, "Data.initialized == 1", _get(root, "Data.initialized") == 1, str(_get(root, "Data.initialized")))
 
 	# 游戏规则
 	for rule, expected in {
@@ -559,27 +607,27 @@ def verify(world_name: str, mode: str) -> bool:
 		"spawnRadius": "0",
 		"randomTickSpeed": "0",
 	}.items():
-		actual = _get(doc.root, f"Data.GameRules.{rule}")
+		actual = _get(root, f"Data.GameRules.{rule}")
 		_check(results, f"GameRules.{rule} == {expected}", actual == expected, repr(actual))
 
 	# 世界生成
-	overworld_gen = _get(doc.root, 'Data.WorldGenSettings.dimensions.minecraft:overworld.generator')
+	overworld_gen = _get(root, 'Data.WorldGenSettings.dimensions.minecraft:overworld.generator')
 	_check(results, "overworld generator.type == minecraft:flat", _get(overworld_gen, "type") == "minecraft:flat", repr(_get(overworld_gen, "type")))
 	overrides = _get(overworld_gen, "settings.structure_overrides")
-	_check(results, "structure_overrides 为空列表", isinstance(overrides, nbt.List) and len(overrides) == 0, f"{type(overrides).__name__} len={len(overrides)}")
+	_check(results, "structure_overrides 为空列表", isinstance(overrides, pynbt.TAG_List) and len(overrides) == 0, f"{type(overrides).__name__} len={len(overrides)}")
 	layers = _get(overworld_gen, "settings.layers")
-	_check(results, "layers 有 3 层", isinstance(layers, nbt.List) and len(layers) == 3, f"len={len(layers)}")
+	_check(results, "layers 有 3 层", isinstance(layers, pynbt.TAG_List) and len(layers) == 3, f"len={len(layers)}")
 
 	# 宿主玩家（位置/重生点随模式布局）
 	player = data.get("Player")
-	_check(results, "Data.Player 存在", isinstance(player, nbt.Compound))
-	if isinstance(player, nbt.Compound):
+	_check(results, "Data.Player 存在", isinstance(player, pynbt.TAG_Compound))
+	if isinstance(player, pynbt.TAG_Compound):
 		_check(results, "Player.Dimension == minecraft:overworld", _get(player, "Dimension") == "minecraft:overworld", repr(_get(player, "Dimension")))
-		pos = [float(x) for x in _get(player, "Pos")]
+		pos = [float(x.value) for x in _get(player, "Pos")]
 		expected_pos = [float(v) for v in layout.player_pos]
 		_check(results, f"Player.Pos == {expected_pos}", pos == expected_pos, str(pos))
 		inv = _get(player, "Inventory")
-		_check(results, "Player.Inventory 为空", isinstance(inv, nbt.List) and len(inv) == 0, f"len={len(inv)}")
+		_check(results, "Player.Inventory 为空", isinstance(inv, pynbt.TAG_List) and len(inv) == 0, f"len={len(inv)}")
 		_check(results, "Player.playerGameType == 1", _get(player, "playerGameType") == 1, str(_get(player, "playerGameType")))
 		spawn = layout.player_spawn
 		_check(results, f"Player.SpawnX == {spawn[0]}", _get(player, "SpawnX") == spawn[0], str(_get(player, "SpawnX")))
@@ -641,10 +689,10 @@ def generate(args: argparse.Namespace) -> bool:
 		shutil.rmtree(world_dir)
 
 	# 1) 派生 level.dat（绝不修改模板）
-	doc = nbt.load(template_level)
+	doc = _nbt_load(template_level)
 	patch_level_dat(doc, args.world_name, layout)
 	world_dir.mkdir(parents=True, exist_ok=True)
-	nbt.save(doc, world_dir / "level.dat")
+	_nbt_save(doc, world_dir / "level.dat")
 
 	# 2) 渲染 datapack（STATIC 跳过 VOID 专属文件）
 	placeholders = build_placeholders(args)
