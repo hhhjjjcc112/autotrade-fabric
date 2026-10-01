@@ -5,25 +5,30 @@
 并渲染 datapack（固定交易的村民 + 输入/输出箱 + 周期补货/补满/清空统计），
 同时写入一份测试用 mod 配置。
 
-两种装置模式：
+三种装置模式：
 	static（默认）：STATIC 静止交易装置，世界默认 `AutoTradeTest`
 	void：VOID 虚空交易装置（家侧交易点 + 岛侧着陆点 + 陷阱箱/中继器返航机关），
 	      世界默认 `AutoTradeVoidTest`
+	moving：MOVING 移动交易装置（环形矿车轨道持续带动玩家，沿途 12 村民 + 5 输入/输出箱），
+	      世界默认 `AutoTradeMovingTest`
 
 用法：
-	python test/lib/setup_testworld.py                       # static：生成世界 + 备份并写测试配置 + 校验
-	python test/lib/setup_testworld.py --verify              # 仅校验（默认 static 世界）
-	python test/lib/setup_testworld.py --mode void           # VOID：生成 AutoTradeVoidTest + VOID 配置
-	python test/lib/setup_testworld.py --mode void --verify  # 仅校验 VOID 世界
+	python test/lib/setup_testworld.py                         # static：生成世界 + 备份并写测试配置 + 校验
+	python test/lib/setup_testworld.py --verify                # 仅校验（默认 static 世界）
+	python test/lib/setup_testworld.py --mode void             # VOID：生成 AutoTradeVoidTest + VOID 配置
+	python test/lib/setup_testworld.py --mode void --verify    # 仅校验 VOID 世界
+	python test/lib/setup_testworld.py --mode moving           # MOVING：生成 AutoTradeMovingTest + MOVING 配置
+	python test/lib/setup_testworld.py --mode moving --verify  # 仅校验 MOVING 世界
 	python test/lib/setup_testworld.py --skip-config
 	python test/lib/setup_testworld.py --fresh
 
 说明：脚本从仓库根目录（autotrade-fabric/）运行；脚本会自行定位仓库根目录，任意 cwd 均可。
 
 模式相关参数：
-	--mode {static,void}      装置模式（默认 static）
-	--teleport-delay-seconds  仅 VOID：互动后延迟多少秒传送玩家至岛侧（默认 0.5 → TELEPORT_DELAY_TICKS=10）
-	--world-name              覆盖默认世界名（static=AutoTradeTest / void=AutoTradeVoidTest）
+	--mode {static,void,moving}  装置模式（默认 static）
+	--teleport-delay-seconds     仅 VOID：互动后延迟多少秒传送玩家至岛侧（默认 0.5 → TELEPORT_DELAY_TICKS=10）
+	--world-name                 覆盖默认世界名
+	                             （static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest）
 
 注意：本脚本绝不启动 Minecraft；游戏内验证由用户手动执行。
 """
@@ -140,9 +145,77 @@ VOID_LAYOUT = Layout(
 	input_chest=(3000, -60, 2),
 	output_chest=(2998, -60, 0),
 )
-LAYOUTS = {"static": STATIC_LAYOUT, "void": VOID_LAYOUT}
+# MOVING v2 容器 5 个（§2）：E 绿宝石输入 / W 小麦输入 / P 纸输出 / B 书输出 / G 玻璃输出
+# 语义：每物品各自容器；W 紧贴 mv3、G 位于南簇内部 → 制造容器-村民竞争
+MOVING_CONTAINERS = [
+	("E", "minecraft:emerald", (2, -60, -2)),  # 绿宝石输入（贴 mv0(4,-60,-2)，间距 2）
+	("W", "minecraft:wheat", (24, -60, -2)),  # 小麦输入（贴 mv9(22,-60,-2)，间距 2）
+	("P", "minecraft:paper", (22, -60, 34)),  # 纸输出（贴 mv17(20,-60,34)，间距 2）
+	("B", "minecraft:book", (66, -60, 16)),  # 书输出（贴 mv18(66,-60,18)，间距 2）
+	("G", "minecraft:glass", (48, -60, 34)),  # 玻璃输出（嵌南簇 mv15(46)/mv14(50) 之间，间距 2）
+]
+# 交易对定义（§3）：T1 绿宝石→纸（单成本）/ T2 绿宝石→书（单成本）/ T3 绿宝石+小麦→玻璃（双成本，第二成本 wheat）
+MOVING_PAIR_DEFS = {
+	"T1": ("minecraft:paper", None),
+	"T2": ("minecraft:book", None),
+	"T3": ("minecraft:glass", "minecraft:wheat"),
+}
+# MOVING 村民会话上限（§2/§3 = 16；STATIC/VOID 仍用 --max-uses 默认 64）
+MOVING_MAX_USES = 16
+# MOVING 布局（§2）：玩家由环形矿车轨道带动；20 村民分列北/南**密集簇（间距 2，对齐真实交易所）**，
+# 5 容器各自紧贴村民（间距 2）；目标数 ≫ 单次经过可服务数 → 未服务目标持续累积饥饿
+MOVING_LAYOUT = Layout(
+	player_pos=(2.5, -60, 0.5),
+	player_spawn=(2, -60, 0),
+	villager=(4, -60, -2),
+	villager_block_x=4,
+	input_chest=(2, -60, -2),
+	output_chest=(22, -60, 34),
+)
+LAYOUTS = {"static": STATIC_LAYOUT, "void": VOID_LAYOUT, "moving": MOVING_LAYOUT}
 # 默认世界名（--world-name 可显式覆盖）
-DEFAULT_WORLD_NAMES = {"static": "AutoTradeTest", "void": "AutoTradeVoidTest"}
+DEFAULT_WORLD_NAMES = {"static": "AutoTradeTest", "void": "AutoTradeVoidTest", "moving": "AutoTradeMovingTest"}
+
+# ---- MOVING 环形轨道几何（§2）：铁轨矩形 x∈[0,64] / z∈[0,32] 于 y=-60（下方草地 y=-61 支承） ----
+MOVING_TRACK_MIN_X, MOVING_TRACK_MAX_X = 0, 64
+MOVING_TRACK_MIN_Z, MOVING_TRACK_MAX_Z = 0, 32
+MOVING_TRACK_Y = -60
+MOVING_POWER_Y = MOVING_TRACK_Y - 1  # 动力铁轨正下方的红石块层（供电）
+MOVING_POWERED_RAIL_STRIDE = 6  # 沿环每 6 格放 1 个动力铁轨，维持矿车 ~8 m/s
+def _moving_container(name: str) -> tuple[int, int, int]:
+	"""按名称取 MOVING 容器坐标（E/W/P/B/G）。"""
+	for cname, _item, pos in MOVING_CONTAINERS:
+		if cname == name:
+			return pos
+	raise KeyError(f"未知 MOVING 容器：{name}")
+
+
+# 20 个村民召唤点：(标签, x, z, 配方集)；配方集按 i % 4 循环 0→[T1] / 1→[T1,T2] / 2→[T1,T2,T3] / 3→[T2,T3]
+# 密度对齐真实交易所：同簇间距 **2 格**（窗口大幅重叠 → 单次经过只能服务少数，其余进入饥饿记账）。
+# 北簇 mv0..mv9 于 z=-2（x=4..22，矿车自西向东经过）；南簇 mv10..mv16 于 z=34（x=58..44，自东向西，
+# 跳过 x=48 留给玻璃输出箱）；另有南单点 mv17(20,34)、东 mv18(66,18)、西 mv19(-2,16)。
+MOVING_VILLAGERS = [
+	("mv0", 4, -2, ("T1",)),
+	("mv1", 6, -2, ("T1", "T2")),
+	("mv2", 8, -2, ("T1", "T2", "T3")),
+	("mv3", 10, -2, ("T2", "T3")),
+	("mv4", 12, -2, ("T1",)),
+	("mv5", 14, -2, ("T1", "T2")),
+	("mv6", 16, -2, ("T1", "T2", "T3")),
+	("mv7", 18, -2, ("T2", "T3")),
+	("mv8", 20, -2, ("T1",)),
+	("mv9", 22, -2, ("T1", "T2")),
+	("mv10", 58, 34, ("T1", "T2", "T3")),
+	("mv11", 56, 34, ("T2", "T3")),
+	("mv12", 54, 34, ("T1",)),
+	("mv13", 52, 34, ("T1", "T2")),
+	("mv14", 50, 34, ("T1", "T2", "T3")),
+	("mv15", 46, 34, ("T2", "T3")),
+	("mv16", 44, 34, ("T1",)),
+	("mv17", 20, 34, ("T1", "T2")),
+	("mv18", 66, 18, ("T1", "T2", "T3")),
+	("mv19", -2, 16, ("T2", "T3")),
+]
 
 # 两种模式共享的 datapack 相对路径（用于校验）
 SHARED_DATAPACK_FILES = [
@@ -170,10 +243,17 @@ VOID_ONLY_DATAPACK_FILES = [
 	"data/autotrade_test/functions/void_status.mcfunction",
 ]
 
+# 仅 MOVING 模式渲染的 datapack 文件（STATIC/VOID 渲染时按此列表跳过，保证各自输出不含 MOVING 维护）
+MOVING_ONLY_DATAPACK_FILES = [
+	"data/autotrade_test/functions/moving_maintenance.mcfunction",
+]
+
 # 期望生成的 datapack 相对路径（按模式；用于校验）
 EXPECTED_DATAPACK_FILES = {
 	"static": SHARED_DATAPACK_FILES,
 	"void": SHARED_DATAPACK_FILES + VOID_ONLY_DATAPACK_FILES,
+	# MOVING v2：共享文件 + 专属 moving_maintenance.mcfunction
+	"moving": SHARED_DATAPACK_FILES + MOVING_ONLY_DATAPACK_FILES,
 }
 
 
@@ -314,6 +394,210 @@ def patch_level_dat(doc: pynbt.NBTFile, world_name: str, layout: Layout) -> None
 		print("警告：模板 level.dat 中不存在 Data.Player，跳过玩家状态补丁（不视为失败）")
 
 
+# 村民 summon 的共享 NBT 模板（各模式逐字节一致，仅 Tags/CustomName 不同）：
+# 用哨兵串 __TAGS__ / __NAME__ 占位，避免 f-string 与 mcf 双大括号冲突；
+# {{OUTPUT_ITEM}} / {{MAX_USES}} 保持为全局占位符，由渲染阶段统一替换
+_VILLAGER_NBT_TEMPLATE = (
+	'{Tags:[__TAGS__],NoAI:1b,Silent:1b,Invulnerable:1b,PersistenceRequired:1b,Age:0,'
+	'CustomName:\'{"text":"__NAME__"}\',CustomNameVisible:0b,Health:20.0f,'
+	'VillagerData:{type:"minecraft:plains",profession:"minecraft:librarian",level:5},'
+	'Offers:{Recipes:[{buy:{id:"minecraft:emerald",Count:1b},sell:{id:"{{OUTPUT_ITEM}}",Count:1b},'
+	'uses:0,maxUses:{{MAX_USES}},xp:0,priceMultiplier:0.0f,specialPrice:0,demand:0,rewardExp:0b}]}}'
+)
+
+
+def _villager_summon(layout: Layout, name: str, tags: str, x: float, z: float) -> str:
+	"""拼装单行村民 summon 命令（坐标/标签/名称可变，NBT 主体与既有模板逐字节一致）。"""
+	vy = layout.villager[1]
+	nbt = _VILLAGER_NBT_TEMPLATE.replace("__TAGS__", tags).replace("__NAME__", name)
+	return f"summon minecraft:villager {x} {vy} {z} {nbt}"
+
+
+def _recipe_nbt(pair: str) -> str:
+	"""单条交易配方 NBT（§3）：emerald×1 → sell×1；T3 追加 buyB（wheat×1）。
+
+	maxUses 保留 `{{MAX_USES}}` 占位符（MOVING 渲染为 16），确保嵌套占位符顺序约束生效。
+	"""
+	sell, buy2 = MOVING_PAIR_DEFS[pair]
+	buy_b = 'buyB:{id:"' + buy2 + '",Count:1b},' if buy2 else ""
+	return (
+		'{buy:{id:"minecraft:emerald",Count:1b},'
+		+ buy_b
+		+ 'sell:{id:"' + sell + '",Count:1b},uses:0,maxUses:{{MAX_USES}},'
+		+ 'xp:0,priceMultiplier:0.0f,specialPrice:0,demand:0,rewardExp:0b}'
+	)
+
+
+def _moving_villager_nbt(tag: str, recipes) -> str:
+	"""MOVING 村民 NBT：与静态模板同结构，Offers.Recipes 为该村民的配方列表（§3）。
+
+	CustomName 形如 `AT-MV-mv2-123`（末段为配方对序号拼接，便于人查）。
+	"""
+	name = "AT-MV-" + tag + "-" + "".join(p[1] for p in recipes)
+	recipe_list = ",".join(_recipe_nbt(p) for p in recipes)
+	return (
+		'{Tags:["autotrade_test","' + tag + '"],NoAI:1b,Silent:1b,Invulnerable:1b,PersistenceRequired:1b,Age:0,'
+		'CustomName:\'{"text":"' + name + '"}\',CustomNameVisible:0b,Health:20.0f,'
+		'VillagerData:{type:"minecraft:plains",profession:"minecraft:librarian",level:5},'
+		'Offers:{Recipes:[' + recipe_list + ']}}'
+	)
+
+
+def build_single_villager_summon(layout: Layout) -> str:
+	"""STATIC/VOID：生成与既有输出逐字节相同的单行村民 summon（坐标为布局村民点）。"""
+	vx, _, vz = layout.villager
+	return _villager_summon(layout, "AT-TestVillager", '"autotrade_test"', vx, vz)
+
+
+def build_moving_villager_summons(layout: Layout) -> str:
+	"""MOVING v2：生成 12 行村民 summon（mv0..mv11；各自配方集，CustomName 带配方编码便于人查）。"""
+	vy = layout.villager[1]
+	lines = []
+	for tag, x, z, recipes in MOVING_VILLAGERS:
+		# 标签同时带 autotrade_test（供 restock/setup 的 @e 选择器命中）与各自的 mvN 标识
+		lines.append(f"summon minecraft:villager {x} {vy} {z} {_moving_villager_nbt(tag, recipes)}")
+	return "\n".join(lines)
+
+
+def build_single_restock_line() -> str:
+	"""STATIC/VOID：与既有输出逐字节相同的单行补货（保留 {{OUTPUT_ITEM}}/{{MAX_USES}} 嵌套占位符）。"""
+	return (
+		'execute as @e[type=minecraft:villager,tag=autotrade_test] run data modify entity @s Offers.Recipes set value '
+		'[{buy:{id:"minecraft:emerald",Count:1b},sell:{id:"{{OUTPUT_ITEM}}",Count:1b},uses:0,maxUses:{{MAX_USES}},'
+		'xp:0,priceMultiplier:0.0f,specialPrice:0,demand:0,rewardExp:0b}]'
+	)
+
+
+def build_moving_restock_lines() -> str:
+	"""MOVING v2：逐村民按其配方集重建 Offers.Recipes（12 行，选择器 tag=mvN）。"""
+	lines = []
+	for tag, _x, _z, recipes in MOVING_VILLAGERS:
+		recipe_list = ",".join(_recipe_nbt(p) for p in recipes)
+		lines.append(
+			"execute as @e[type=minecraft:villager,tag="
+			+ tag
+			+ "] run data modify entity @s Offers.Recipes set value ["
+			+ recipe_list
+			+ "]"
+		)
+	return "\n".join(lines)
+
+
+def _count_chest_slots_lines(chest: tuple[int, int, int], acc: str) -> list[str]:
+	"""生成 27 槽计数行：该槽存在时把 Count 存入 #tmp，再累加到 acc（与 clear_output 的 COUNT_SLOTS 同构）。"""
+	cx, cy, cz = chest
+	lines = []
+	for slot in range(27):
+		selector = f"Items[{{Slot:{slot}b}}]"
+		lines.append(
+			f"execute if data block {cx} {cy} {cz} {selector} store result score #tmp autotrade_test run data get block {cx} {cy} {cz} {selector}.Count"
+		)
+		lines.append(
+			f"execute if data block {cx} {cy} {cz} {selector} run scoreboard players operation {acc} autotrade_test += #tmp autotrade_test"
+		)
+	return lines
+
+
+def _clr_tellraw(name: str, zh: str, count_score: str, total_score: str) -> str:
+	"""生成含 [clr:<name>=N total=M] 标记的 tellraw（minescript 用正则按 name 提取清空/累计）。"""
+	return (
+		'tellraw @a [{"text":"[AutoTradeTest] 清空 ","color":"gray"},'
+		'{"score":{"name":"' + count_score + '","objective":"autotrade_test"},"color":"yellow"},'
+		'{"text":" 个' + zh + '（累计 ","color":"gray"},'
+		'{"score":{"name":"' + total_score + '","objective":"autotrade_test"},"color":"yellow"},'
+		'{"text":"）","color":"gray"},'
+		'{"text":" [clr:' + name + '=","color":"dark_gray"},'
+		'{"score":{"name":"' + count_score + '","objective":"autotrade_test"},"color":"dark_gray"},'
+		'{"text":" total=","color":"dark_gray"},'
+		'{"score":{"name":"' + total_score + '","objective":"autotrade_test"},"color":"dark_gray"},'
+		'{"text":"]","color":"dark_gray"}]'
+	)
+
+
+def build_moving_maintenance_block() -> str:
+	"""MOVING 专属维护（§5.3）：清空 book/glass 输出箱并记账 → 打印 [clr:book]/[clr:glass] → 补满 wheat 箱 → 复位 #t_maint。"""
+	book = _moving_container("B")
+	glass = _moving_container("G")
+	bx, by, bz = book
+	gx, gy, gz = glass
+	lines = [
+		"# —— MOVING 维护：清空 book/glass 输出箱并记账；补满 wheat 输入箱；复位维护计时 ——",
+		"scoreboard players set #clr_b autotrade_test 0",
+		"scoreboard players set #clr_g autotrade_test 0",
+	]
+	lines += _count_chest_slots_lines(book, "#clr_b")
+	lines.append(f"data modify block {bx} {by} {bz} Items set value []")
+	lines.append("scoreboard players operation #tot_b autotrade_test += #clr_b autotrade_test")
+	lines.append(_clr_tellraw("book", "书", "#clr_b", "#tot_b"))
+	lines += _count_chest_slots_lines(glass, "#clr_g")
+	lines.append(f"data modify block {gx} {gy} {gz} Items set value []")
+	lines.append("scoreboard players operation #tot_g autotrade_test += #clr_g autotrade_test")
+	lines.append(_clr_tellraw("glass", "玻璃", "#clr_g", "#tot_g"))
+	# wheat 输入箱重填：27 槽 × 64（占位符在渲染期替换）
+	lines.append("data modify block {{W_CHEST_X}} {{W_CHEST_Y}} {{W_CHEST_Z}} Items set value [{{INPUT2_STACKS}}]")
+	lines.append("scoreboard players set #t_maint autotrade_test 0")
+	return "\n".join(lines)
+
+
+def moving_perimeter_cells() -> list[tuple[int, int]]:
+	"""按环序返回轨道矩形周界格（北→东→南→西；四角共格去重；总长 2*(65+33)-4=192）。"""
+	cells: list[tuple[int, int]] = []
+	cells.extend((x, MOVING_TRACK_MIN_Z) for x in range(MOVING_TRACK_MIN_X, MOVING_TRACK_MAX_X + 1))  # 北边（+x）
+	cells.extend((MOVING_TRACK_MAX_X, z) for z in range(MOVING_TRACK_MIN_Z + 1, MOVING_TRACK_MAX_Z + 1))  # 东边（+z）
+	cells.extend((x, MOVING_TRACK_MAX_Z) for x in range(MOVING_TRACK_MAX_X - 1, MOVING_TRACK_MIN_X - 1, -1))  # 南边（-x）
+	cells.extend((MOVING_TRACK_MIN_X, z) for z in range(MOVING_TRACK_MAX_Z - 1, MOVING_TRACK_MIN_Z, -1))  # 西边（-z）
+	return cells
+
+
+def moving_powered_rail_cells() -> list[tuple[int, int]]:
+	"""沿环每 6 格取 1 格作为动力铁轨位。
+
+	从环序第 1 格起算（而非第 0 格）：四角环序为 0/64/96/160，与「从 0 起每 6 格」在第 0、96 处重叠；
+	而 **PoweredRailBlock 禁止弯曲**（forbidCurves=true，shape 仅 STRAIGHT_RAIL_SHAPE），拐角动力铁轨
+	永远保持直轨 → 矿车直行脱轨（实机已复现东南角脱轨）。错开 1 格保证四角全为普通铁轨（可自动成弯）。
+	"""
+	perimeter = moving_perimeter_cells()
+	return [perimeter[i] for i in range(1, len(perimeter), MOVING_POWERED_RAIL_STRIDE)]
+
+
+def build_moving_setup_lines() -> str:
+	"""构造 MOVING 轨道装置行：铁轨矩形 + 每 6 格动力铁轨（下方红石块）+ 起速矿车 + 挂载玩家。"""
+	x0, x1 = MOVING_TRACK_MIN_X, MOVING_TRACK_MAX_X
+	z0, z1 = MOVING_TRACK_MIN_Z, MOVING_TRACK_MAX_Z
+	y = MOVING_TRACK_Y
+	lines = [
+		"# —— MOVING 装置附加：环形矿车轨道（实体推动玩家，mod 不移动玩家） ——",
+		# 幂等：setup 若被重复执行，先清掉残留矿车，避免召唤出第 2 辆
+		"kill @e[type=minecraft:minecart,tag=att_cart]",
+		# 铁轨矩形四边（角点共格，用 fill 紧凑铺设）
+		f"fill {x0} {y} {z0} {x1} {y} {z0} minecraft:rail",  # 北边
+		f"fill {x0} {y} {z1} {x1} {y} {z1} minecraft:rail",  # 南边
+		f"fill {x0} {y} {z0 + 1} {x0} {y} {z1 - 1} minecraft:rail",  # 西边
+		f"fill {x1} {y} {z0 + 1} {x1} {y} {z1 - 1} minecraft:rail",  # 东边
+	]
+	# 沿环每 6 格放动力铁轨，并在其正下方放红石块供电
+	for px, pz in moving_powered_rail_cells():
+		lines.append(f"setblock {px} {y} {pz} minecraft:powered_rail[powered=true]")
+		lines.append(f"setblock {px} {MOVING_POWER_Y} {pz} minecraft:redstone_block")
+	# 四角显式指定弯道形态（兜底，防任何更新顺序意外导致角轨为直轨；普通轨本可自动成弯）
+	lines += [
+		f"setblock {x0} {y} {z0} minecraft:rail[shape=south_east]",  # 角（接南/东）
+		f"setblock {x1} {y} {z0} minecraft:rail[shape=south_west]",  # 角（接南/西）
+		f"setblock {x1} {y} {z1} minecraft:rail[shape=north_west]",  # 角（接北/西）
+		f"setblock {x0} {y} {z1} minecraft:rail[shape=north_east]",  # 角（接北/东）
+	]
+	# 随身预置（§2）：hotbar.0 由共享 setup 行填充绿宝石，这里补齐 hotbar.1..7 绿宝石（合计 8 组）
+	# 与 hotbar.8 小麦（1 组，供首个 T3 双成本会话）。每会话最多耗尽 1 组。
+	# 注意：/item 的槽位参数不支持区间语法（hotbar.0..8 会解析失败并使整个函数加载失败），须逐槽一行。
+	lines.extend(f"item replace entity @a hotbar.{slot} with minecraft:emerald 64" for slot in range(1, 8))
+	lines.append("item replace entity @a hotbar.8 with minecraft:wheat 64")
+	# 起速矿车（向东入环，Motion 提供初速）与玩家挂载（/ride 的 target 必须单选——@a 会被解析器拒绝，
+	# 故用 execute as @a 逐个以 @s 挂载）
+	lines.append('summon minecraft:minecart 2.5 -59.5 0.5 {Tags:["att_cart"],Motion:[0.4d,0.0d,0.0d]}')
+	lines.append("execute as @a run ride @s mount @e[type=minecraft:minecart,tag=att_cart,limit=1]")
+	return "\n".join(lines)
+
+
 def build_void_setup_lines() -> str:
 	"""构造 VOID 模式插入 setup 的附加初始化行（家侧复位 + 随身库存；岛侧机关由 tick_void 惰性放置）。"""
 	hx, hy, hz = VOID_LAYOUT.player_pos
@@ -337,10 +621,14 @@ def build_void_setup_lines() -> str:
 
 
 def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
-	"""计算 datapack 模板占位符 -> 文本值（STATIC/VOID 分支：周期任务与虚空驱动行不同）。"""
+	"""计算 datapack 模板占位符 -> 文本值（按模式分支：周期任务、虚空驱动行、环形轨道行不同）。"""
 	layout = LAYOUTS[args.mode]
 	input_stacks = ", ".join(
 		f'{{Slot:{slot}b,id:"minecraft:emerald",Count:64b}}' for slot in range(27)
+	)
+	# MOVING v2 第二个输入箱（小麦）的 27 组预置内容
+	input2_stacks = ", ".join(
+		f'{{Slot:{slot}b,id:"minecraft:wheat",Count:64b}}' for slot in range(27)
 	)
 	ox, oy, oz = layout.output_chest
 	count_slots_lines = []
@@ -354,8 +642,13 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 		)
 	ix, iy, iz = layout.input_chest
 	vx, vy, vz = layout.villager
-	# 周期任务占位符：STATIC 保留村民补货计时器两行；VOID 置空补货并追加虚空驱动 + 状态打印
-	if args.mode == "void":
+	wx, wy, wz = _moving_container("W")
+	bx, by, bz = _moving_container("B")
+	gx, gy, gz = _moving_container("G")
+	is_void = args.mode == "void"
+	is_moving = args.mode == "moving"
+	# 周期任务占位符：STATIC/MOVING 保留村民补货计时器两行（坐标随布局）；VOID 置空补货并追加虚空驱动 + 状态打印
+	if is_void:
 		restock_timer_block = ""
 		void_tick_line = "execute if score #setup_done autotrade_test matches 1 if entity @a run function autotrade_test:tick_void"
 		void_status_block = "\n".join(
@@ -377,30 +670,90 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 		void_tick_line = ""
 		void_status_block = ""
 		void_setup_lines = ""
-		# STATIC 容器在家侧：保持既有行为（放箱 + 装满输入 + 清空输出）
-		setup_container_lines = "\n".join(
+		if is_moving:
+			# MOVING v2（§5.2）：放 5 箱 + refill emerald 输入 + 装 wheat 输入 + 清空 P/B/G 三输出箱（坐标用占位符，渲染期替换）
+			setup_container_lines = "\n".join(
+				[
+					"execute unless block {{INPUT_CHEST_X}} {{INPUT_CHEST_Y}} {{INPUT_CHEST_Z}} minecraft:chest run setblock {{INPUT_CHEST_X}} {{INPUT_CHEST_Y}} {{INPUT_CHEST_Z}} minecraft:chest",
+					"execute unless block {{W_CHEST_X}} {{W_CHEST_Y}} {{W_CHEST_Z}} minecraft:chest run setblock {{W_CHEST_X}} {{W_CHEST_Y}} {{W_CHEST_Z}} minecraft:chest",
+					"execute unless block {{OUTPUT_CHEST_X}} {{OUTPUT_CHEST_Y}} {{OUTPUT_CHEST_Z}} minecraft:chest run setblock {{OUTPUT_CHEST_X}} {{OUTPUT_CHEST_Y}} {{OUTPUT_CHEST_Z}} minecraft:chest",
+					"execute unless block {{OUT2_CHEST_X}} {{OUT2_CHEST_Y}} {{OUT2_CHEST_Z}} minecraft:chest run setblock {{OUT2_CHEST_X}} {{OUT2_CHEST_Y}} {{OUT2_CHEST_Z}} minecraft:chest",
+					"execute unless block {{OUT3_CHEST_X}} {{OUT3_CHEST_Y}} {{OUT3_CHEST_Z}} minecraft:chest run setblock {{OUT3_CHEST_X}} {{OUT3_CHEST_Y}} {{OUT3_CHEST_Z}} minecraft:chest",
+					"function autotrade_test:refill_input",
+					"data modify block {{W_CHEST_X}} {{W_CHEST_Y}} {{W_CHEST_Z}} Items set value [{{INPUT2_STACKS}}]",
+					"data modify block {{OUTPUT_CHEST_X}} {{OUTPUT_CHEST_Y}} {{OUTPUT_CHEST_Z}} Items set value []",
+					"data modify block {{OUT2_CHEST_X}} {{OUT2_CHEST_Y}} {{OUT2_CHEST_Z}} Items set value []",
+					"data modify block {{OUT3_CHEST_X}} {{OUT3_CHEST_Y}} {{OUT3_CHEST_Z}} Items set value []",
+				]
+			)
+		else:
+			# STATIC 容器在家侧：放箱 + 装满输入 + 清空输出（坐标随布局）
+			setup_container_lines = "\n".join(
+				[
+					f"execute unless block {ix} {iy} {iz} minecraft:chest run setblock {ix} {iy} {iz} minecraft:chest",
+					f"execute unless block {ox} {oy} {oz} minecraft:chest run setblock {ox} {oy} {oz} minecraft:chest",
+					"function autotrade_test:refill_input",
+					f"data modify block {ox} {oy} {oz} Items set value []",
+				]
+			)
+	# 村民召唤行 / 补货行：STATIC/VOID 单行（与既有输出逐字节相同）；MOVING 为 12 行（mv0..mv11，各自配方集）
+	if is_moving:
+		villager_summon_lines = build_moving_villager_summons(layout)
+		restock_lines = build_moving_restock_lines()
+		moving_setup_lines = build_moving_setup_lines()
+		# 每 tick：玩家若已掉车则重新挂载最近的一辆装置矿车
+		moving_tick_line = "execute as @a unless data entity @s RootVehicle run ride @s mount @e[type=minecraft:minecart,tag=att_cart,limit=1]"
+		# 每 {{CLEAR_TICKS}} tick 触发一次 MOVING 维护（清空 book/glass、补满 wheat、复位 #t_maint）
+		moving_status_block = "\n".join(
 			[
-				f"execute unless block {ix} {iy} {iz} minecraft:chest run setblock {ix} {iy} {iz} minecraft:chest",
-				f"execute unless block {ox} {oy} {oz} minecraft:chest run setblock {ox} {oy} {oz} minecraft:chest",
-				"function autotrade_test:refill_input",
-				f"data modify block {ox} {oy} {oz} Items set value []",
+				"scoreboard players add #t_maint autotrade_test 1",
+				"execute if score #t_maint autotrade_test matches {{CLEAR_TICKS}}.. if loaded {{W_CHEST_X}} {{W_CHEST_Y}} {{W_CHEST_Z}} run function autotrade_test:moving_maintenance",
 			]
 		)
+		moving_maint_block = build_moving_maintenance_block()
+	else:
+		villager_summon_lines = build_single_villager_summon(layout)
+		restock_lines = build_single_restock_line()
+		moving_setup_lines = ""
+		moving_tick_line = ""
+		moving_status_block = ""
+		moving_maint_block = ""
 	# VOID 专属坐标（值恒定）：STATIC 模板不引用，仍统一注册以保证「全部替换」
 	ix2 = VOID_ISLAND_POS
 	ib = VOID_ISLAND_BLOCK
 	rc = VOID_RET_CHEST
 	rp = VOID_RET_REPEATER
-	# 就绪提示中的补货说明：STATIC 保留；VOID 不补货（补货会掩盖「无限交易」判定），提示置空
-	restock_ready_hint = "" if args.mode == "void" else f"村民每 {args.restock_seconds}s 补货；"
+	# 就绪提示中的补货说明：STATIC/MOVING 保留；VOID 不补货（补货会掩盖「无限交易」判定），提示置空
+	restock_ready_hint = "" if is_void else f"村民每 {args.restock_seconds}s 补货；"
+	# 就绪提示中的交易描述（§5.2）：STATIC/VOID 渲染结果与既有逐字节一致；MOVING 描述多物品
+	ready_trade_desc = "emerald/wheat → paper/book/glass" if is_moving else f"1 绿宝石 → 1 {args.output_item}"
+	# MOVING 会话上限固定 16（§2/§3）；STATIC/VOID 用 --max-uses
+	max_uses_value = MOVING_MAX_USES if is_moving else args.max_uses
+	# 注意：结构性占位符的值内可能仍含嵌套占位符（如 {{OUTPUT_ITEM}}/{{MAX_USES}}/坐标），
+	# 必须排在对应标量占位符之前，确保后续替换能命中。
 	return {
+		# —— 结构性（值内可能含嵌套占位符） ——
+		"{{VILLAGER_SUMMON_LINES}}": villager_summon_lines,
+		"{{RESTOCK_LINES}}": restock_lines,
+		"{{SETUP_CONTAINER_LINES}}": setup_container_lines,
+		"{{MOVING_MAINT_BLOCK}}": moving_maint_block,
+		"{{MOVING_STATUS_BLOCK}}": moving_status_block,
+		"{{MOVING_SETUP_LINES}}": moving_setup_lines,
+		"{{MOVING_TICK_LINE}}": moving_tick_line,
+		"{{RESTOCK_TIMER_BLOCK}}": restock_timer_block,
+		"{{VOID_TICK_LINE}}": void_tick_line,
+		"{{VOID_STATUS_BLOCK}}": void_status_block,
+		"{{VOID_SETUP_LINES}}": void_setup_lines,
+		"{{COUNT_SLOTS}}": "\n".join(count_slots_lines),
+		# —— 标量 ——
 		"{{RESTOCK_TICKS}}": str(args.restock_seconds * 20),
 		"{{CLEAR_TICKS}}": str(args.clear_seconds * 20),
 		"{{REFILL_TICKS}}": str(args.refill_seconds * 20),
 		"{{RESTOCK_SECONDS}}": str(args.restock_seconds),
 		"{{RESTOCK_READY_HINT}}": restock_ready_hint,
+		"{{READY_TRADE_DESC}}": ready_trade_desc,
 		"{{CLEAR_SECONDS}}": str(args.clear_seconds),
-		"{{MAX_USES}}": str(args.max_uses),
+		"{{MAX_USES}}": str(max_uses_value),
 		"{{OUTPUT_ITEM}}": args.output_item,
 		"{{VILLAGER_BLOCK_X}}": str(layout.villager_block_x),
 		"{{VILLAGER_X}}": str(vx),
@@ -412,13 +765,17 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 		"{{OUTPUT_CHEST_X}}": str(ox),
 		"{{OUTPUT_CHEST_Y}}": str(oy),
 		"{{OUTPUT_CHEST_Z}}": str(oz),
+		"{{W_CHEST_X}}": str(wx),
+		"{{W_CHEST_Y}}": str(wy),
+		"{{W_CHEST_Z}}": str(wz),
+		"{{OUT2_CHEST_X}}": str(bx),
+		"{{OUT2_CHEST_Y}}": str(by),
+		"{{OUT2_CHEST_Z}}": str(bz),
+		"{{OUT3_CHEST_X}}": str(gx),
+		"{{OUT3_CHEST_Y}}": str(gy),
+		"{{OUT3_CHEST_Z}}": str(gz),
 		"{{INPUT_STACKS}}": input_stacks,
-		"{{COUNT_SLOTS}}": "\n".join(count_slots_lines),
-		"{{RESTOCK_TIMER_BLOCK}}": restock_timer_block,
-		"{{VOID_TICK_LINE}}": void_tick_line,
-		"{{VOID_STATUS_BLOCK}}": void_status_block,
-		"{{VOID_SETUP_LINES}}": void_setup_lines,
-		"{{SETUP_CONTAINER_LINES}}": setup_container_lines,
+		"{{INPUT2_STACKS}}": input2_stacks,
 		"{{TELEPORT_DELAY_TICKS}}": str(int(round(args.teleport_delay_seconds * 20))),
 		"{{HOME_TP_X}}": str(VOID_LAYOUT.player_pos[0]),
 		"{{HOME_TP_Y}}": str(VOID_LAYOUT.player_pos[1]),
@@ -439,8 +796,15 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 
 
 def render_datapack(target_dir: Path, placeholders: dict[str, str], mode: str) -> int:
-	"""把 datapack_src 整棵树渲染到目标目录（替换占位符）；STATIC 按跳过列表排除 VOID 专属文件。"""
-	skip = set(VOID_ONLY_DATAPACK_FILES) if mode == "static" else set()
+	"""把 datapack_src 整棵树渲染到目标目录（替换占位符）。
+
+	跳过规则：static/moving 跳过 VOID 专属文件；static/void 跳过 MOVING 专属文件。
+	"""
+	skip: set[str] = set()
+	if mode in ("static", "moving"):
+		skip |= set(VOID_ONLY_DATAPACK_FILES)
+	if mode in ("static", "void"):
+		skip |= set(MOVING_ONLY_DATAPACK_FILES)
 	count = 0
 	for src in sorted(DATAPACK_SRC.rglob("*")):
 		if not src.is_file():
@@ -459,46 +823,117 @@ def render_datapack(target_dir: Path, placeholders: dict[str, str], mode: str) -
 	return count
 
 
+def _io_location(pos: tuple[int, int, int]) -> dict:
+	"""单条 IO 记录（overworld + 坐标 + 启用）。"""
+	return {"dimension": "minecraft:overworld", "x": pos[0], "y": pos[1], "z": pos[2], "enabled": True}
+
+
+def _item_io_entry(item_id: str, is_input: bool, threshold: int, take_amount: int, pos: tuple[int, int, int]) -> dict:
+	"""构造一条 itemIO 条目（item 为 JSON 编码串，与既有序列化风格一致）。"""
+	return {
+		"item": json.dumps({"id": item_id}, separators=(",", ":")),
+		"isInput": is_input,
+		"threshold": threshold,
+		"takeAmount": take_amount,
+		"enabled": True,
+		"locations": [_io_location(pos)],
+	}
+
+
+def build_moving_trade_pairs() -> list[dict]:
+	"""MOVING v2 三交易对（§3/§4）：T1 emerald→paper / T2 emerald→book / T3 emerald+wheat→glass。"""
+	emerald = json.dumps({"id": "minecraft:emerald"}, separators=(",", ":"))
+	wheat = json.dumps({"id": "minecraft:wheat"}, separators=(",", ":"))
+
+	def pair(get_id: str, give2: str = "", give2_count: int = 0, note: str = "") -> dict:
+		return {
+			"give": emerald,
+			"get": json.dumps({"id": get_id}, separators=(",", ":")),
+			"limit": 64,
+			"enabled": True,
+			"give2": give2,
+			"give2Count": give2_count,
+			"getCount": 1,
+			"note": note,
+		}
+
+	return [
+		pair("minecraft:paper", note="testworld: T1 1 emerald -> 1 paper"),
+		pair("minecraft:book", note="testworld: T2 1 emerald -> 1 book"),
+		pair("minecraft:glass", give2=wheat, give2_count=1, note="testworld: T3 1 emerald + 1 wheat -> 1 glass"),
+	]
+
+
+def build_moving_item_io() -> list[dict]:
+	"""MOVING v2 五 itemIO 条目（§4）：2 输入（emerald/wheat，阈值 4 / 取 8）+ 3 输出（paper/book/glass，阈值 1）。"""
+	return [
+		_item_io_entry("minecraft:emerald", True, 4, 8, _moving_container("E")),
+		_item_io_entry("minecraft:wheat", True, 4, 8, _moving_container("W")),
+		_item_io_entry("minecraft:paper", False, 1, 6, _moving_container("P")),
+		_item_io_entry("minecraft:book", False, 1, 6, _moving_container("B")),
+		_item_io_entry("minecraft:glass", False, 1, 6, _moving_container("G")),
+	]
+
+
 def build_test_config(args: argparse.Namespace) -> str:
-	"""按模式构造测试 mod 配置 JSON 文本（STATIC 语义不变；VOID 使用虚空交易参数）。"""
+	"""按模式构造测试 mod 配置 JSON 文本（STATIC 语义不变；VOID 用虚空参数；MOVING 用移动参数）。"""
 	layout = LAYOUTS[args.mode]
 	is_void = args.mode == "void"
+	is_moving = args.mode == "moving"
 	emerald = json.dumps({"id": "minecraft:emerald"}, separators=(",", ":"))
 	output = json.dumps({"id": args.output_item}, separators=(",", ":"))
 	ix, iy, iz = layout.input_chest
 	ox, oy, oz = layout.output_chest
-	# 输入条目：STATIC = 阈值 1 组 / 每次取 --take-amount 组；VOID = 阈值 8 组 / 每次取 6 组（岛侧无容器可达，需随身储备）
-	input_entry = {
-		"item": emerald,
-		"isInput": True,
-		"threshold": 1,
-		"takeAmount": args.take_amount,
-		"enabled": True,
-		"locations": [
-			{"dimension": "minecraft:overworld", "x": ix, "y": iy, "z": iz, "enabled": True}
-		],
-	}
-	if is_void:
-		input_entry["threshold"] = 8
-		input_entry["takeAmount"] = 6
-	# 输出条目：两种模式相同（阈值 1 组 / 每次出 6 组），坐标随布局
-	output_entry = {
-		"item": output,
-		"isInput": False,
-		"threshold": 1,
-		"takeAmount": 6,
-		"enabled": True,
-		"locations": [
-			{"dimension": "minecraft:overworld", "x": ox, "y": oy, "z": oz, "enabled": True}
-		],
-	}
-	# VOID 返回触发点 = 岛侧陷阱箱；STATIC 保持旧默认 "0 -60 0"
+	if is_moving:
+		# MOVING v2（§4）：3 交易对 + 5 itemIO（2 输入 / 3 输出）
+		trade_pairs = build_moving_trade_pairs()
+		item_io = build_moving_item_io()
+	else:
+		# 输入条目：STATIC = 阈值 1 组 / 每次取 --take-amount 组；VOID = 阈值 8 组 / 每次取 6 组（岛侧无容器可达，需随身储备）
+		input_entry = {
+			"item": emerald,
+			"isInput": True,
+			"threshold": 1,
+			"takeAmount": args.take_amount,
+			"enabled": True,
+			"locations": [
+				{"dimension": "minecraft:overworld", "x": ix, "y": iy, "z": iz, "enabled": True}
+			],
+		}
+		if is_void:
+			input_entry["threshold"] = 8
+			input_entry["takeAmount"] = 6
+		# 输出条目：STATIC/VOID 相同（阈值 1 组 / 每次出 6 组），坐标随布局
+		output_entry = {
+			"item": output,
+			"isInput": False,
+			"threshold": 1,
+			"takeAmount": 6,
+			"enabled": True,
+			"locations": [
+				{"dimension": "minecraft:overworld", "x": ox, "y": oy, "z": oz, "enabled": True}
+			],
+		}
+		trade_pairs = [
+			{
+				"give": emerald,
+				"get": output,
+				"limit": 64,
+				"enabled": True,
+				"give2": "",
+				"give2Count": 0,
+				"getCount": 1,
+				"note": "testworld: 1 emerald -> 1 output item",
+			}
+		]
+		item_io = [input_entry, output_entry]
+	# VOID 返回触发点 = 岛侧陷阱箱；STATIC/MOVING 保持旧默认 "0 -60 0"
 	rx, ry, rz = VOID_RET_CHEST
 	void_return_pos = f"{rx} {ry} {rz}" if is_void else "0 -60 0"
 	config = {
 		"Generic": {
 			"enabled": True,
-			"tradeMode": "VOID" if is_void else "STATIC",
+			"tradeMode": "VOID" if is_void else ("MOVING" if is_moving else "STATIC"),
 			"tradeExecutorMode": "USE",
 			"villagerScanRange": 8,
 			"openTimeout": 10,
@@ -512,23 +947,13 @@ def build_test_config(args: argparse.Namespace) -> str:
 			# 跳过开窗时间（skipOpenTtl）：有匹配交易对但本会话无可执行交易（已耗尽 / 成本不足）的村民跳过开窗
 			# 的复查间隔；测试设为 100（= 1 轮 5s）→ 耗尽后下一轮即重试，配合 5s 补货验证刷新节奏
 			"skipOpenTtl": 100,
-			"tradePairs": [
-				{
-					"give": emerald,
-					"get": output,
-					"limit": 64,
-					"enabled": True,
-					"give2": "",
-					"give2Count": 0,
-					"getCount": 1,
-					"note": "testworld: 1 emerald -> 1 output item",
-				}
-			],
-			"itemIO": [input_entry, output_entry],
+			"tradePairs": trade_pairs,
+			"itemIO": item_io,
 		},
 		"Static": {"tradeInterval": 100, "containerIOInterval": 10, "containerIOIdleInterval": 5},
 		"Moving": {
-			"movingRangeMultiplier": 1.0,
+			# MOVING 测试用 1.5（默认值）：扫描范围 8×1.5=12 < 同侧村民间距 24 / 对侧间距 36
+			"movingRangeMultiplier": 1.5 if is_moving else 1.0,
 			"movingInteractRange": 6.0,
 			"movingStarvationAgingInterval": 100,
 			"movingStarvationHintThreshold": 4,
@@ -638,10 +1063,18 @@ def verify(world_name: str, mode: str) -> bool:
 	dp_dir = world_dir / "datapacks" / "autotrade_test"
 	for rel in EXPECTED_DATAPACK_FILES[mode]:
 		_check(results, f"datapack 存在 {rel}", (dp_dir / rel).is_file(), str(dp_dir / rel))
-	if mode == "static":
-		# STATIC 渲染必须跳过 VOID 专属文件（保证既有输出不变）
+	if mode != "void":
+		# STATIC/MOVING 渲染必须跳过 VOID 专属文件（保证各自输出不含虚空装置）
 		for rel in VOID_ONLY_DATAPACK_FILES:
-			_check(results, f"STATIC 未渲染 VOID 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
+			_check(results, f"{mode.upper()} 未渲染 VOID 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
+	if mode in ("static", "void"):
+		# static/void 必须同时跳过 MOVING 专属文件（moving_maintenance）
+		for rel in MOVING_ONLY_DATAPACK_FILES:
+			_check(results, f"{mode.upper()} 未渲染 MOVING 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
+	else:
+		# MOVING 必须渲染专属文件（存在性已由 EXPECTED 清单覆盖，此处显式断言）
+		for rel in MOVING_ONLY_DATAPACK_FILES:
+			_check(results, f"MOVING 含专属文件 {rel}", (dp_dir / rel).is_file(), str(dp_dir / rel))
 
 	# 全量扫描：JSON 可解析 + 任何文件都不得残留占位符
 	if dp_dir.is_dir():
@@ -694,7 +1127,7 @@ def generate(args: argparse.Namespace) -> bool:
 	world_dir.mkdir(parents=True, exist_ok=True)
 	_nbt_save(doc, world_dir / "level.dat")
 
-	# 2) 渲染 datapack（STATIC 跳过 VOID 专属文件）
+	# 2) 渲染 datapack（STATIC/MOVING 跳过 VOID 专属文件）
 	placeholders = build_placeholders(args)
 	rendered = render_datapack(world_dir / "datapacks" / "autotrade_test", placeholders, args.mode)
 
@@ -733,8 +1166,12 @@ def resolve_world_name(args: argparse.Namespace) -> str:
 def main(argv: list[str]) -> int:
 	"""解析参数并执行。"""
 	parser = argparse.ArgumentParser(description="AutoTrade 测试世界生成器（不启动游戏）")
-	parser.add_argument("--mode", choices=("static", "void"), default="static", help="装置模式（默认 static）")
-	parser.add_argument("--world-name", default=None, help="世界名（默认 static=AutoTradeTest / void=AutoTradeVoidTest）")
+	parser.add_argument("--mode", choices=("static", "void", "moving"), default="static", help="装置模式（默认 static）")
+	parser.add_argument(
+		"--world-name",
+		default=None,
+		help="世界名（默认 static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest）",
+	)
 	parser.add_argument("--template-world", default="New World")
 	# 补货间隔默认 5s（= 静止模式轮间隔 tradeInterval 100t）：耗尽后下一轮即补货，避免出现空过轮次
 	parser.add_argument("--restock-seconds", type=int, default=5)

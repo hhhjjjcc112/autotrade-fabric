@@ -5,3 +5,4 @@ scoreboard players add #t_clear autotrade_test 1
 execute if score #t_refill autotrade_test matches {{REFILL_TICKS}}.. if loaded {{INPUT_CHEST_X}} {{INPUT_CHEST_Y}} {{INPUT_CHEST_Z}} run function autotrade_test:refill_input
 execute if score #t_clear autotrade_test matches {{CLEAR_TICKS}}.. if loaded {{OUTPUT_CHEST_X}} {{OUTPUT_CHEST_Y}} {{OUTPUT_CHEST_Z}} run function autotrade_test:clear_output
 {{VOID_STATUS_BLOCK}}
+{{MOVING_STATUS_BLOCK}}

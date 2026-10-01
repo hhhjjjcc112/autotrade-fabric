@@ -2,3 +2,4 @@
 execute if entity @a if loaded {{VILLAGER_BLOCK_X}} {{VILLAGER_Y}} {{VILLAGER_Z}} unless score #setup_done autotrade_test matches 1 run function autotrade_test:setup
 execute if score #setup_done autotrade_test matches 1 if entity @a run function autotrade_test:tick_periodic
 {{VOID_TICK_LINE}}
+{{MOVING_TICK_LINE}}
