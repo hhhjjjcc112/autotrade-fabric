@@ -18,6 +18,7 @@ MARKERS = (
 	"[verdict]",
 	"[Test]",
 	"[StaticMode]",
+	"[MovingMode]",
 	"[AutoTrade]",
 	"[ContainerIO]",
 	"[ModeMachine]",

@@ -22,3 +22,5 @@ autorun[AutoTradeTest]=static_test 90
 autorun[AutoTradeVoidTest]=void_test 240
 # 进入 AutoTradeSmokeTest 冒烟世界时自动运行冒烟观测脚本（30s；默认结束后自动关闭客户端，加 noquit 可保留）
 autorun[AutoTradeSmokeTest]=smoke_test 30
+# 进入 AutoTradeMovingTest 测试世界时自动运行 MOVING 观测脚本（180s；省略参数时脚本默认 180s）
+autorun[AutoTradeMovingTest]=moving_test 180
