@@ -24,3 +24,5 @@ autorun[AutoTradeVoidTest]=void_test 240
 autorun[AutoTradeSmokeTest]=smoke_test 30
 # 进入 AutoTradeMovingTest 测试世界时自动运行 MOVING 观测脚本（180s；省略参数时脚本默认 180s）
 autorun[AutoTradeMovingTest]=moving_test 180
+# 进入 AutoTradeCapacityTest 测试世界时自动运行 CAPACITY 观测脚本（600s；省略参数时脚本默认 600s）
+autorun[AutoTradeCapacityTest]=capacity_test 600

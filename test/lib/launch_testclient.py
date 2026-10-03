@@ -7,6 +7,7 @@
 	python test/lib/launch_testclient.py --world AutoTradeVoidTest   # 世界名含 Void → 自动按 void 模式
 	python test/lib/launch_testclient.py --mode void                # 世界默认 AutoTradeVoidTest
 	python test/lib/launch_testclient.py --mode moving              # 世界默认 AutoTradeMovingTest
+	python test/lib/launch_testclient.py --mode capacity            # 世界默认 AutoTradeCapacityTest
 	python test/lib/launch_testclient.py --mode void --no-rebuild   # 跳过重建（沿用现有世界/配置）
 	python test/lib/launch_testclient.py --deploy-only              # 只部署 Minescript 脚本，不重建/不启动
 	python test/lib/launch_testclient.py --headless                 # 经本地 HeadlessMC 无头启动（替代 gradlew runClient）
@@ -28,8 +29,8 @@
 
 参数：
 	--world NAME     世界名（优先级：本参数 > 环境变量 TESTWORLD_WORLD > 按模式默认）
-	--mode {static,void,moving}
-	                 装置模式（默认由世界名推断：含 moving → moving，含 void → void，否则 static）
+	--mode {static,void,moving,capacity}
+	                 装置模式（默认由世界名推断：含 moving → moving，含 void → void，含 capacity → capacity，否则 static）
 	--no-rebuild     跳过世界/配置重建（保留上次世界进度；此时 config 需自行保证与模式匹配）
 	--no-deploy      跳过 Minescript 脚本部署
 	--deploy-only    只执行部署并退出（不重建、不启动）
@@ -78,13 +79,29 @@ GRADLE = REPO_ROOT / ("gradlew.bat" if os.name == "nt" else "gradlew")
 # autorun 行匹配：autorun[<key>]=<cmd>（key 已含 autorun[...] 前缀）
 AUTORUN_RE = re.compile(r"^\s*(autorun\[[^\]]+\])\s*=\s*(.*?)\s*$")
 
-DEFAULT_WORLD_NAMES = {"static": "AutoTradeTest", "void": "AutoTradeVoidTest", "moving": "AutoTradeMovingTest"}
+DEFAULT_WORLD_NAMES = {
+	"static": "AutoTradeTest",
+	"void": "AutoTradeVoidTest",
+	"moving": "AutoTradeMovingTest",
+	"capacity": "AutoTradeCapacityTest",
+}
 
 
 def resolve_world_mode(raw_world: str, raw_mode: str | None) -> tuple[str, str]:
-	"""解析世界名与模式：世界名优先级 参数 > 环境变量 > 默认；模式默认由世界名推断。"""
+	"""解析世界名与模式：世界名优先级 参数 > 环境变量 > 默认；模式默认由世界名推断（moving > void > capacity > static）。"""
 	world = raw_world or os.environ.get("TESTWORLD_WORLD", "")
-	mode = raw_mode or ("moving" if "moving" in world.lower() else ("void" if "void" in world.lower() else "static"))
+	# 按世界名推断模式，顺序：moving > void > capacity > static；显式 --mode 优先
+	mode = raw_mode
+	if mode is None:
+		lowered = world.lower()
+		if "moving" in lowered:
+			mode = "moving"
+		elif "void" in lowered:
+			mode = "void"
+		elif "capacity" in lowered:
+			mode = "capacity"
+		else:
+			mode = "static"
 	if not world:
 		world = DEFAULT_WORLD_NAMES[mode]
 	return world, mode
@@ -210,8 +227,12 @@ def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
 		description="启动 AutoTrade dev 客户端并自动进入测试世界（跨平台；--headless 经本地 HeadlessMC 无头启动）",
 	)
-	parser.add_argument("--world", default="", help="世界名（默认按模式：static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest）")
-	parser.add_argument("--mode", choices=("static", "void", "moving"), default=None, help="装置模式（默认由世界名推断）")
+	parser.add_argument(
+		"--world",
+		default="",
+		help="世界名（默认按模式：static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest / capacity=AutoTradeCapacityTest）",
+	)
+	parser.add_argument("--mode", choices=("static", "void", "moving", "capacity"), default=None, help="装置模式（默认由世界名推断：moving > void > capacity > static）")
 	parser.add_argument("--no-rebuild", action="store_true", help="跳过世界/配置重建")
 	parser.add_argument("--no-deploy", action="store_true", help="跳过 Minescript 脚本部署")
 	parser.add_argument("--deploy-only", action="store_true", help="只执行部署并退出（不重建、不启动）")

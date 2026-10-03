@@ -5,12 +5,15 @@
 并渲染 datapack（固定交易的村民 + 输入/输出箱 + 周期补货/补满/清空统计），
 同时写入一份测试用 mod 配置。
 
-三种装置模式：
+四种装置模式：
 	static（默认）：STATIC 静止交易装置，世界默认 `AutoTradeTest`
 	void：VOID 虚空交易装置（家侧交易点 + 岛侧着陆点 + 陷阱箱/中继器返航机关），
 	      世界默认 `AutoTradeVoidTest`
 	moving：MOVING 移动交易装置（环形矿车轨道持续带动玩家，沿途 12 村民 + 5 输入/输出箱），
 	      世界默认 `AutoTradeMovingTest`
+	capacity：CAPACITY 容量检测装置（复用 STATIC 坐标系单站台；无村民/容器基线，村民与
+	          背包库存由 `test/lib/capacity_scenarios.py` 的 23 组用例逐组布置，生成
+	          `autotrade_test:cap_<id>` 场景函数），世界默认 `AutoTradeCapacityTest`
 
 用法：
 	python test/lib/setup_testworld.py                         # static：生成世界 + 备份并写测试配置 + 校验
@@ -19,16 +22,18 @@
 	python test/lib/setup_testworld.py --mode void --verify    # 仅校验 VOID 世界
 	python test/lib/setup_testworld.py --mode moving           # MOVING：生成 AutoTradeMovingTest + MOVING 配置
 	python test/lib/setup_testworld.py --mode moving --verify  # 仅校验 MOVING 世界
+	python test/lib/setup_testworld.py --mode capacity         # CAPACITY：生成 AutoTradeCapacityTest + 23 场景函数 + 导出用例表
+	python test/lib/setup_testworld.py --mode capacity --verify# 仅校验 CAPACITY 世界（含表↔脚本同步检查）
 	python test/lib/setup_testworld.py --skip-config
 	python test/lib/setup_testworld.py --fresh
 
 说明：脚本从仓库根目录（autotrade-fabric/）运行；脚本会自行定位仓库根目录，任意 cwd 均可。
 
 模式相关参数：
-	--mode {static,void,moving}  装置模式（默认 static）
+	--mode {static,void,moving,capacity}  装置模式（默认 static）
 	--teleport-delay-seconds     仅 VOID：互动后延迟多少秒传送玩家至岛侧（默认 0.5 → TELEPORT_DELAY_TICKS=10）
 	--world-name                 覆盖默认世界名
-	                             （static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest）
+	                             （static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest / capacity=AutoTradeCapacityTest）
 
 注意：本脚本绝不启动 Minecraft；游戏内验证由用户手动执行。
 """
@@ -36,6 +41,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import gzip
 import json
 import shutil
@@ -59,6 +65,13 @@ try:
 except ImportError:
 	print("错误：缺少依赖 pynbt（请执行 pip install pynbt）")
 	sys.exit(2)
+
+# 同目录用例表模块（test/lib/capacity_scenarios.py）：CAPACITY 模式的单一数据源。
+# 直跑脚本时脚本目录已在 sys.path[0]，此处再显式插入，兼容以其它方式加载模块的场景。
+_THIS_DIR = str(Path(__file__).resolve().parent)
+if _THIS_DIR not in sys.path:
+	sys.path.insert(0, _THIS_DIR)
+import capacity_scenarios  # noqa: E402  （需先就位 sys.path）
 
 
 def _nbt_load(path):
@@ -173,8 +186,23 @@ MOVING_LAYOUT = Layout(
 	output_chest=(22, -60, 34),
 )
 LAYOUTS = {"static": STATIC_LAYOUT, "void": VOID_LAYOUT, "moving": MOVING_LAYOUT}
+# CAPACITY 布局：复用 STATIC 坐标（单站台超平坦；村民与背包库存由各用例函数逐组布置，无容器）
+CAPACITY_LAYOUT = Layout(
+	player_pos=(0.5, -60, 0.5),
+	player_spawn=(0, -60, 0),
+	villager=(3.5, -60, 0),
+	villager_block_x=3,
+	input_chest=(-2, -60, 0),
+	output_chest=(0, -60, 2),
+)
+LAYOUTS["capacity"] = CAPACITY_LAYOUT
 # 默认世界名（--world-name 可显式覆盖）
-DEFAULT_WORLD_NAMES = {"static": "AutoTradeTest", "void": "AutoTradeVoidTest", "moving": "AutoTradeMovingTest"}
+DEFAULT_WORLD_NAMES = {
+	"static": "AutoTradeTest",
+	"void": "AutoTradeVoidTest",
+	"moving": "AutoTradeMovingTest",
+	"capacity": "AutoTradeCapacityTest",
+}
 
 # ---- MOVING 环形轨道几何（§2）：铁轨矩形 x∈[0,64] / z∈[0,32] 于 y=-60（下方草地 y=-61 支承） ----
 MOVING_TRACK_MIN_X, MOVING_TRACK_MAX_X = 0, 64
@@ -254,6 +282,9 @@ EXPECTED_DATAPACK_FILES = {
 	"void": SHARED_DATAPACK_FILES + VOID_ONLY_DATAPACK_FILES,
 	# MOVING v2：共享文件 + 专属 moving_maintenance.mcfunction
 	"moving": SHARED_DATAPACK_FILES + MOVING_ONLY_DATAPACK_FILES,
+	# CAPACITY：共享文件 + 23 个用例函数（由 capacity_scenarios.CASES 动态派生，保持单一来源）
+	"capacity": SHARED_DATAPACK_FILES
+	+ [f"data/autotrade_test/functions/cap_{case.id}.mcfunction" for case in capacity_scenarios.CASES],
 }
 
 
@@ -620,6 +651,51 @@ def build_void_setup_lines() -> str:
 	return "\n".join(lines)
 
 
+def build_capacity_case_function(case) -> str:
+	"""生成单个 CAPACITY 用例的场景函数文本（`autotrade_test:cap_<id>`）。
+
+	行序（勘误 #4 强制）：
+	  1) 传送到站台；
+	  2) 清掉掉落物（上一用例关窗余量）；
+	  3) 清掉上一用例残留的 CAPACITY 村民（STATIC 每轮处理范围内全部村民，不清旧会命中
+	     旧报价 → 预期外成交；见计划勘误 #4）；
+	  4) 清空玩家背包；
+	  5..) 逐非空槽写入精确库存（inventory.0..26 / hotbar.0..8；空槽跳过；不用区间语法）；
+	  末) 召唤固定交易村民（Tags 含 autotrade_cap 与 cap_<id>，Offers 单配方）。
+	返回以 LF 结尾的函数文本（UTF-8 写入）。
+	"""
+	layout = LAYOUTS["capacity"]
+	px, py, pz = layout.player_pos
+	vx, vy, vz = layout.villager
+	case_id = case.id
+	offer = case.offer
+	lines = [
+		f"tp @s {px} {py} {pz}",
+		"kill @e[type=minecraft:item]",
+		"kill @e[type=minecraft:villager,tag=autotrade_cap]",
+		"clear @s",
+	]
+	# 槽位映射：索引 0..26 → inventory.N；27..35 → hotbar.(N-27)；空槽跳过
+	for index, (item, count) in enumerate(capacity_scenarios.layout_case(case)):
+		if not item or count <= 0:
+			continue
+		slot = f"inventory.{index}" if index < 27 else f"hotbar.{index - 27}"
+		lines.append(f"item replace entity @s {slot} with {item} {count}")
+	# 固定交易村民：单条配方（buy 恒为 1 绿宝石；sell 数量/maxUses 随用例）
+	# 第二个标签用 `cap_<id>`（与函数名/文档一致，便于按用例精确选择器命中）
+	nbt = (
+		'{Tags:["autotrade_cap","cap_' + case_id + '"],NoAI:1b,Silent:1b,Invulnerable:1b,'
+		'PersistenceRequired:1b,Age:0,CustomName:\'{"text":"AT-CAP-' + case_id + '"}\','
+		'CustomNameVisible:0b,Health:20.0f,'
+		'VillagerData:{type:"minecraft:plains",profession:"minecraft:librarian",level:5},'
+		'Offers:{Recipes:[{buy:{id:"minecraft:emerald",Count:1b},'
+		'sell:{id:"' + offer.sell_item + '",Count:' + str(offer.sell_count) + 'b},'
+		'uses:0,maxUses:' + str(offer.max_uses) + ',xp:0,priceMultiplier:0.0f,specialPrice:0,demand:0,rewardExp:0b}]}}'
+	)
+	lines.append(f"summon minecraft:villager {vx} {vy} {vz} {nbt}")
+	return "\n".join(lines) + "\n"
+
+
 def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 	"""计算 datapack 模板占位符 -> 文本值（按模式分支：周期任务、虚空驱动行、环形轨道行不同）。"""
 	layout = LAYOUTS[args.mode]
@@ -647,6 +723,7 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 	gx, gy, gz = _moving_container("G")
 	is_void = args.mode == "void"
 	is_moving = args.mode == "moving"
+	is_capacity = args.mode == "capacity"
 	# 周期任务占位符：STATIC/MOVING 保留村民补货计时器两行（坐标随布局）；VOID 置空补货并追加虚空驱动 + 状态打印
 	if is_void:
 		restock_timer_block = ""
@@ -660,6 +737,13 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 		void_setup_lines = build_void_setup_lines()
 		# VOID 容器在岛侧：setup 在家侧执行时岛侧未加载无法就地放置/填充 → 由 tick_void 惰性处理
 		setup_container_lines = "# 岛侧容器（输入/输出箱）由 tick_void 在区块加载时惰性放置并补满（setup 在家侧执行，岛侧未加载无法就地操作）"
+	elif is_capacity:
+		# CAPACITY：无容器/补货/虚空/移动维护；补货与清空计时器置为 2e9 使其在测试窗口内永不触发
+		restock_timer_block = ""
+		void_tick_line = ""
+		void_status_block = ""
+		void_setup_lines = ""
+		setup_container_lines = ""
 	else:
 		restock_timer_block = "\n".join(
 			[
@@ -696,8 +780,16 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 					f"data modify block {ox} {oy} {oz} Items set value []",
 				]
 			)
-	# 村民召唤行 / 补货行：STATIC/VOID 单行（与既有输出逐字节相同）；MOVING 为 12 行（mv0..mv11，各自配方集）
-	if is_moving:
+	# 村民召唤行 / 补货行：STATIC/VOID 单行（与既有输出逐字节相同）；MOVING 为 12 行；CAPACITY 全部置空
+	if is_capacity:
+		# CAPACITY 的村民与库存由 cap_<id> 用例函数逐组布置：setup 不召唤/不补货
+		villager_summon_lines = ""
+		restock_lines = ""
+		moving_setup_lines = ""
+		moving_tick_line = ""
+		moving_status_block = ""
+		moving_maint_block = ""
+	elif is_moving:
 		villager_summon_lines = build_moving_villager_summons(layout)
 		restock_lines = build_moving_restock_lines()
 		moving_setup_lines = build_moving_setup_lines()
@@ -723,11 +815,15 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 	ib = VOID_ISLAND_BLOCK
 	rc = VOID_RET_CHEST
 	rp = VOID_RET_REPEATER
-	# 就绪提示中的补货说明：STATIC/MOVING 保留；VOID 不补货（补货会掩盖「无限交易」判定），提示置空
-	restock_ready_hint = "" if is_void else f"村民每 {args.restock_seconds}s 补货；"
-	# 就绪提示中的交易描述（§5.2）：STATIC/VOID 渲染结果与既有逐字节一致；MOVING 描述多物品
-	ready_trade_desc = "emerald/wheat → paper/book/glass" if is_moving else f"1 绿宝石 → 1 {args.output_item}"
-	# MOVING 会话上限固定 16（§2/§3）；STATIC/VOID 用 --max-uses
+	# 就绪提示中的补货说明：STATIC/MOVING 保留；VOID/CAPACITY 不补货，提示置空
+	restock_ready_hint = "" if (is_void or is_capacity) else f"村民每 {args.restock_seconds}s 补货；"
+	# 就绪提示中的交易描述（§5.2）：STATIC/VOID 渲染结果与既有逐字节一致；MOVING/CAPACITY 各自描述
+	ready_trade_desc = (
+		"CAPACITY cases"
+		if is_capacity
+		else ("emerald/wheat → paper/book/glass" if is_moving else f"1 绿宝石 → 1 {args.output_item}")
+	)
+	# MOVING 会话上限固定 16（§2/§3）；STATIC/VOID/CAPACITY 用 --max-uses
 	max_uses_value = MOVING_MAX_USES if is_moving else args.max_uses
 	# 注意：结构性占位符的值内可能仍含嵌套占位符（如 {{OUTPUT_ITEM}}/{{MAX_USES}}/坐标），
 	# 必须排在对应标量占位符之前，确保后续替换能命中。
@@ -747,8 +843,9 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 		"{{COUNT_SLOTS}}": "\n".join(count_slots_lines),
 		# —— 标量 ——
 		"{{RESTOCK_TICKS}}": str(args.restock_seconds * 20),
-		"{{CLEAR_TICKS}}": str(args.clear_seconds * 20),
-		"{{REFILL_TICKS}}": str(args.refill_seconds * 20),
+		# CAPACITY：周期补货/清空计时器拉满（2e9），使 refill_input/clear_output 在测试窗口内永不触发
+		"{{CLEAR_TICKS}}": "2000000000" if is_capacity else str(args.clear_seconds * 20),
+		"{{REFILL_TICKS}}": "2000000000" if is_capacity else str(args.refill_seconds * 20),
 		"{{RESTOCK_SECONDS}}": str(args.restock_seconds),
 		"{{RESTOCK_READY_HINT}}": restock_ready_hint,
 		"{{READY_TRADE_DESC}}": ready_trade_desc,
@@ -798,12 +895,12 @@ def build_placeholders(args: argparse.Namespace) -> dict[str, str]:
 def render_datapack(target_dir: Path, placeholders: dict[str, str], mode: str) -> int:
 	"""把 datapack_src 整棵树渲染到目标目录（替换占位符）。
 
-	跳过规则：static/moving 跳过 VOID 专属文件；static/void 跳过 MOVING 专属文件。
+	跳过规则：static/moving/capacity 跳过 VOID 专属文件；static/void/capacity 跳过 MOVING 专属文件。
 	"""
 	skip: set[str] = set()
-	if mode in ("static", "moving"):
+	if mode in ("static", "moving", "capacity"):
 		skip |= set(VOID_ONLY_DATAPACK_FILES)
-	if mode in ("static", "void"):
+	if mode in ("static", "void", "capacity"):
 		skip |= set(MOVING_ONLY_DATAPACK_FILES)
 	count = 0
 	for src in sorted(DATAPACK_SRC.rglob("*")):
@@ -880,6 +977,7 @@ def build_test_config(args: argparse.Namespace) -> str:
 	layout = LAYOUTS[args.mode]
 	is_void = args.mode == "void"
 	is_moving = args.mode == "moving"
+	is_capacity = args.mode == "capacity"
 	emerald = json.dumps({"id": "minecraft:emerald"}, separators=(",", ":"))
 	output = json.dumps({"id": args.output_item}, separators=(",", ":"))
 	ix, iy, iz = layout.input_chest
@@ -888,6 +986,33 @@ def build_test_config(args: argparse.Namespace) -> str:
 		# MOVING v2（§4）：3 交易对 + 5 itemIO（2 输入 / 3 输出）
 		trade_pairs = build_moving_trade_pairs()
 		item_io = build_moving_item_io()
+	elif is_capacity:
+		# CAPACITY：仅需 2 个交易对（物品匹配即可，pair 匹配与数量无关）；无容器 IO（itemIO 置空）
+		paper = json.dumps({"id": "minecraft:paper"}, separators=(",", ":"))
+		iron_sword = json.dumps({"id": "minecraft:iron_sword"}, separators=(",", ":"))
+		trade_pairs = [
+			{
+				"give": emerald,
+				"get": paper,
+				"limit": 64,
+				"enabled": True,
+				"give2": "",
+				"give2Count": 0,
+				"getCount": 1,
+				"note": "testworld: capacity 1 emerald -> 1 paper",
+			},
+			{
+				"give": emerald,
+				"get": iron_sword,
+				"limit": 64,
+				"enabled": True,
+				"give2": "",
+				"give2Count": 0,
+				"getCount": 1,
+				"note": "testworld: capacity 1 emerald -> 1 iron_sword",
+			},
+		]
+		item_io = []
 	else:
 		# 输入条目：STATIC = 阈值 1 组 / 每次取 --take-amount 组；VOID = 阈值 8 组 / 每次取 6 组（岛侧无容器可达，需随身储备）
 		input_entry = {
@@ -943,10 +1068,11 @@ def build_test_config(args: argparse.Namespace) -> str:
 			"idleScanInterval": 5,
 			"containerReach": 4,
 			"outputMoveCap": 999,
-			"tradeCacheTtl": 3000,
+			"tradeCacheTtl": 0 if is_capacity else 3000,
 			# 跳过开窗时间（skipOpenTtl）：有匹配交易对但本会话无可执行交易（已耗尽 / 成本不足）的村民跳过开窗
-			# 的复查间隔；测试设为 100（= 1 轮 5s）→ 耗尽后下一轮即重试，配合 5s 补货验证刷新节奏
-			"skipOpenTtl": 100,
+			# 的复查间隔；测试设为 100（= 1 轮 5s）→ 耗尽后下一轮即重试，配合 5s 补货验证刷新节奏；
+			# CAPACITY 置 0（每轮都重试，逐用例期望不被缓存跳过干扰）
+			"skipOpenTtl": 0 if is_capacity else 100,
 			"tradePairs": trade_pairs,
 			"itemIO": item_io,
 		},
@@ -994,6 +1120,56 @@ def backup_config() -> Path | None:
 def _check(results: list[tuple[str, bool, str]], name: str, ok: bool, detail: str = "") -> None:
 	"""记录一条断言结果。"""
 	results.append((name, bool(ok), detail))
+
+
+def _verify_capacity_sync(results: list[tuple[str, bool, str]]) -> None:
+	"""校验 `test/minescript/capacity_test.py` 的 `CAP_CASES` 与用例表 CASES 完全同步。
+
+	用 ast 解析脚本源码并 literal_eval `CAP_CASES` 字面量，断言数量/顺序/fn 命名/pre/final/items。
+	脚本缺失或不同步 → 记 FAIL 并给出首个不匹配的明确信息（字段 + 两侧值）。
+	"""
+	script_path = ROOT / "test" / "minescript" / "capacity_test.py"
+	if not script_path.is_file():
+		_check(results, "CAP_CASES 同步：脚本存在", False, str(script_path))
+		return
+	try:
+		tree = ast.parse(script_path.read_text(encoding="utf-8"))
+	except Exception as exc:  # noqa: BLE001
+		_check(results, "CAP_CASES 同步：脚本可解析", False, f"{type(exc).__name__}: {exc}")
+		return
+	# 顶层查找 CAP_CASES = [...] 赋值并求值为纯 Python 字面量
+	cap_cases = None
+	for node in tree.body:
+		if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "CAP_CASES" for t in node.targets):
+			cap_cases = ast.literal_eval(node.value)
+			break
+	if cap_cases is None:
+		_check(results, "CAP_CASES 同步：找到字面量赋值", False, "未找到 CAP_CASES 赋值")
+		return
+	expected_ids = [case.id for case in capacity_scenarios.CASES]
+	actual_ids = [entry.get("id") for entry in cap_cases]
+	_check(results, "CAP_CASES 条数 == 23", len(cap_cases) == len(capacity_scenarios.CASES), f"len={len(cap_cases)}")
+	_check(results, "CAP_CASES id 顺序 a1..h2", actual_ids == expected_ids, f"{actual_ids}")
+	if len(cap_cases) != len(capacity_scenarios.CASES):
+		return
+	mismatches: list[str] = []
+	for case, entry in zip(capacity_scenarios.CASES, cap_cases):
+		if entry.get("fn") != "cap_" + case.id:
+			mismatches.append(f"{case.id}: fn={entry.get('fn')!r} expected=cap_{case.id}")
+		pre = entry.get("pre") or {}
+		if pre != case.pre_counts:
+			mismatches.append(f"{case.id}: pre={pre} expected={case.pre_counts}")
+		final = entry.get("final") or {}
+		if final != case.expect_final:
+			mismatches.append(f"{case.id}: final={final} expected={case.expect_final}")
+		if entry.get("items") != case.expect_entities:
+			mismatches.append(f"{case.id}: items={entry.get('items')!r} expected={case.expect_entities}")
+	_check(
+		results,
+		"CAP_CASES 与用例表 pre/final/items 一致",
+		not mismatches,
+		"; ".join(mismatches[:5]),
+	)
 
 
 def verify(world_name: str, mode: str) -> bool:
@@ -1063,18 +1239,83 @@ def verify(world_name: str, mode: str) -> bool:
 	dp_dir = world_dir / "datapacks" / "autotrade_test"
 	for rel in EXPECTED_DATAPACK_FILES[mode]:
 		_check(results, f"datapack 存在 {rel}", (dp_dir / rel).is_file(), str(dp_dir / rel))
+	# VOID 专属文件：仅 void 渲染；static/moving/capacity 必须全部缺失
 	if mode != "void":
-		# STATIC/MOVING 渲染必须跳过 VOID 专属文件（保证各自输出不含虚空装置）
 		for rel in VOID_ONLY_DATAPACK_FILES:
 			_check(results, f"{mode.upper()} 未渲染 VOID 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
-	if mode in ("static", "void"):
-		# static/void 必须同时跳过 MOVING 专属文件（moving_maintenance）
-		for rel in MOVING_ONLY_DATAPACK_FILES:
-			_check(results, f"{mode.upper()} 未渲染 MOVING 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
-	else:
-		# MOVING 必须渲染专属文件（存在性已由 EXPECTED 清单覆盖，此处显式断言）
+	# MOVING 专属文件：仅 moving 渲染；static/void/capacity 必须全部缺失
+	if mode == "moving":
 		for rel in MOVING_ONLY_DATAPACK_FILES:
 			_check(results, f"MOVING 含专属文件 {rel}", (dp_dir / rel).is_file(), str(dp_dir / rel))
+	else:
+		for rel in MOVING_ONLY_DATAPACK_FILES:
+			_check(results, f"{mode.upper()} 未渲染 MOVING 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
+
+	if mode == "capacity":
+		# —— CAPACITY 专属：23 个场景函数内容 + 配置 JSON + 表↔脚本同步 ——
+		func_dir = dp_dir / "data" / "autotrade_test" / "functions"
+		px, py, pz = CAPACITY_LAYOUT.player_pos
+		for case in capacity_scenarios.CASES:
+			rel = f"cap_{case.id}.mcfunction"
+			path = func_dir / rel
+			exists = path.is_file()
+			_check(results, f"cap 函数存在 {rel}", exists, str(path))
+			if not exists:
+				continue
+			text = path.read_text(encoding="utf-8")
+			offer = case.offer
+			_check(results, f"{rel} 含传送到站台", f"tp @s {px} {py} {pz}" in text, "")
+			_check(results, f"{rel} 含 kill item 行", "kill @e[type=minecraft:item]" in text, "")
+			_check(results, f"{rel} 含 kill 旧村民行", "kill @e[type=minecraft:villager,tag=autotrade_cap]" in text, "")
+			_check(results, f"{rel} 含 clear @s", "clear @s" in text, "")
+			_check(results, f"{rel} 含 maxUses:{offer.max_uses}", f"maxUses:{offer.max_uses}" in text, "")
+			_check(
+				results,
+				f"{rel} 含 sell Count:{offer.sell_count}b",
+				f'sell:{{id:"{offer.sell_item}",Count:{offer.sell_count}b}}' in text,
+				"",
+			)
+			_check(
+				results,
+				f"{rel} 含 summon 标签 cap_{case.id}",
+				f'Tags:["autotrade_cap","cap_{case.id}"]' in text,
+				"",
+			)
+		cap_files = list(func_dir.glob("cap_*.mcfunction"))
+		_check(results, "cap 函数数量 == 23", len(cap_files) == len(capacity_scenarios.CASES), f"{len(cap_files)}")
+		# 配置 JSON 断言（mod 配置由 generate 写入 run/config/autotrade.json）
+		if CONFIG_PATH.is_file():
+			generic = None
+			try:
+				cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+				generic = cfg.get("Generic", {})
+				_check(results, "配置 JSON 可解析", True, "")
+			except Exception as exc:  # noqa: BLE001
+				_check(results, "配置 JSON 可解析", False, f"{type(exc).__name__}: {exc}")
+			if generic is not None:
+				_check(results, "配置 tradeMode == STATIC", generic.get("tradeMode") == "STATIC", repr(generic.get("tradeMode")))
+				_check(results, "配置 tradeCacheTtl == 0", generic.get("tradeCacheTtl") == 0, repr(generic.get("tradeCacheTtl")))
+				_check(results, "配置 skipOpenTtl == 0", generic.get("skipOpenTtl") == 0, repr(generic.get("skipOpenTtl")))
+				pairs = generic.get("tradePairs")
+				pairs = pairs if isinstance(pairs, list) else []
+				_check(results, "配置 tradePairs 数量 == 2", len(pairs) == 2, f"len={len(pairs)}")
+				get_ids: list = []
+				for entry in pairs:
+					try:
+						get_ids.append(json.loads(entry.get("get", "{}")).get("id"))
+					except Exception:  # noqa: BLE001
+						get_ids.append(None)
+				_check(
+					results,
+					"配置 tradePairs get ids == paper+iron_sword",
+					get_ids == ["minecraft:paper", "minecraft:iron_sword"],
+					str(get_ids),
+				)
+				_check(results, "配置 itemIO 为空列表", generic.get("itemIO") == [], repr(generic.get("itemIO")))
+		else:
+			_check(results, "配置文件存在", False, str(CONFIG_PATH))
+		# 表↔脚本同步检查（脚本缺失或 CAP_CASES 分歧 → FAIL）
+		_verify_capacity_sync(results)
 
 	# 全量扫描：JSON 可解析 + 任何文件都不得残留占位符
 	if dp_dir.is_dir():
@@ -1127,9 +1368,27 @@ def generate(args: argparse.Namespace) -> bool:
 	world_dir.mkdir(parents=True, exist_ok=True)
 	_nbt_save(doc, world_dir / "level.dat")
 
-	# 2) 渲染 datapack（STATIC/MOVING 跳过 VOID 专属文件）
+	# 2) 渲染 datapack（static/moving/capacity 跳过 VOID 专属文件；static/void/capacity 跳过 MOVING 专属文件）
 	placeholders = build_placeholders(args)
 	rendered = render_datapack(world_dir / "datapacks" / "autotrade_test", placeholders, args.mode)
+
+	# 2b) CAPACITY：渲染后写入 23 个 cap_<id>.mcfunction，并导出用例表（人读 md + 机读 json）到证据目录
+	if args.mode == "capacity":
+		func_dir = world_dir / "datapacks" / "autotrade_test" / "data" / "autotrade_test" / "functions"
+		func_dir.mkdir(parents=True, exist_ok=True)
+		for case in capacity_scenarios.CASES:
+			(func_dir / f"cap_{case.id}.mcfunction").write_text(
+				build_capacity_case_function(case), encoding="utf-8", newline="\n"
+			)
+		evidence_dir = ROOT.parent / ".omo" / "evidence" / "capacity-detection-testworld"
+		evidence_dir.mkdir(parents=True, exist_ok=True)
+		capacity_scenarios.export_table(
+			md_path=evidence_dir / "case-table.md",
+			json_path=evidence_dir / "case-table.json",
+		)
+		rendered += len(capacity_scenarios.CASES)
+		print(f"CAPACITY 场景函数: 已生成 {len(capacity_scenarios.CASES)} 个 cap_<id>.mcfunction")
+		print(f"用例表导出:   {evidence_dir / 'case-table.md'} / {evidence_dir / 'case-table.json'}")
 
 	# 3) 备份并写测试配置
 	backup_path = None
@@ -1166,11 +1425,11 @@ def resolve_world_name(args: argparse.Namespace) -> str:
 def main(argv: list[str]) -> int:
 	"""解析参数并执行。"""
 	parser = argparse.ArgumentParser(description="AutoTrade 测试世界生成器（不启动游戏）")
-	parser.add_argument("--mode", choices=("static", "void", "moving"), default="static", help="装置模式（默认 static）")
+	parser.add_argument("--mode", choices=("static", "void", "moving", "capacity"), default="static", help="装置模式（默认 static）")
 	parser.add_argument(
 		"--world-name",
 		default=None,
-		help="世界名（默认 static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest）",
+		help="世界名（默认 static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest / capacity=AutoTradeCapacityTest）",
 	)
 	parser.add_argument("--template-world", default="New World")
 	# 补货间隔默认 5s（= 静止模式轮间隔 tradeInterval 100t）：耗尽后下一轮即补货，避免出现空过轮次
