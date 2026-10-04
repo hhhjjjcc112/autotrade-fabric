@@ -3,7 +3,7 @@
 用途：进入 AutoTradeCapacityTest 世界后自动逐组执行 23 组「背包空位/容量检测」用例：
   1. 每组先禁用 mod 并 reset 机器，再执行 `/function autotrade_test:cap_<id>` 布置前置库存与村民；
   2. 校验前置库存是否与用例表（CAP_CASES）一致（不一致 → ok=0 并跳过启用）；
-  3. reset + 启用 mod，采样 10s（0.5s/次）读取 TradeStats 累计/上次会话成交；
+  3. reset + 启用 mod，采样至多 10s（0.5s/次）读取 TradeStats 累计/上次会话成交/已完成会话数、背包与机器空闲状态（正例与负例均在「已完成≥1 个会话 ∧ 机器空闲无在途任务 ∧ 背包==预期终态（负例且 total==0）」连续 2 次采样后退出；机器状态不可读则跑满窗口）；
   4. 禁用 mod 后采终态（背包 emerald/paper/iron_sword 计数 + 掉落实体数）。
 
 原始数据行格式（Todo 4 `capacity_analysis.py` 逐字解析，字段序与分隔符不可改）：
@@ -76,17 +76,30 @@ CAP_CASES = [
 DEFAULT_SECONDS = 600.0  # 默认整体时限（秒）；23 组 × ~12.5s ≈ 290s，留足余量
 SETUP_WAIT = 1.2  # 执行用例函数后等待库存/村民就位的秒数
 SAMPLE_INTERVAL = 0.5  # 采样间隔（秒）
-SAMPLE_DURATION = 10.0  # 每组启用后的采样窗口（秒）
+SAMPLE_DURATION = 10.0  # 每组启用后的采样窗口上限（秒；会话数/机器空闲状态不可读等无提前退出证据时跑满）
+EARLY_EXIT_STABLE = 2  # 提前退出判据「已完成≥1 会话 ∧ 机器空闲 ∧ 背包==预期终态」的连续成立次数（2 × 0.5s = 1s）
 POST_DISABLE_WAIT = 0.6  # 停用后等待会话收尾/掉落生成的秒数
 ENTITY_RANGE = 16  # 掉落实体统计半径（格）
 
 # 受观注物品（前置/终态计数）
 ITEM_IDS = ("minecraft:emerald", "minecraft:paper", "minecraft:iron_sword")
 
-# mod 反射目标（启用/禁用用；见 _enable_mod / _disable_mod）
+# mod 反射目标（启用/禁用 + 机器空闲状态读取用；见 _enable_mod / _disable_mod / _machine_idle）
 CLS_GENERIC = "com.github.sebseb7.autotrade.config.Configs$Generic"
 CLS_CONFIG_BOOLEAN = "fi.dy.masa.malilib.config.options.ConfigBoolean"
 CLS_TICK = "com.github.sebseb7.autotrade.runtime.AutoTradeClientTick"
+CLS_ABSTRACT = "com.github.sebseb7.autotrade.trade.machine.AbstractTradeMachine"
+
+_CLASS_CACHE = {}  # java_class 结果缓存（类句柄稳定）；仅缓存类句柄，实例/成员句柄一律不缓存
+
+
+def _cached_class(class_name):
+	"""懒加载并缓存 java_class(name) 结果（类句柄稳定，避免每 0.5s 重复解析）。"""
+	cls = _CLASS_CACHE.get(class_name)
+	if cls is None:
+		cls = java_class(class_name)
+		_CLASS_CACHE[class_name] = cls
+	return cls
 
 
 def _as_int(value):
@@ -111,7 +124,7 @@ def _as_int(value):
 
 
 def _stats():
-	"""反射读取 mod TradeStats 单例的累计/上次会话成交；失败返回 {'error': ...}。"""
+	"""反射读取 mod TradeStats 单例的累计/上次会话成交与已完成会话数；失败返回 {'error': ...}。"""
 	try:
 		cls = java_class("com.github.sebseb7.autotrade.trade.stats.TradeStats")
 		inst = java_call_method(cls, java_member(cls, "getInstance"))
@@ -120,9 +133,44 @@ def _stats():
 		return {
 			"total": _as_int(java_call_method(inst, java_member(cls, "getTotalTrades"))),
 			"last": _as_int(java_call_method(inst, java_member(cls, "getLastSessionTrades"))),
+			"sessions": _as_int(java_call_method(inst, java_member(cls, "getSessionCount"))),
 		}
 	except Exception as exc:  # noqa: BLE001
 		return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def _machine_idle():
+	"""反射判断当前机器是否空闲无在途任务：空闲 True / 有在途任务 False / 不可读 None。
+
+	路径：AutoTradeClientTick.getInstance() -> getActiveMachine() 取机器句柄；getIdleReason 是
+	AbstractTradeMachine 上的公共 getter，故方法句柄须从 AbstractTradeMachine 类获取。
+	注意：Minescript 对 Java null 对象返回的是「对象句柄 int」而非 Python None（句柄 referent
+	为 null），故不能用 `task is None` 之类身份判断；改为读 getIdleReason() 字符串：BUSY 三值
+	（TRADING / CONTAINER_IO / RETURN_TRIGGER = 有在途任务）→ False，其余值（ROUND_COOLDOWN /
+	INVENTORY_FULL / ALL_PROCESSED / IO_INTERVAL / NONE 等空闲态）→ True。getActiveMachine()
+	返回 None、文本为空 / "null"（不可读）或反射失败均返回 None，由调用方退回「跑满采样窗口」。
+	「机器空闲」是提前退出的必需守卫：会话刚结算但下一任务可能已派发，若屏幕仍打开时调用
+	_disable_mod() 会打断在途会话，故仅当确认空闲才允许退出。
+	"""
+	try:
+		cls_tick = _cached_class(CLS_TICK)
+		inst = java_call_method(cls_tick, java_member(cls_tick, "getInstance"))
+		if inst is None:
+			return None
+		machine = java_call_method(inst, java_member(cls_tick, "getActiveMachine"))
+		if machine is None:
+			return None
+		cls_abstract = _cached_class(CLS_ABSTRACT)
+		raw = java_to_string(java_call_method(machine, java_member(cls_abstract, "getIdleReason")))
+		text = "" if raw is None else str(raw).strip()
+		# java_to_string 可能对字符串值加包裹引号（先例：moving_test._hunger_stats），先剥引号再判读
+		if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+			text = text[1:-1]
+		if not text or text.lower() == "null":
+			return None
+		return text not in ("TRADING", "CONTAINER_IO", "RETURN_TRIGGER")
+	except Exception:  # noqa: BLE001
+		return None
 
 
 def _enabled_handle():
@@ -246,22 +294,51 @@ def _run_case(case):
 			return 0, True
 		# 4) reset + 启用 mod（等价 Toggle Trading 热键）
 		_enable_mod()
-		# 5) 采样窗口：内部记录 total/last/screen，不打印采样行（避免污染 [cap] 解析）
+		enable_time = time.time()
+		# 5) 采样窗口：内部记录 total/last/sessions/cur/screen，不打印采样行（避免污染 [cap] 解析）
 		total = 0
 		last = 0
 		screen_seen = None
-		sample_deadline = time.time() + SAMPLE_DURATION
+		streak = 0  # 提前退出判据「已完成≥1 会话 ∧ 机器空闲 ∧ 背包==预期终态」的连续成立次数
+		is_positive = case["final"] != case["pre"]
+		expected = (case["final"]["emerald"], case["final"]["paper"], case["final"]["iron_sword"])
+		sample_deadline = enable_time + SAMPLE_DURATION
 		while time.time() < sample_deadline:
 			stats = _stats()
 			if "error" not in stats:
-				if isinstance(stats.get("total"), int):
-					total = stats["total"]
+				sampled_total = stats.get("total")
+				if isinstance(sampled_total, int):
+					total = sampled_total
 				if isinstance(stats.get("last"), int):
 					last = stats["last"]
 			try:
 				screen_seen = screen_name()
 			except Exception:  # noqa: BLE001
 				screen_seen = None
+			# 会话数与机器空闲状态（任一不可读 → 判据不成立，退回跑满窗口）
+			sessions = stats.get("sessions") if "error" not in stats else None
+			idle = _machine_idle()
+			# 采样背包与用例预期终态一致方满足判据（_count_items 失败返回 (0,0,0) 自然不命中）
+			cur = _count_items()
+			# 判据：已完成≥1 个会话 ∧ 机器空闲无在途任务（守卫：避免 _disable_mod 打断在途会话）
+			# ∧ 背包==预期终态；负例另要求 total==0（证明确实未成交），正例以会话+终态为准
+			evidence = (
+				isinstance(sessions, int)
+				and sessions >= 1
+				and idle is True
+				and cur == expected
+				and (is_positive or total == 0)
+			)
+			if evidence:
+				streak += 1
+			else:
+				streak = 0
+			if streak >= EARLY_EXIT_STABLE:
+				log(
+					f"[cap] early-exit id={case_id} after {time.time() - enable_time:.1f}s "
+					f"sessions={sessions} (final reached, total={total})"
+				)
+				break
 			time.sleep(SAMPLE_INTERVAL)
 		# 6) 停用 mod，等待会话收尾 / 掉落生成
 		_disable_mod()

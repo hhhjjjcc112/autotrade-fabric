@@ -422,4 +422,32 @@ public class MovingTradeMachine extends AbstractTradeMachine {
 	public int getStarvationCount() {
 		return starvation.size();
 	}
+
+	/** 返回当前饥饿记账中的最大饥饿值（无条目时为 0；HUD/测试只读展示用） */
+	public int getMaxStarvation() {
+		int max = 0;
+		for (int value : starvation.values()) {
+			if (value > max) {
+				max = value;
+			}
+		}
+		return max;
+	}
+
+	/** 汇总全部村民饥饿值（uuid 前 8 位=饥饿值，逗号分隔；无村民条目时为 "-"；容器条目不计入） */
+	public String getVillagerHungerSummary() {
+		List<String> parts = new ArrayList<>();
+		for (Map.Entry<StarvationKey, Integer> entry : starvation.entrySet()) {
+			if (entry.getKey() instanceof VillagerKey v) {
+				String uuid = v.uuid().toString();
+				parts.add(uuid.substring(0, Math.min(8, uuid.length())) + "=" + entry.getValue());
+			}
+		}
+		if (parts.isEmpty()) {
+			return "-";
+		}
+		// 按渲染后的 "<uuid8>=<hunger>" 字典序排序，保证输出稳定可复现
+		parts.sort(Comparator.naturalOrder());
+		return String.join(",", parts);
+	}
 }

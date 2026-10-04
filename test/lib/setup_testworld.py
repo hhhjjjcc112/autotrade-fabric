@@ -973,11 +973,12 @@ def build_moving_item_io() -> list[dict]:
 
 
 def build_test_config(args: argparse.Namespace) -> str:
-	"""按模式构造测试 mod 配置 JSON 文本（STATIC 语义不变；VOID 用虚空参数；MOVING 用移动参数）。"""
+	"""按模式构造测试 mod 配置 JSON 文本（STATIC 快节奏 2s 联动；VOID 用虚空参数；MOVING 用移动参数）。"""
 	layout = LAYOUTS[args.mode]
 	is_void = args.mode == "void"
 	is_moving = args.mode == "moving"
 	is_capacity = args.mode == "capacity"
+	is_static = args.mode == "static"
 	emerald = json.dumps({"id": "minecraft:emerald"}, separators=(",", ":"))
 	output = json.dumps({"id": args.output_item}, separators=(",", ":"))
 	ix, iy, iz = layout.input_chest
@@ -1070,13 +1071,15 @@ def build_test_config(args: argparse.Namespace) -> str:
 			"outputMoveCap": 999,
 			"tradeCacheTtl": 0 if is_capacity else 3000,
 			# 跳过开窗时间（skipOpenTtl）：有匹配交易对但本会话无可执行交易（已耗尽 / 成本不足）的村民跳过开窗
-			# 的复查间隔；测试设为 100（= 1 轮 5s）→ 耗尽后下一轮即重试，配合 5s 补货验证刷新节奏；
-			# CAPACITY 置 0（每轮都重试，逐用例期望不被缓存跳过干扰）
-			"skipOpenTtl": 0 if is_capacity else 100,
+			# 的复查间隔；STATIC 快节奏设为 40（= 1 轮 2s）→ 耗尽后下一轮即重试，配合 2s 补货验证刷新节奏；
+			# 其他模式（VOID/MOVING）保持 100（= 1 轮 5s）；CAPACITY 置 0（每轮都重试，逐用例期望不被缓存跳过干扰）
+			"skipOpenTtl": 0 if is_capacity else (40 if is_static else 100),
 			"tradePairs": trade_pairs,
 			"itemIO": item_io,
 		},
-		"Static": {"tradeInterval": 100, "containerIOInterval": 10, "containerIOIdleInterval": 5},
+		# STATIC 快节奏：restock 2s = tradeInterval 40t = skipOpenTtl 40t，三者联动，保证每轮恰逢补货，避免空转；
+		# 其他模式保持原节奏（tradeInterval 100t = 5s）；containerIO 间隔不变
+		"Static": {"tradeInterval": 40 if is_static else 100, "containerIOInterval": 10, "containerIOIdleInterval": 5},
 		"Moving": {
 			# MOVING 测试用 1.5（默认值）：扫描范围 8×1.5=12 < 同侧村民间距 24 / 对侧间距 36
 			"movingRangeMultiplier": 1.5 if is_moving else 1.0,
@@ -1172,8 +1175,11 @@ def _verify_capacity_sync(results: list[tuple[str, bool, str]]) -> None:
 	)
 
 
-def verify(world_name: str, mode: str) -> bool:
-	"""只读校验生成结果（按模式选择布局与期望文件）；打印每条断言，返回是否全部通过。"""
+def verify(world_name: str, mode: str, restock_seconds: int | None = None) -> bool:
+	"""只读校验生成结果（按模式选择布局与期望文件）；打印每条断言，返回是否全部通过。
+
+	restock_seconds：调用方已解析的补货间隔（generate/--verify 传入；None 时跳过补货计时器断言，兼容外部旧调用）。
+	"""
 	results: list[tuple[str, bool, str]] = []
 	layout = LAYOUTS[mode]
 	world_dir = SAVES_DIR / world_name
@@ -1250,6 +1256,46 @@ def verify(world_name: str, mode: str) -> bool:
 	else:
 		for rel in MOVING_ONLY_DATAPACK_FILES:
 			_check(results, f"{mode.upper()} 未渲染 MOVING 文件 {rel}", not (dp_dir / rel).exists(), str(dp_dir / rel))
+
+	if mode == "static":
+		# —— STATIC 快节奏配置断言：tradeInterval 40t = skipOpenTtl 40t（= 默认补货 2s 一轮，三者联动）——
+		if CONFIG_PATH.is_file():
+			static_cfg: dict = {}
+			generic_cfg: dict = {}
+			try:
+				cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+				static_cfg = cfg.get("Static", {})
+				generic_cfg = cfg.get("Generic", {})
+				_check(results, "配置 JSON 可解析", True, "")
+			except Exception as exc:  # noqa: BLE001
+				_check(results, "配置 JSON 可解析", False, f"{type(exc).__name__}: {exc}")
+			_check(
+				results,
+				"配置 Static.tradeInterval == 40",
+				static_cfg.get("tradeInterval") == 40,
+				repr(static_cfg.get("tradeInterval")),
+			)
+			_check(
+				results,
+				"配置 skipOpenTtl == 40",
+				generic_cfg.get("skipOpenTtl") == 40,
+				repr(generic_cfg.get("skipOpenTtl")),
+			)
+			if restock_seconds is not None:
+				# datapack 补货计时器与调用方解析值联动（STATIC 默认 2s → matches 40..）
+				tick_path = dp_dir / "data" / "autotrade_test" / "functions" / "tick_periodic.mcfunction"
+				if tick_path.is_file():
+					tick_text = tick_path.read_text(encoding="utf-8")
+					_check(
+						results,
+						f"补货计时器 #t_restock matches {restock_seconds * 20}..",
+						f"#t_restock autotrade_test matches {restock_seconds * 20}.." in tick_text,
+						"",
+					)
+				else:
+					_check(results, "tick_periodic.mcfunction 存在", False, str(tick_path))
+		else:
+			_check(results, "配置文件存在", False, str(CONFIG_PATH))
 
 	if mode == "capacity":
 		# —— CAPACITY 专属：23 个场景函数内容 + 配置 JSON + 表↔脚本同步 ——
@@ -1414,7 +1460,7 @@ def generate(args: argparse.Namespace) -> bool:
 	print(f'  .\\gradlew --no-daemon runClient --args="--quickPlaySingleplayer {args.world_name}"')
 
 	# 5) 校验
-	return verify(args.world_name, args.mode)
+	return verify(args.world_name, args.mode, args.restock_seconds)
 
 
 def resolve_world_name(args: argparse.Namespace) -> str:
@@ -1432,8 +1478,9 @@ def main(argv: list[str]) -> int:
 		help="世界名（默认 static=AutoTradeTest / void=AutoTradeVoidTest / moving=AutoTradeMovingTest / capacity=AutoTradeCapacityTest）",
 	)
 	parser.add_argument("--template-world", default="New World")
-	# 补货间隔默认 5s（= 静止模式轮间隔 tradeInterval 100t）：耗尽后下一轮即补货，避免出现空过轮次
-	parser.add_argument("--restock-seconds", type=int, default=5)
+	# 补货间隔默认按模式解析（见 main）：STATIC 快节奏 2s（= tradeInterval 40t），其他模式 5s（= 100t）；
+	# 耗尽后下一轮即补货，避免出现空过轮次
+	parser.add_argument("--restock-seconds", type=int, default=None, help="村民补货间隔秒数（默认 STATIC=2，其他模式=5）")
 	parser.add_argument("--clear-seconds", type=int, default=10)
 	parser.add_argument("--refill-seconds", type=int, default=20)
 	parser.add_argument("--max-uses", type=int, default=64)
@@ -1445,10 +1492,13 @@ def main(argv: list[str]) -> int:
 	parser.add_argument("--fresh", action="store_true")
 	parser.add_argument("--verify", action="store_true")
 	args = parser.parse_args(argv)
+	# 未显式指定补货间隔时按模式解析默认值：STATIC=2（快节奏，与 tradeInterval/skipOpenTtl 40t 联动），其他模式=5
+	if args.restock_seconds is None:
+		args.restock_seconds = 2 if args.mode == "static" else 5
 	args.world_name = resolve_world_name(args)
 
 	if args.verify:
-		return 0 if verify(args.world_name, args.mode) else 1
+		return 0 if verify(args.world_name, args.mode, args.restock_seconds) else 1
 	return 0 if generate(args) else 1
 
 

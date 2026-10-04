@@ -12,6 +12,8 @@ public class TradeStats {
 	private long totalTrades;
 	/** 最近一次会话的成交数（含 0 笔会话） */
 	private int lastSessionTrades;
+	/** 已完成会话数（含 0 成交会话）；会话结束统一入口 recordSession 累加 */
+	private int sessionCount;
 	/** 成功完成的容器输入操作数 */
 	private long ioInputOps;
 	/** 成功完成的容器输出操作数 */
@@ -25,12 +27,13 @@ public class TradeStats {
 	}
 
 	/**
-	 * 记录一次会话结束：把本次成交数累加到累计成交数，并更新最近一次会话成交数。 所有会话结束出口（含 0 笔会话）都应调用，保证 HUD
+	 * 记录一次会话结束：把本次成交数累加到累计成交数，更新最近一次会话成交数，并累加已完成会话数。 所有会话结束出口（含 0 笔会话）都应调用，保证 HUD
 	 * 会话计数不显示过期值。
 	 */
 	public void recordSession(int trades) {
 		totalTrades += trades;
 		lastSessionTrades = trades;
+		sessionCount++;
 	}
 
 	/**
@@ -50,6 +53,7 @@ public class TradeStats {
 	public void reset() {
 		totalTrades = 0;
 		lastSessionTrades = 0;
+		sessionCount = 0;
 		ioInputOps = 0;
 		ioOutputOps = 0;
 	}
@@ -68,5 +72,10 @@ public class TradeStats {
 
 	public long getIoOutputOps() {
 		return ioOutputOps;
+	}
+
+	/** 返回已完成会话数（含 0 成交会话）；测试 / HUD 只读展示用 */
+	public int getSessionCount() {
+		return sessionCount;
 	}
 }

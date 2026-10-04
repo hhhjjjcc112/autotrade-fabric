@@ -60,6 +60,9 @@ DEFAULT_SECONDS = 180.0  # 默认观测时长（秒）
 WAIT_RIG_TIMEOUT = 60.0  # 等待装置就绪上限（秒）
 STATUS_INTERVAL = 10.0  # 状态行间隔（秒）
 PASS_MIN_TRADES = 64  # 判定 PASS 所需最少成交数（一个补货周期满量）
+MIN_TRADE_SESSIONS = 5  # 判定 PASS 所需最少已完成交易会话数（证明跨多轮/补货周期稳定，非只跑一轮）
+MIN_SOAK_SECONDS = 8.0  # 提前退出前必须达到的最短浸泡时长（秒；之后按一轮交易完整结算判定）
+EARLY_EXIT_STABLE = 2  # 提前退出所需的连续满足判据的状态评估次数
 
 
 def _as_int(value):
@@ -93,6 +96,7 @@ def _trade_stats():
 		return {
 			"total": _as_int(java_call_method(inst, java_member(cls, "getTotalTrades"))),
 			"last": _as_int(java_call_method(inst, java_member(cls, "getLastSessionTrades"))),
+			"sessions": _as_int(java_call_method(inst, java_member(cls, "getSessionCount"))),
 			"io_in": _as_int(java_call_method(inst, java_member(cls, "getIoInputOps"))),
 			"io_out": _as_int(java_call_method(inst, java_member(cls, "getIoOutputOps"))),
 		}
@@ -108,6 +112,21 @@ def _count_item(item_id):
 		if (stack.item or "").split(":", 1)[-1] == short:
 			total += stack.count
 	return total
+
+
+def _criteria_met(mod):
+	"""PASS 判据（循环内提前退出与最终 verdict 共用，防止阈值漂移）：成交达标、输入/输出 IO 各至少 1 次，且已完成会话数达标。"""
+	if not isinstance(mod, dict) or "error" in mod:
+		return False
+	total = mod.get("total")
+	io_in = mod.get("io_in")
+	io_out = mod.get("io_out")
+	sessions = mod.get("sessions")
+	if not (
+		isinstance(total, int) and isinstance(io_in, int) and isinstance(io_out, int) and isinstance(sessions, int)
+	):
+		return False
+	return total >= PASS_MIN_TRADES and io_in >= 1 and io_out >= 1 and sessions >= MIN_TRADE_SESSIONS
 
 
 def _block_id(block_state):
@@ -152,10 +171,47 @@ def _check_rig():
 	return blocks_ok, lines
 
 
-# mod 反射目标（自动启用用；见 _enable_mod）
+# mod 反射目标（自动启用 / 轮结算判定用；见 _enable_mod / _round_settled）
 CLS_GENERIC = "com.github.sebseb7.autotrade.config.Configs$Generic"
 CLS_CONFIG_BOOLEAN = "fi.dy.masa.malilib.config.options.ConfigBoolean"
 CLS_TICK = "com.github.sebseb7.autotrade.runtime.AutoTradeClientTick"
+CLS_STATIC = "com.github.sebseb7.autotrade.trade.mode.StaticTradeMachine"
+
+_CLASS_CACHE = {}  # java_class 结果缓存（类句柄稳定）；仅缓存类句柄，实例/成员句柄一律不缓存
+
+
+def _cached_class(class_name):
+	"""懒加载并缓存 java_class(name) 结果（类句柄稳定，避免循环内重复解析）。"""
+	cls = _CLASS_CACHE.get(class_name)
+	if cls is None:
+		cls = java_class(class_name)
+		_CLASS_CACHE[class_name] = cls
+	return cls
+
+
+def _round_settled():
+	"""判断 STATIC 是否已完整结算一轮交易（结构性提前退出依据）。
+
+	路径：AutoTradeClientTick.getInstance() -> getActiveMachine() 取当前机器；机器声明类型为
+	TradingMachine 基类，getTradeCooldown/getTargetCount 是 StaticTradeMachine 上的方法，
+	故方法句柄须从 StaticTradeMachine 类获取。轮冷却在每轮结束时被置为正值，且本轮扫描到的
+	村民数（targetCount）在冷却期间保持 >=1——两者同时成立即视为一轮已完整结算。
+	未启用（machine=None）/反射失败一律返回 False，调用方按原路径跑满上限。
+	"""
+	try:
+		cls_tick = _cached_class(CLS_TICK)
+		inst = java_call_method(cls_tick, java_member(cls_tick, "getInstance"))
+		if inst is None:
+			return False
+		machine = java_call_method(inst, java_member(cls_tick, "getActiveMachine"))
+		if machine is None:
+			return False
+		cls_static = _cached_class(CLS_STATIC)
+		cooldown = _as_int(java_call_method(machine, java_member(cls_static, "getTradeCooldown")))
+		target = _as_int(java_call_method(machine, java_member(cls_static, "getTargetCount")))
+		return isinstance(cooldown, int) and cooldown > 0 and isinstance(target, int) and target >= 1
+	except Exception:  # noqa: BLE001
+		return False
 
 
 def _enabled_handle():
@@ -252,6 +308,7 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 	deadline = time.time() + float(seconds)
 	next_status = time.time() + STATUS_INTERVAL
 	start = time.time()
+	criteria_streak = 0  # 连续满足 PASS 判据且交易轮已结算的评估次数（用于提前退出）
 
 	with EventQueue() as event_queue:
 		event_queue.register_chat_listener()
@@ -272,9 +329,10 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 						stats["cleared"] = int(match.group(1))
 						stats["total"] = int(match.group(2))
 						stats["restocks"] = int(match.group(3))
+			# 每个循环迭代读取一次 mod 统计快照（状态行与提前退出判定共用，避免重复反射）
+			mod = _trade_stats()
 			if time.time() >= next_status:
 				next_status = time.time() + STATUS_INTERVAL
-				mod = _trade_stats()
 				emerald = _count_item("minecraft:emerald")
 				paper = _count_item("minecraft:paper")
 				log(
@@ -282,6 +340,20 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 					f"inv(emerald={emerald}, paper={paper}) chat(cleared={stats['cleared']}, "
 					f"total={stats['total']}, restocks={stats['restocks']}) mod={mod}"
 				)
+			# 提前退出：判据连续稳定满足 且 一轮交易已完整结算（轮冷却>0 且本轮村民数>=1）；
+			# 不满足时行为与原来一致（跑满 seconds 上限，最终 FAIL）
+			met = _criteria_met(mod) and _round_settled()
+			if met:
+				criteria_streak += 1
+			else:
+				criteria_streak = 0
+			elapsed = time.time() - start
+			if criteria_streak >= EARLY_EXIT_STABLE and elapsed >= MIN_SOAK_SECONDS:
+				log(
+					f"[early-exit] criteria met after {int(elapsed)}s "
+					f"(round settled, soak>={int(MIN_SOAK_SECONDS)}s, stable={EARLY_EXIT_STABLE})"
+				)
+				break
 
 	# 汇总与判定（mod 反射为主信号；反射不可用/取值为空时回退聊天累计）
 	mod = _trade_stats()
@@ -293,7 +365,7 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 		verdict_ok = stats["total"] >= PASS_MIN_TRADES
 		reasons.append(f"mod 反射不可用/返回空（{mod.get('error', 'value=None')}）→ 以聊天累计为准")
 	else:
-		verdict_ok = total >= PASS_MIN_TRADES and io_in >= 1 and io_out >= 1
+		verdict_ok = _criteria_met(mod)
 		reasons.append(f"mod: totalTrades={total} lastSession={mod.get('last')} ioIn={io_in} ioOut={io_out}")
 	reasons.append(
 		f"chat: 打印行={stats['lines']} 累计清空={stats['total']} 补货={stats['restocks']} 就绪提示={stats['ready_seen']}"

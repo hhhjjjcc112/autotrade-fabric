@@ -12,7 +12,7 @@
      - 反射读取 TradeStats（累计成交 / IO 输入输出次数）与饥饿计数：
        AutoTradeClientTick.getActiveMachine() → MovingTradeMachine.getStarvationCount()，
        每采样一次（0.5s）取最大值；反射失败静默（最终按 0 计 → FAIL）；
-     - 每 5s 打印一行 [status]（pos/trades/ioIn/ioOut/screen/laps/starve）；
+      - 每 5s 打印一行 [status]（pos/trades/ioIn/ioOut/screen/laps/starve/hunger）；
      - 卡死看守：连续 4s 位置变化 <1.5 格且 screen_name() 为 None → stuck += 1 并重挂矿车；
   4. 结束时输出 §1 冻结格式的单行 [verdict]（v2，含 starve），截图并（默认）自动关闭客户端。
 
@@ -33,6 +33,8 @@ verdict 单行格式（v2，勿改）：
 """
 
 import math
+import os
+import re
 import sys
 import time
 
@@ -83,6 +85,10 @@ PASS_MIN_GROWTH = 2  # 判定 PASS 所需最少「成交增长的圈数」（证
 PASS_MIN_IO_IN = 2  # 判定 PASS 所需最少输入容器 IO 次数（emerald / wheat 各 ≥1）
 PASS_MIN_IO_OUT = 3  # 判定 PASS 所需最少输出容器 IO 次数（paper / book / glass 各 ≥1）
 PASS_MIN_STARVE = 1  # 判定 PASS 所需最少饥饿记账条目数（证明饥饿记账生效；饥饿**阈值 ≥4** 由入口后置检查日志「长期未被服务」提示断言）
+MIN_SOAK_SECONDS = 15.0  # 主判据（入口等价日志场景校验）的最短观测时长（秒），避免刚进图日志尚未稳定即提前收尾
+MIN_EARLY_EXIT_LAPS = 4  # 回退代理路径所需最少圈数；仅当日志不可读时使用（主判据改看日志侧 distinct>=14 / 让位>=1 / 三输出清空>0，不看圈数下限）
+FALLBACK_SOAK_SECONDS = 110.0  # 回退代理路径的最短观测时长（秒）；主判据（入口等价日志校验）不依赖此时长
+EARLY_EXIT_STABLE = 2  # 提前结束前判据需连续成立的采样次数（0.5s/次，防单次采样抖动误判）
 
 
 def _as_int(value):
@@ -109,7 +115,7 @@ def _as_int(value):
 def _trade_stats():
 	"""反射读取 mod TradeStats 单例；失败返回 {'error': ...}（脚本继续走位置/方块信号）。"""
 	try:
-		cls = java_class("com.github.sebseb7.autotrade.trade.stats.TradeStats")
+		cls = _cached_class(CLS_TRADE_STATS)
 		inst = java_call_method(cls, java_member(cls, "getInstance"))
 		if inst is None:
 			return {"error": "TradeStats.getInstance() -> None"}
@@ -132,6 +138,134 @@ def _stat_int(stats, key):
 def _ori0(value):
 	"""把可能为 None 的统计值归一为 int，便于展示与比较（None -> 0）。"""
 	return value if isinstance(value, int) else 0
+
+
+def _criteria_met(rig_flag, enabled_flag, dist, laps, trades, io_in, io_out, growth, starve):
+	"""PASS 判定条件的单一来源：循环内提前结束与最终 [verdict] 共用，防两处阈值漂移。
+
+	口径与脚本头部冻结的 [verdict] 完全一致；各参数须已归一为 int（dist 取整格）。
+	"""
+	return (
+		rig_flag == 1
+		and enabled_flag == 1
+		and dist >= PASS_MIN_DIST
+		and laps >= PASS_MIN_LAPS
+		and trades >= PASS_MIN_TRADES
+		and io_in >= PASS_MIN_IO_IN
+		and io_out >= PASS_MIN_IO_OUT
+		and growth >= PASS_MIN_GROWTH
+		and starve >= PASS_MIN_STARVE
+	)
+
+
+class _EntryLogTail:
+	"""增量读取本轮 latest.log，复刻入口 moving.py 的场景判据（与最终退出码同源）。
+
+	入口准入 = 游戏内 verdict PASS **且** 日志场景校验通过（distinct>=14 / 让位>=1 /
+	三输出清空均 >0）。本类让脚本自己读到同一标准，据此提前结束，而不必依赖
+	「圈数 ≥4 且 ≥110s」这一人工代理。日志缺失/读取失败时静默（available=False），
+	由调用方回退到旧代理，不抛异常、不阻塞。
+	"""
+
+	# 与 test/moving.py 的 analyze_log() 逐字一致（正则/标记/阈值不得漂移）
+	_RE_SESSION = re.compile(r"TRADE_SESSION \(villager uuid=([0-9a-f-]+)\)")
+	_YIELD_MARKER = "让位抢占"
+	_RE_PAPER = re.compile(r"\[cleared=(\d+) total=(\d+)")
+	_RE_BOOK = re.compile(r"\[clr:book=(\d+)")
+	_RE_GLASS = re.compile(r"\[clr:glass=(\d+)")
+	_MIN_DISTINCT = 14  # 场景校验：被服务村民 distinct 下限（与入口 SCENARIO_MIN_DISTINCT 一致）
+
+	def __init__(self):
+		"""解析候选日志路径（首选脚本同目录的 ../logs/latest.log），初始化累计量与偏移。"""
+		script_dir = os.path.dirname(os.path.abspath(__file__))
+		self._candidates = [
+			os.path.join(script_dir, "..", "logs", "latest.log"),
+			os.path.join(os.getcwd(), "logs", "latest.log"),
+		]
+		self._path = None  # 当前选中的日志路径（惰性解析）
+		self._offset = 0  # 已读取到的字节偏移（增量读取）
+		self._pending = b""  # 上次读取残留的不完整行字节（跨 poll 拼接）
+		self.available = False  # 日志是否可读（决定用主判据还是回退代理）
+		self.uuids = set()  # distinct 会话村民 UUID
+		self.yields = 0  # 让位抢占事件计数
+		self.paper_max = 0  # paper 清空累计（取 max，与入口一致）
+		self.book_sum = 0  # book 单轮清空量之和
+		self.glass_sum = 0  # glass 单轮清空量之和
+
+	def _resolve(self):
+		"""按候选顺序惰性重查并返回当前日志路径；切换文件时重置读取状态与累计量。"""
+		resolved = None
+		for candidate in self._candidates:
+			if os.path.isfile(candidate):
+				resolved = candidate
+				break
+		if resolved != self._path:
+			# 首次选定 / 候选优先级变化 / 文件消失：一律从头重读，避免跨文件串账
+			self._path = resolved
+			self._offset = 0
+			self._pending = b""
+			self.uuids = set()
+			self.yields = 0
+			self.paper_max = 0
+			self.book_sum = 0
+			self.glass_sum = 0
+		return resolved
+
+	def _consume(self, chunk: bytes):
+		"""按行解析新增字节（只解码完整行，避免多字节中文标记被截断），累加四项统计。"""
+		chunk = self._pending + chunk
+		lines = chunk.split(b"\n")
+		self._pending = lines.pop()  # 末尾可能是被截断的半行，留待下次拼接
+		for raw in lines:
+			line = raw.decode("utf-8", errors="replace")
+			for uuid in self._RE_SESSION.findall(line):
+				self.uuids.add(uuid)
+			self.yields += line.count(self._YIELD_MARKER)
+			for _cleared, total in self._RE_PAPER.findall(line):
+				value = int(total)
+				if value > self.paper_max:
+					self.paper_max = value
+			self.book_sum += sum(int(n) for n in self._RE_BOOK.findall(line))
+			self.glass_sum += sum(int(n) for n in self._RE_GLASS.findall(line))
+
+	def poll(self):
+		"""读取自上次 poll 以来的新增日志并累加统计；缺失/读取失败置 available=False 且不抛异常。"""
+		path = self._resolve()
+		if path is None:
+			self.available = False
+			return self
+		try:
+			size = os.path.getsize(path)
+			if size < self._offset:
+				# 轮转 / 截断：重置偏移与全部累计量，从头重读新文件
+				self._offset = 0
+				self._pending = b""
+				self.uuids = set()
+				self.yields = 0
+				self.paper_max = 0
+				self.book_sum = 0
+				self.glass_sum = 0
+			with open(path, "rb") as handle:  # 只读打开、seek 到偏移，绝不整文件重读
+				handle.seek(self._offset)
+				chunk = handle.read()
+				self._offset = handle.tell()
+			if chunk:
+				self._consume(chunk)
+			self.available = True
+		except OSError:
+			# Windows 文件占用 / 权限 / 瞬时消失等：静默降级，由调用方回退代理路径
+			self.available = False
+		return self
+
+	def entry_ok(self):
+		"""入口场景校验的等价判定：distinct≥14 且 让位≥1 且三输出清空均 >0。"""
+		return (
+			len(self.uuids) >= self._MIN_DISTINCT
+			and self.yields >= 1
+			and self.paper_max > 0
+			and self.book_sum > 0
+			and self.glass_sum > 0
+		)
 
 
 def _block_id(block_state):
@@ -192,20 +326,32 @@ CLS_GENERIC = "com.github.sebseb7.autotrade.config.Configs$Generic"
 CLS_CONFIG_BOOLEAN = "fi.dy.masa.malilib.config.options.ConfigBoolean"
 CLS_TICK = "com.github.sebseb7.autotrade.runtime.AutoTradeClientTick"
 CLS_MOVING_MACHINE = "com.github.sebseb7.autotrade.trade.mode.MovingTradeMachine"
+CLS_TRADE_STATS = "com.github.sebseb7.autotrade.trade.stats.TradeStats"
+
+_CLASS_CACHE = {}  # java_class 结果缓存（类句柄稳定）；仅缓存类句柄，实例/成员句柄一律不缓存
+
+
+def _cached_class(class_name):
+	"""懒加载并缓存 java_class(name) 结果（类句柄稳定，避免每 0.5s 重复解析）。"""
+	cls = _CLASS_CACHE.get(class_name)
+	if cls is None:
+		cls = java_class(class_name)
+		_CLASS_CACHE[class_name] = cls
+	return cls
 
 
 def _enabled_handle():
 	"""取 mod Configs.Generic.ENABLED 的 Java 对象句柄（java_access_field 供静态字段取值）。"""
 	from minescript import java_access_field
 
-	cls = java_class(CLS_GENERIC)
+	cls = _cached_class(CLS_GENERIC)
 	return java_access_field(cls, java_member(cls, "ENABLED"))
 
 
 def _mod_enabled():
 	"""读取 mod 启用状态（True/False）；反射失败返回 None。"""
 	try:
-		cb = java_class(CLS_CONFIG_BOOLEAN)
+		cb = _cached_class(CLS_CONFIG_BOOLEAN)
 		value = java_call_method(_enabled_handle(), java_member(cb, "getBooleanValue"))
 		text = str(java_to_string(value)).strip().lower()
 		if text in ("true", "false"):
@@ -225,8 +371,8 @@ def _enable_mod():
 	都需要一次显式启用；Minescript 无法触发 malilib 热键（malilib 不走原版 KeyMapping），
 	因此用反射复刻热键回调的效果。
 	"""
-	cb = java_class(CLS_CONFIG_BOOLEAN)
-	cls_tick = java_class(CLS_TICK)
+	cb = _cached_class(CLS_CONFIG_BOOLEAN)
+	cls_tick = _cached_class(CLS_TICK)
 	inst = java_call_method(cls_tick, java_member(cls_tick, "getInstance"))
 	java_call_method(inst, java_member(cls_tick, "reset"))
 	java_call_method(_enabled_handle(), java_member(cb, "toggleBooleanValue"))
@@ -241,17 +387,48 @@ def _starvation_count():
 	由调用方按「静默失败」处理（最终按 0 计 → FAIL），不抛异常、不打断观测。
 	"""
 	try:
-		cls_tick = java_class(CLS_TICK)
+		cls_tick = _cached_class(CLS_TICK)
 		inst = java_call_method(cls_tick, java_member(cls_tick, "getInstance"))
 		if inst is None:
 			return None
 		machine = java_call_method(inst, java_member(cls_tick, "getActiveMachine"))
 		if machine is None:
 			return None
-		cls_mv = java_class(CLS_MOVING_MACHINE)
+		cls_mv = _cached_class(CLS_MOVING_MACHINE)
 		return _as_int(java_call_method(machine, java_member(cls_mv, "getStarvationCount")))
 	except Exception:  # noqa: BLE001
 		return None
+
+
+def _hunger_stats():
+	"""反射读取饥饿统计 (count, max_hunger, summary)；任何失败返回 (0, 0, "-")，绝不抛异常。
+
+	count/max 分别来自 getStarvationCount()/getMaxStarvation()；summary 来自
+	getVillagerHungerSummary()（形如 "uuid8=hunger,..."，无村民条目时为 "-"），
+	经 java_to_string() 解引用并去除可能的包裹引号，仅供 [status]/[early-exit] 观测。
+	"""
+	try:
+		cls_tick = _cached_class(CLS_TICK)
+		inst = java_call_method(cls_tick, java_member(cls_tick, "getInstance"))
+		if inst is None:
+			return (0, 0, "-")
+		machine = java_call_method(inst, java_member(cls_tick, "getActiveMachine"))
+		if machine is None:
+			return (0, 0, "-")
+		cls_mv = _cached_class(CLS_MOVING_MACHINE)
+		count = _as_int(java_call_method(machine, java_member(cls_mv, "getStarvationCount")))
+		max_hunger = _as_int(java_call_method(machine, java_member(cls_mv, "getMaxStarvation")))
+		raw = java_to_string(java_call_method(machine, java_member(cls_mv, "getVillagerHungerSummary")))
+		summary = "" if raw is None else str(raw).strip()
+		if len(summary) >= 2 and summary[0] == '"' and summary[-1] == '"':
+			summary = summary[1:-1]
+		return (
+			count if isinstance(count, int) else 0,
+			max_hunger if isinstance(max_hunger, int) else 0,
+			summary if summary else "-",
+		)
+	except Exception:  # noqa: BLE001
+		return (0, 0, "-")
 
 
 def _remount_cart():
@@ -323,6 +500,8 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 
 	watch_pos = None  # 卡死看守窗口起点
 	watch_time = time.time()
+	early_streak = 0  # 提前结束稳定性计数（PASS 条件连续成立的采样次数）
+	tail = _EntryLogTail()  # 增量读取本轮日志（入口等价场景校验），供提前结束判定使用
 
 	deadline = time.time() + float(seconds)
 	next_status = time.time() + STATUS_INTERVAL
@@ -362,6 +541,9 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 		if starve_now is not None and (starve_max is None or starve_now > starve_max):
 			starve_max = starve_now
 
+		# 增量读取本轮日志新增字节（只读 offset 之后的部分）；供入口等价场景校验使用
+		tail.poll()
+
 		# 卡死看守：4s 窗口内位置变化 <1.5 格且无界面 → 计数并重挂矿车
 		if now - watch_time >= STALL_WINDOW:
 			moved = _horizontal_distance(pos, watch_pos) if pos is not None else 0.0
@@ -385,14 +567,54 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 				lap_marker_trades = trades if trades is not None else lap_marker_trades
 				log(f"[lap] laps={laps} growth={growth} dist={int(dist)} trades={_ori0(trades)}")
 
+		# 提前结束：主判据 = 入口等价判据（游戏内 _criteria_met + 日志侧场景校验 tail.entry_ok()），
+		# 连续 EARLY_EXIT_STABLE 次成立即收尾；仅当日志不可读时回退「圈数 ≥4 且 ≥110s」人工代理。
+		base_ok = _criteria_met(
+			1 if rig_ok else 0,
+			1 if _mod_enabled() is True else 0,
+			int(dist),
+			laps,
+			_ori0(trades),
+			_ori0(io_in),
+			_ori0(io_out),
+			growth,
+			_ori0(starve_max),
+		)
+		elapsed = now - start
+		if tail.available:
+			# 主判据：与入口退出码同源（PASS 且 distinct>=14 / 让位>=1 / 三输出清空>0）
+			exit_ready = base_ok and laps >= 1 and tail.entry_ok() and elapsed >= MIN_SOAK_SECONDS
+			use_proxy = False
+		else:
+			# 回退代理：日志不可读时沿用旧口径（圈数下限 + 更长浸泡时长）
+			exit_ready = base_ok and laps >= MIN_EARLY_EXIT_LAPS and elapsed >= FALLBACK_SOAK_SECONDS
+			use_proxy = True
+		if exit_ready:
+			early_streak += 1
+			if early_streak >= EARLY_EXIT_STABLE:
+				hunger_count, hunger_max, hunger_summary = _hunger_stats()
+				log(
+					f"[early-exit] criteria met after {int(elapsed)}s laps={laps} "
+					f"distinct={len(tail.uuids)} yields={tail.yields} paper={tail.paper_max} "
+					f"book={tail.book_sum} glass={tail.glass_sum} "
+					f"hunger(count={hunger_count} max={hunger_max} villagers={hunger_summary}) "
+					f"(stable={EARLY_EXIT_STABLE})"
+					+ (" [proxy]" if use_proxy else "")
+				)
+				break
+		else:
+			early_streak = 0
+
 		# 每 STATUS_INTERVAL 秒打印状态行
 		if now >= next_status:
 			next_status = now + STATUS_INTERVAL
 			pos_text = [round(v, 2) for v in pos] if pos is not None else None
+			hunger_count, hunger_max, hunger_summary = _hunger_stats()
 			log(
 				f"[status] t={int(now - start)}s pos={pos_text} trades={_ori0(trades)} "
 				f"ioIn={_ori0(io_in)} ioOut={_ori0(io_out)} screen={screen!r} laps={laps} "
-				f"dist={int(dist)} growth={growth} starve={_ori0(starve_max)} stuck={stuck}"
+				f"dist={int(dist)} growth={growth} starve={_ori0(starve_max)} stuck={stuck} "
+				f"hunger(count={hunger_count} max={hunger_max} villagers={hunger_summary})"
 			)
 
 		time.sleep(SAMPLE_INTERVAL)
@@ -412,16 +634,16 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 	starve_out = _ori0(starve_max)
 	dist_out = int(dist)
 
-	verdict_ok = (
-		rig_flag == 1
-		and enabled_flag == 1
-		and dist_out >= PASS_MIN_DIST
-		and laps >= PASS_MIN_LAPS
-		and trades_out >= PASS_MIN_TRADES
-		and io_in_out >= PASS_MIN_IO_IN
-		and io_out_out >= PASS_MIN_IO_OUT
-		and growth >= PASS_MIN_GROWTH
-		and starve_out >= PASS_MIN_STARVE
+	verdict_ok = _criteria_met(
+		rig_flag,
+		enabled_flag,
+		dist_out,
+		laps,
+		trades_out,
+		io_in_out,
+		io_out_out,
+		growth,
+		starve_out,
 	)
 
 	log(

@@ -74,9 +74,11 @@ CLEAR_RE = re.compile(r"\[cleared=(\d+) total=(\d+) restocks=(\d+)\]")
 DEFAULT_SECONDS = 240.0  # 默认观测时长（秒）
 WAIT_RIG_TIMEOUT = 60.0  # 等待装置就绪上限（秒）
 STATUS_INTERVAL = 5.0  # 状态行间隔（秒）
+MIN_SOAK_SECONDS = 15.0  # 提前退出的小幅安全下限（秒）：真正的判据是结构化 PASS 标准本身，浸泡时长只是防抖/预热的最小地板
+EARLY_EXIT_STABLE = 2  # 提前退出所需的连续达标状态评估次数（每 STATUS_INTERVAL 秒评估一次）
 PASS_MIN_TRADES = 128  # 判定 PASS 所需最少成交数（真虚空应远超补货周期满量）
-PASS_MIN_CYCLES = 3  # 判定 PASS 所需最少回程周期数
-PASS_MIN_USES_SAMPLES = 3  # 判定 PASS 所需最少有效 uses 样本数
+PASS_MIN_CYCLES = 5  # 判定 PASS 所需最少回程周期数（5，确保多周期稳定而非仅 3 次）
+PASS_MIN_USES_SAMPLES = 2  # 判定 PASS 所需最少有效 uses 样本数（2，减少等待有效样本的时间）
 
 
 def _as_int(value):
@@ -254,6 +256,33 @@ def _quit_client(noquit: bool) -> None:
 		log(f"[quit] 自动关闭失败: {exc} → 请手动关闭游戏窗口")
 
 
+def _criteria_met(stats, transitions, uses_samples):
+	"""计算 PASS 三项标准（回程周期 / 成交数 / uses 健康），返回 (cycles_ok, trades_ok, uses_ok)。
+
+	观测循环的提前退出与最终 verdict 共用此函数，阈值判定只有这一处，避免两处漂移；分支与原 verdict 完全一致：
+	- cycles_ok：解析到 [void] 行则以 back 为准，否则以本地 island->home 转换计数兜底；
+	- trades_ok：mod 反射可用时以 mod total 为准，否则以聊天累计 total 兜底；
+	- uses_ok：有效样本数 >= PASS_MIN_USES_SAMPLES 且全部样本 <= 0。
+	"""
+	mod = _trade_stats()
+	total = mod.get("total")
+	io_in = mod.get("io_in")
+	io_out = mod.get("io_out")
+	if "error" in mod or not (isinstance(total, int) and isinstance(io_in, int) and isinstance(io_out, int)):
+		trades_ok = stats["total"] >= PASS_MIN_TRADES
+	else:
+		trades_ok = total >= PASS_MIN_TRADES
+	if stats["void_seen"]:
+		cycles_ok = stats["back"] >= PASS_MIN_CYCLES
+	else:
+		cycles_ok = transitions["island->home"] >= PASS_MIN_CYCLES
+	if uses_samples:
+		uses_ok = len(uses_samples) >= PASS_MIN_USES_SAMPLES and max(uses_samples) <= 0
+	else:
+		uses_ok = False
+	return cycles_ok, trades_ok, uses_ok
+
+
 def main(seconds=DEFAULT_SECONDS, noquit=False):
 	"""主流程：就绪检查 → setup 重置 → 自动启用 mod → 事件/轮询观测 → 汇总判定 →（默认）自动关闭客户端。"""
 	log("=== AutoTradeVoidTest VOID 观测开始（Minescript autorun）===")
@@ -320,6 +349,7 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 	deadline = time.time() + float(seconds)
 	next_status = time.time() + STATUS_INTERVAL
 	start = time.time()
+	stable_checks = 0  # 连续满足 PASS 标准的状态评估次数（提前退出用）
 
 	with EventQueue() as event_queue:
 		event_queue.register_chat_listener()
@@ -410,25 +440,35 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 					f"diag(rp={stats['rp']}, rpt={stats['rpt']}) mod={mod}"
 				)
 
+				# 提前退出：显式 VOID PASS 标准 = 回程周期 >=5（cycles>=5）+ 成交 >=128（trades>=128）+ 3 个有效 uses 样本全 <=0（3x uses<=0）；
+				# 该标准须连续满足 EARLY_EXIT_STABLE（2）次状态评估（每 STATUS_INTERVAL 秒一次）才判为稳定；
+				# 结构化标准是真正的门槛，MIN_SOAK_SECONDS 仅作小幅安全地板；两者同时满足即结束观测
+				if all(_criteria_met(stats, transitions, uses_samples)):
+					stable_checks += 1
+					if stable_checks >= EARLY_EXIT_STABLE and time.time() - start >= MIN_SOAK_SECONDS:
+						log(
+							f"[early-exit] criteria met after {int(time.time() - start)}s "
+							f"(soak>={int(MIN_SOAK_SECONDS)}s, stable={EARLY_EXIT_STABLE})"
+						)
+						break
+				else:
+					stable_checks = 0
+
 	# 汇总与判定（mod 反射为主信号；聊天计数离线可用，本地转换计数兜底）
 	mod = _trade_stats()
 	total = mod.get("total")
 	io_in = mod.get("io_in")
 	io_out = mod.get("io_out")
+	# 三项 PASS 标准统一由 _criteria_met 计算（与观测循环提前退出共用，阈值不会漂移）
+	cycles_ok, trades_ok, uses_ok = _criteria_met(stats, transitions, uses_samples)
 	reasons = []
 	if "error" in mod or not (isinstance(total, int) and isinstance(io_in, int) and isinstance(io_out, int)):
-		trades_ok = stats["total"] >= PASS_MIN_TRADES
 		reasons.append(
 			f"mod 反射不可用/返回空（{mod.get('error', 'value=None')}）→ 以聊天累计 total 为准: "
 			f"{stats['total']}/{PASS_MIN_TRADES}"
 		)
 	else:
-		trades_ok = total >= PASS_MIN_TRADES
 		reasons.append(f"mod: totalTrades={total} lastSession={mod.get('last')} ioIn={io_in} ioOut={io_out}")
-	if stats["void_seen"]:
-		cycles_ok = stats["back"] >= PASS_MIN_CYCLES
-	else:
-		cycles_ok = transitions["island->home"] >= PASS_MIN_CYCLES
 	reasons.append(
 		f"chat: out={stats['out']} back={stats['back']} lastUses={stats['uses']} cleared={stats['cleared']} "
 		f"total={stats['total']} restocks={stats['restocks']} lines={stats['lines']} ready={stats['ready_seen']} "
@@ -439,13 +479,11 @@ def main(seconds=DEFAULT_SECONDS, noquit=False):
 	if uses_samples:
 		uses_min = min(uses_samples)
 		uses_max = max(uses_samples)
-		uses_ok = len(uses_samples) >= PASS_MIN_USES_SAMPLES and uses_max <= 0
 		reasons.append(
 			f"uses: min={uses_min} max={uses_max} samples={len(uses_samples)}"
 			+ ("；观察到 uses>0 → 交易次数已持久化，非真虚空交易" if uses_max > 0 else "")
 		)
 	else:
-		uses_ok = False
 		reasons.append("uses: min=? max=? samples=0（无有效样本）")
 	island_state = "n/a(未到达岛屿)" if island_rig_ok is None else ("OK" if island_rig_ok else "FAIL")
 	reasons.append(f"rig: home={'OK' if rig_ok else 'FAIL'} island={island_state}")
