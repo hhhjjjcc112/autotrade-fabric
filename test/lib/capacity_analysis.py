@@ -6,9 +6,9 @@ r"""CAPACITY 判定库：解析 `[cap]` 用例块 + mod 日志锚点，逐组对
 	  moveout / stuck / error 标记；
 	- `compare(blocks, cases)`：8 类断言（缺块或 error、setup.ok、execs 前 N 条 7 键、STOP 存在性与
 	  四值、会话三元组、moveout/stuck 存在性、end e/p/sw 与掉落实体）；缺失一律 FAIL，绝不推断补齐；
-	- `render_table(results)`：23 行逐组表 + `[overall] N/23 PASS` 汇总；
+	- `render_table(results)`：21 行逐组表 + `[overall] N/21 PASS` 汇总；
 	- `make_golden(cases)`：由 `capacity_scenarios` 合成"全符合"日志（供离线校准判定机器）；
-	- CLI：`--log <path> [--json <out>]`（退出码 0 当且仅当 23/23 PASS）与 `--make-golden <out>`。
+	- CLI：`--log <path> [--json <out>]`（退出码 0 当且仅当 21/21 PASS）与 `--make-golden <out>`。
 
 双模导入：`from lib import capacity_analysis` / `import lib.capacity_analysis` /
 直跑 `python test/lib/capacity_analysis.py` 均可用（下方 sys.path shim 照 `test/static.py` 范式）。
@@ -52,7 +52,7 @@ EXEC_KEYS = capacity_scenarios.EXEC_KEYS  # 7 键（inputBatch/need/capacity/res
 # 紧跟一条回显行
 #   `[12:19:45] [Render thread/INFO] (Minescript) (debug) Script function 0 \`log\`: [[cap] begin id=a1]  ->  <no response>`
 # 回显行同样含 `[cap] begin id=a1`，若被 `parse_case_blocks` 当作脚本标记会导致 `current_id` 被覆盖成
-# `a1]`、块永不闭合（Run-1 实测 `0/23 PASS (block missing)`）。两层防护：
+# `a1]`、块永不闭合（Run-1 实测 `0/21 PASS (block missing)`）。两层防护：
 #   1) 脚本自打印标记（begin/end/setup/error）统一加 `(?<!\[)` 负向后顾（排除回显的 `[[cap] …`，
 #      与 `test/lib/verdict.py:21` 的 `[[verdict]` 约定同源）；id 收紧为 `([A-Za-z0-9_]+)`，即便后顾被绕过，
 #      尾随 `]` 也不会被吞；
@@ -265,7 +265,7 @@ def compare(blocks: dict[str, dict], cases=None) -> list[dict]:
 
 
 def render_table(results: list[dict]) -> str:
-	"""渲染逐组表：每行 `<id> PASS` / `<id> FAIL (reason; …)`，末尾 `[overall] N/23 PASS`。"""
+	"""渲染逐组表：每行 `<id> PASS` / `<id> FAIL (reason; …)`，末尾 `[overall] N/21 PASS`。"""
 	lines: list[str] = []
 	passed = 0
 	for result in results:
@@ -349,8 +349,8 @@ def make_golden(cases=None) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
 	"""构造 CLI 解析器。"""
-	parser = argparse.ArgumentParser(description="CAPACITY 判定库：解析 [cap] 日志对照 23 组钉扎 / 合成 golden")
-	parser.add_argument("--log", metavar="PATH", default=None, help="待判定日志路径（打印逐组表；exit 0 当且仅当 23/23 PASS）")
+	parser = argparse.ArgumentParser(description="CAPACITY 判定库：解析 [cap] 日志对照 21 组钉扎 / 合成 golden")
+	parser.add_argument("--log", metavar="PATH", default=None, help="待判定日志路径（打印逐组表；exit 0 当且仅当 21/21 PASS）")
 	parser.add_argument("--json", metavar="PATH", default=None, help="把逐组结果 JSON 写入该路径（需配合 --log）")
 	parser.add_argument("--make-golden", metavar="PATH", default=None, help="由 capacity_scenarios 合成全符合 golden 日志")
 	return parser

@@ -5,11 +5,11 @@
 	1) 经 `test/lib/launch_testclient.py --mode capacity` 部署 Minescript 脚本
 	   （test/minescript/*.py → run/minescript/，并按需追加 autorun 规则）；
 	2) 重建 AutoTradeCapacityTest 世界与 CAPACITY 配置（setup_testworld.py --mode capacity --fresh）；
-	3) 启动客户端（进图后 Minescript autorun 运行 capacity_test 逐组执行 23 用例；
+	3) 启动客户端（进图后 Minescript autorun 运行 capacity_test 逐组执行 21 用例；
 	   观测结束后默认自动关游戏）；默认 gradlew runClient，--headless 时经本地 HeadlessMC 无头启动；
 	4) 等待游戏退出后，解析本轮日志的 [verdict]（dev：run/logs/latest.log；--headless：HeadlessMC
-	   游戏日志），并用判定库 `test/lib/capacity_analysis.py` 对同一日志打印 23 行逐组符合性表；
-	5) 退出码 = 游戏内 verdict PASS **且** 23 组全部符合才为 0；任一不满足为 1；
+	   游戏日志），并用判定库 `test/lib/capacity_analysis.py` 对同一日志打印 21 行逐组符合性表；
+	5) 退出码 = 游戏内 verdict PASS **且** 21 组全部符合才为 0；任一不满足为 1；
 	   未见本轮 verdict 仍为 2（stale-run 保护同既有入口）。
 
 用法（从仓库根目录 autotrade-fabric/ 运行）：
@@ -21,7 +21,7 @@
 	python test/capacity.py --headless --headless-timeout 600
 	python test/capacity.py --dry-run          # 只打印将执行的命令，无任何副作用
 
-退出码：0 = PASS（游戏内 verdict PASS 且 23 组全部符合）/ 1 = FAIL（打印未过组）/
+退出码：0 = PASS（游戏内 verdict PASS 且 21 组全部符合）/ 1 = FAIL（打印未过组）/
 	2 = 未见本轮 verdict（或启动前准备失败）。
 
 注意：本脚本会启动 Minecraft 客户端（dev 或 headless）；按项目规则（AGENTS.md 规则 7），启动测试须先获用户批准。

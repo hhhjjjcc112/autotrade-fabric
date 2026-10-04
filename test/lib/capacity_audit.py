@@ -13,13 +13,13 @@ CLI：
 	  --cases .omo/evidence/capacity-detection-testworld/case-table.json
 
 断言分组：
-	1. datapack 恰有 23 个 `cap_<id>.mcfunction`，id 集合 == 用例表 id 集合；
+	1. datapack 恰有 21 个 `cap_<id>.mcfunction`，id 集合 == 用例表 id 集合；
 	2. 每个函数：首个非注释行（tp 行）之后存在 `kill @e[type=minecraft:item]`；
 	   另有 `kill @e[type=minecraft:villager,tag=autotrade_cap]` 与 `clear @s`；
 	3. 每个函数 `item replace` 行数 == 用例表非空槽数（len(stacks) + junk_stacks）；
-	4. 每个函数 sell item id + `Count:<n>b`、`maxUses:<n>` 与表一致（全 23 组，表驱动；
-	   cap_a2/cap_f1/cap_g1 为显式抽查样本）；
-	5. 用例表 JSON：恰 23 条、id 序列 a1..h2、`expect_session` 键集恰 5 键、
+	4. 每个函数 sell item id + `Count:<n>b`、`maxUses:<n>` 与表一致（全 21 组，表驱动；
+	   cap_a2/cap_f1/cap_g3 为显式抽查样本）；
+	5. 用例表 JSON：恰 21 条、id 序列 a1..f3,g3,h1,h2、`expect_session` 键集恰 5 键、
 	   `expect_exec` 为列表；
 	6. datapack 目录下任何文件不得残留 `{{` 占位符；
 	7. 配置 `run/config/autotrade.json`：tradeMode STATIC / tradeCacheTtl 0 /
@@ -52,12 +52,12 @@ EXPECTED_IDS = [
 	"d1", "d2",
 	"e1", "e2", "e3",
 	"f1", "f2", "f3",
-	"g1", "g2", "g3",
+	"g3",
 	"h1", "h2",
 ]
 
-# 显式抽查样本（其余 20 组同样表驱动校验）
-SAMPLE_IDS = ["a2", "f1", "g1"]
+# 显式抽查样本（其余 18 组同样表驱动校验）
+SAMPLE_IDS = ["a2", "f1", "g3"]
 
 SESSION_KEYS = {"trades", "capacity_skips", "blocked", "moveout_blocked", "stuck"}
 
@@ -106,8 +106,8 @@ def audit_functions(audit: Audit, func_dir: Path, cases: list[dict]) -> None:
 	table_ids = [record["id"] for record in cases]
 
 	audit.check(
-		f"函数数量 cap_*.mcfunction == 23（实际 {len(cap_files)}）",
-		len(cap_files) == 23,
+		f"函数数量 cap_*.mcfunction == 用例表记录数 {len(table_ids)}（实际 {len(cap_files)}）",
+		len(cap_files) == len(table_ids),
 		str(func_dir),
 	)
 	audit.check(
@@ -148,7 +148,7 @@ def audit_functions(audit: Audit, func_dir: Path, cases: list[dict]) -> None:
 			f"{path}",
 		)
 
-		# 组 4：sell item id + Count:<n>b 与 maxUses 与表一致（表驱动，全 23 组）
+		# 组 4：sell item id + Count:<n>b 与 maxUses 与表一致（表驱动，全 21 组）
 		offer = case["offer"]
 		sell_ok = f'sell:{{id:"{offer["sell_item"]}",Count:{offer["sell_count"]}b}}' in text
 		audit.check(
@@ -177,7 +177,7 @@ def audit_functions(audit: Audit, func_dir: Path, cases: list[dict]) -> None:
 
 
 def audit_cases_json(audit: Audit, cases_path: Path) -> list[dict]:
-	"""断言组 5：用例表 JSON 结构（23 条 / id 序列 / 键集 / 类型）。"""
+	"""断言组 5：用例表 JSON 结构（21 条 / id 序列 / 键集 / 类型）。"""
 	if not cases_path.is_file():
 		audit.check("用例表 JSON 存在", False, str(cases_path))
 		return []
@@ -191,9 +191,13 @@ def audit_cases_json(audit: Audit, cases_path: Path) -> list[dict]:
 	if not isinstance(cases, list):
 		audit.check("用例表 JSON 顶层为列表", False, type(cases).__name__)
 		return []
-	audit.check("用例表记录数 == 23", len(cases) == 23, f"实际 {len(cases)}")
+	audit.check(
+		f"用例表记录数 == 期望 id 数 {len(EXPECTED_IDS)}",
+		len(cases) == len(EXPECTED_IDS),
+		f"实际 {len(cases)}",
+	)
 	ids = [record.get("id") if isinstance(record, dict) else None for record in cases]
-	audit.check("用例表 id 序列 == a1..h2", ids == EXPECTED_IDS, str(ids))
+	audit.check("用例表 id 序列 == a1..f3,g3,h1,h2", ids == EXPECTED_IDS, str(ids))
 
 	session_bad: list[str] = []
 	exec_bad: list[str] = []

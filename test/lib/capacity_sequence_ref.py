@@ -2,16 +2,16 @@ r"""CAPACITY 独立序列参考模拟器（槽级全序列复核钉扎，Todo 6�
 
 职责：
 	- 按 Java/MC 源码语义**独立实现**完整交易会话序列：switchTo 自动装填 → 容量/预留判定 →
-	  QUICK_MOVE / exact-N（含守卫回退）/ CAPACITY_SKIP / STOP 分支 → pass 循环 → moveOut →
-	  关窗 offerOrDrop 掉落 → 掉落实体拾取-创造模式销毁（勘误 #5）；输入 23 组用例（复用 `capacity_scenarios.CASES` 数据结构），
-	  输出每 pass EXECUTING 七键、会话五键、终态三计数与掉落实体数；
-	- `--compare`：ref 输出 vs 表钉扎逐项比对（expect_exec 前 N 条全七键、expect_stop 分支、
-	  expect_session 五键、expect_final 三键、expect_entities）；全部一致 → stdout 含 `23/23 match`
+	  QUICK_MOVE / CAPACITY_SKIP / STOP 分支 → moveOut →
+	  关窗 offerOrDrop 掉落 → 掉落实体拾取-创造模式销毁（勘误 #5）；输入 21 组用例（复用 `capacity_scenarios.CASES` 数据结构），
+	  输出 EXECUTING 七键、会话五键、终态三计数与掉落实体数；
+	- `--compare`：ref 输出 vs 表钉扎逐项比对（expect_exec 全七键、expect_stop 分支、
+	  expect_session 五键、expect_final 三键、expect_entities）；全部一致 → stdout 含 `21/21 match`
 	  且退出码 0，否则打印逐项 mismatch 明细并退出码 1。
 
 独立性约束（验收硬性要求）：
 	- 不调用 `capacity_scenarios.derive_first_pass`（被测推导器）；模拟逻辑全部由 Java/MC 源码语义
-	  独立实现，且以槽级操作（含服务端 insertItem/pass 循环/关窗掉落）让结果自然涌现，不硬编码钉扎；
+	独立实现，且以槽级操作（含服务端 insertItem/QUICK_MOVE while 循环/关窗掉落）让结果自然涌现，不硬编码钉扎；
 	- 仅复用其数据结构与常量（`CASES` / `Case` 字段 / `layout_case` 槽展开 / `ITEM_MAX_COUNT` / 键序）。
 
 源码依据（逐行，均为只读查阅）：
@@ -31,10 +31,10 @@ r"""CAPACITY 独立序列参考模拟器（槽级全序列复核钉扎，Todo 6�
 	  `TradeOffer.java:238-240,283-315`（isDisabled = uses ≥ maxUses；matchesBuyItems/depleteBuyItems）、
 	  `TradeOfferList.java:27-42`（getValidOffer 单选）；
 	- `CapacityModel.java`（容量/成本合并空间/预留/候选门公式，独立重写）；
-	- `AbstractTradeStrategy.java:85-184`（会话七步：残留清理→扫描→pass 循环→moveOut→post-loop blocked）、
-	  `:200-266`（pass 循环出口与 capacitySkips 计法）、`:272-308`（moveOut 失败置 moveout_blocked）、
-	  `:392-441`（runOneBatch）、`:451-521`（decideAndExecuteBatch 四出口）、`:550-556`（tradeClick 快照差值计数）、
-	  `:561-629`（quickMoveFallback / exactTradeN 的 a→b→e→f 与 s−m>8 守卫）、
+	- `AbstractTradeStrategy.java:85-184`（会话七步：残留清理→扫描→批执行→moveOut→post-loop blocked）、
+	  `:272-308`（moveOut 失败置 moveout_blocked）、
+	  `:392-441`（runOneBatch）、`:451-521`（decideAndExecuteBatch 三出口：QUICK_MOVE / CAPACITY_SKIP / STOP）、
+	  `:550-556`（tradeClick 快照差值计数）、
 	  `OutputSlotExecutorStrategy.java:13-36`（SnapshotOfferState：remaining = initialRemaining − tradesDone；
 	  本批次用例表按 OUTPUT_SLOT 语义钉扎）。
 
@@ -68,21 +68,16 @@ EMERALD = capacity_scenarios.EMERALD
 PAPER = capacity_scenarios.PAPER
 IRON_SWORD = capacity_scenarios.IRON_SWORD
 QUICK_MOVE = capacity_scenarios.QUICK_MOVE
-EXACT_N = capacity_scenarios.EXACT_N
 CAPACITY_SKIP = capacity_scenarios.CAPACITY_SKIP
 STOP = capacity_scenarios.STOP
-
-# exact-N 每源槽右键包数预算（AbstractTradeStrategy.java:32 EXACT_N_MAX_RIGHT_CLICKS = 8）
-EXACT_N_MAX_RIGHT_CLICKS = 8
 
 # 测试世界恒为创造模式（`setup_testworld.patch_level_dat` 把 Data.GameType 与 Player.playerGameType
 # 置 1；见 setup_testworld.py:297,386）。创造模式下背包放不下的掉落实体会被「拾取即销毁」（勘误 #5）。
 CREATIVE = True
 
-# 单轮出口码（与 AbstractTradeStrategy.BatchResult 对齐；TRADED/DONE/STUCK 为模拟器内部出口）
+# 单批出口码（与 AbstractTradeStrategy.BatchResult 对齐；TRADED/DONE 为模拟器内部出口）
 RESULT_TRADED = "TRADED"
 RESULT_DONE = "DONE"
-RESULT_STUCK = "STUCK"
 
 # 终态计数用物品映射（恰三键，顺序取 FINAL_KEYS）
 _FINAL_ITEM_NAMES = {EMERALD: "emerald", PAPER: "paper", IRON_SWORD: "iron_sword"}
@@ -128,7 +123,7 @@ class SimResult:
 
 
 class Handler:
-	"""槽级交易界面模拟器：39 槽（0/1 输入、2 输出、3-38 玩家背包 36 槽）+ 光标。
+	"""槽级交易界面模拟器：39 槽（0/1 输入、2 输出、3-38 玩家背包 36 槽）。
 
 	全部方法按 Java/MC 源码逐语义实现（见模块 docstring 行号）；本类不读取任何钉扎值。
 	"""
@@ -145,10 +140,9 @@ class Handler:
 		for offset, (item, count) in enumerate(capacity_scenarios.layout_case(case)):
 			if count > 0:
 				self.slots[3 + offset] = Stack(item, count)
-		self.cursor = Stack()
 		# uses = 本地 offer.use() 计数（updateOffers 的 isDisabled 判定用）；
 		# recorded_trades = SnapshotOfferState.tradesDone 记账（remaining 推导用）。
-		# 两者在 pass 边界一致；批内 tradeClick 期间 updateOffers 依赖 uses 的实时值。
+		# 两者在批边界一致；批内 tradeClick 期间 updateOffers 依赖 uses 的实时值。
 		self.uses = 0
 		self.recorded_trades = 0
 
@@ -204,58 +198,6 @@ class Handler:
 			stack.count = 0
 		return moved
 
-	def click_pickup_left(self, index: int) -> None:
-		"""镜像 ScreenHandler PICKUP 左键分支（exact-N c/d 步与槽 0 放置用）。"""
-		slot = self.slots[index]
-		if self.cursor.is_empty():
-			# 光标空 + 左键：整组拿起
-			if not slot.is_empty():
-				self.cursor = slot.copy()
-				self._clear(index)
-		else:
-			if slot.is_empty():
-				# 光标非空 + 左键空槽：整组放下（受物品堆叠上限截断）
-				placed = min(self.cursor.count, self._max(self.cursor.item))
-				self.slots[index] = Stack(self.cursor.item, placed)
-				self.cursor.count -= placed
-			elif self.cursor.item == slot.item:
-				# 同物品合并（Slot.insertStack 往返）
-				space = self._max(slot.item) - slot.count
-				move = min(space, self.cursor.count)
-				slot.count += move
-				self.cursor.count -= move
-			else:
-				# 异物品交换（本用例集不经过；保持与 vanilla 一致以便扩展）
-				self.cursor, self.slots[index] = slot.copy(), self.cursor.copy()
-			if self.cursor.count <= 0:
-				self.cursor = Stack()
-		if index in (0, 1):
-			# MerchantInventory.setStack(0/1) → updateOffers
-			self.update_offers()
-
-	def click_pickup_right(self, index: int) -> None:
-		"""镜像 ScreenHandler PICKUP 右键分支（exact-N c 步每次放回 1 个）。"""
-		slot = self.slots[index]
-		if self.cursor.is_empty():
-			if not slot.is_empty():
-				# 光标空 + 右键：取半（向上取整）
-				taken = (slot.count + 1) // 2
-				self.cursor = Stack(slot.item, taken)
-				slot.count -= taken
-				if slot.count <= 0:
-					self._clear(index)
-		else:
-			if slot.is_empty():
-				self.slots[index] = Stack(self.cursor.item, 1)
-				self.cursor.count -= 1
-			elif self.cursor.item == slot.item:
-				slot.count += 1
-				self.cursor.count -= 1
-			if self.cursor.count <= 0:
-				self.cursor = Stack()
-		if index in (0, 1):
-			self.update_offers()
-
 	# ------------------------------------------------------------------
 	# 交易项状态与预览（MerchantInventory.updateOffers）
 	# ------------------------------------------------------------------
@@ -265,7 +207,7 @@ class Handler:
 		return self.max_uses - self.recorded_trades
 
 	def record(self, trades: int) -> None:
-		"""SnapshotOfferState.record():32-35：跨 pass 累计成交记账。"""
+		"""SnapshotOfferState.record():32-35：跨批累计成交记账。"""
 		self.recorded_trades += trades
 
 	def exhausted(self, batch_trades: int) -> bool:
@@ -429,27 +371,8 @@ class Handler:
 		return autofill_batch * self.sell_count > 36 * self._max(self.sell_item)
 
 	# ------------------------------------------------------------------
-	# exact-N 选源与守卫
+	# 输入槽 QUICK_MOVE（moveOut）
 	# ------------------------------------------------------------------
-
-	def select_cost_source_slot(self, m: int) -> int | None:
-		"""镜像 FillHelpers.selectCostSourceSlot:75-98：优先 S≥M 且 |S−M| 最小，否则最大堆叠。"""
-		source: int | None = None
-		best_diff: int | None = None
-		max_count = -1
-		for i in range(3, 39):
-			slot = self.slots[i]
-			if slot.is_empty() or slot.item != self.cost_item:
-				continue
-			if slot.count >= m:
-				diff = abs(slot.count - m)
-				if best_diff is None or diff < best_diff:
-					best_diff = diff
-					source = i
-			elif source is None and slot.count > max_count:
-				max_count = slot.count
-				source = i
-		return source
 
 	def quick_move_input_slot(self, index: int) -> None:
 		"""镜像 MerchantScreenHandler.quickMove:125-135 槽 0/1 分支（insertItem 方向 fromLast=false）。"""
@@ -515,64 +438,22 @@ class Handler:
 		return (after - before) // self.sell_count
 
 	# ------------------------------------------------------------------
-	# 容量分支执行（decideAndExecuteBatch / exactTradeN / quickMoveFallback）
+	# 容量分支执行（decideAndExecuteBatch）
 	# ------------------------------------------------------------------
-
-	def quick_move_fallback(self) -> int:
-		"""镜像 AbstractTradeStrategy.quickMoveFallback:561-569：重新装填后空间封顶 QUICK_MOVE。"""
-		self.refill()
-		return self.trade_click()
-
-	def exact_trade_n(self, n: int) -> int:
-		"""镜像 AbstractTradeStrategy.exactTradeN:579-629（单成本）的 a→b→守卫→c/d→e→f 流程。"""
-		m = n * self.cost_count
-		# a) QUICK_MOVE 槽 0（autofill 整组移回背包）；失败 → 回退
-		if not self.slots[0].is_empty():
-			self.quick_move_input_slot(0)
-			if not self.slots[0].is_empty():
-				return self.quick_move_fallback()
-		# b) 选成本源槽；无源 → 回退
-		source = self.select_cost_source_slot(m)
-		if source is None:
-			return self.quick_move_fallback()
-		s = self.slots[source].count
-		# 守卫：S−M > 8 → 回退空间封顶 QUICK_MOVE
-		if s - m > EXACT_N_MAX_RIGHT_CLICKS:
-			return self.quick_move_fallback()
-		# c) PICKUP 拿起源整组 → 右键源槽 (S−M) 次（每次放回 1）→ d) 左键槽 0 放入 M
-		self.click_pickup_left(source)
-		for _ in range(max(0, s - m)):
-			self.click_pickup_right(source)
-		self.click_pickup_left(0)
-		# e) 槽 2 canCombine(卖品) 校验；失败 → 回退
-		if self.slots[2].is_empty() or self.slots[2].item != self.sell_item:
-			return self.quick_move_fallback()
-		# f) 点击槽 2（服务端 while 恰交易 N 笔）
-		return self.trade_click()
 
 	def decide_and_execute(
 		self, input_batch: int, effective_batch: int, need: int, capacity: int, reservation: int
 	) -> tuple[str, int, str]:
-		"""镜像 AbstractTradeStrategy.decideAndExecuteBatch:451-521 四出口（单成本准则）。
+		"""镜像 AbstractTradeStrategy.decideAndExecuteBatch:451-521 三出口（单成本准则；exact-N 已暂停，2026-10）。
 
-		返回 (结果码, 本轮成交数, 分支名 QUICK_MOVE/EXACT_N/CAPACITY_SKIP/STOP)。
+		返回 (结果码, 本轮成交数, 分支名 QUICK_MOVE/CAPACITY_SKIP/STOP)。
 		"""
 		candidate = self.is_starvation_candidate()
 		if capacity - reservation >= need:
-			# QUICK_MOVE 优先路径 → 滞留检测（checkResultStuck）
-			trades = self.trade_click()
-			if not self.slots[2].is_empty():
-				return RESULT_STUCK, trades, QUICK_MOVE
-			return RESULT_TRADED, trades, QUICK_MOVE
-		affordable = capacity // self.sell_count
-		if candidate and affordable >= 1:
-			# exact-N：n = min(affordable, effectiveBatch)（单成本；双成本不在本表范围）
-			n = min(affordable, effective_batch)
-			trades = self.exact_trade_n(n)
-			if not self.slots[2].is_empty():
-				return RESULT_STUCK, trades, EXACT_N
-			return RESULT_TRADED, trades, EXACT_N
+			# QUICK_MOVE 优先路径：整批可容纳 → 一次点击整批成交
+			return RESULT_TRADED, self.trade_click(), QUICK_MOVE
 		if candidate:
+			# exact-N 已暂停（2026-10）：候选整批放不下 → CAPACITY_SKIP（跳过等待容器 IO）；重启用见 docs/TASKS.md 6.9
 			return "CAPACITY_SKIP", 0, CAPACITY_SKIP
 		return STOP, 0, STOP
 
@@ -705,51 +586,25 @@ class Handler:
 
 
 def simulate_case(case) -> SimResult:
-	"""运行单个用例的全序列模拟：pass 循环 → moveOut/post-loop blocked → 关窗。
+	"""运行单个用例的序列模拟：单批执行 → moveOut/post-loop blocked → 关窗。
 
 	流程镜像 AbstractTradeStrategy.handleMerchantScreenTick:85-184（残留清理无残留即通过；
-	扫描语义：23 组用例均为单 offer、开窗 uses=0 未禁用、背包成本充足 → active 恒含该 offer）。
+	扫描语义：21 组用例均为单 offer、开窗 uses=0 未禁用、背包成本充足且单批耗尽 → 一次 runOneBatch 即收尾）。
 	"""
 	handler = Handler(case)
 	result = SimResult(case_id=case.id)
-	trades_total = 0
-	capacity_skips = 0
-	blocked = False
-	stuck = False
-	active = True  # 单 offer 扫描结果（isDisabled=false + 成本充足）
-	while active:
-		any_traded_this_pass = False
-		outcome = handler.run_one_batch()
-		if outcome.exec_record is not None and outcome.branch is not None:
-			result.execs.append(outcome.exec_record)
-			result.branches.append(outcome.branch)
-		# 镜像 runPassLoop:217-220：先累计成交，再 record 记账
-		trades_total += outcome.trades
-		handler.record(outcome.trades)
-		if outcome.result == RESULT_TRADED:
-			any_traded_this_pass = True
-			# 耗尽或（0 笔且槽 2 空）→ 移出 active；否则保留进入下一 pass
-			if outcome.exhausted or (outcome.trades == 0 and handler.slots[2].is_empty()):
-				active = False
-		elif outcome.result == RESULT_DONE:
-			active = False
-		elif outcome.result in ("CAPACITY_SKIP", STOP):
-			capacity_skips += 1
-			active = False
-		elif outcome.result == RESULT_STUCK:
-			blocked = True
-			stuck = True
-			active = False
-		# 镜像 runPassLoop:261：STUCK / 本 pass 无成交 / active 已空 → 终止
-		if blocked or not any_traded_this_pass:
-			break
-	# 第 5 步：moveOut 仅非 STUCK 路径执行（:166-168）
-	moveout_blocked = False
-	if not blocked:
-		moveout_blocked = not handler.move_out_input_costs()
+	outcome = handler.run_one_batch()
+	if outcome.exec_record is not None and outcome.branch is not None:
+		result.execs.append(outcome.exec_record)
+		result.branches.append(outcome.branch)
+	# 镜像 runPassLoop:217-220：先累计成交，再 record 记账
+	trades_total = outcome.trades
+	handler.record(outcome.trades)
+	capacity_skips = 1 if outcome.result in ("CAPACITY_SKIP", STOP) else 0
+	# 第 5 步：moveOut（:166-168）
+	moveout_blocked = not handler.move_out_input_costs()
 	# 第 6 步：post-loop——全部跳过且 0 笔交易 → blocked（:170-173）
-	if not blocked and capacity_skips > 0 and trades_total == 0:
-		blocked = True
+	blocked = capacity_skips > 0 and trades_total == 0
 	# 关窗：槽 0/1 余量 offerOrDrop（:160-180）
 	entities = handler.close_window()
 	result.session = {
@@ -757,7 +612,7 @@ def simulate_case(case) -> SimResult:
 		"capacity_skips": capacity_skips,
 		"blocked": blocked,
 		"moveout_blocked": moveout_blocked,
-		"stuck": stuck,
+		"stuck": False,
 	}
 	result.final = handler.final_counts()
 	result.entities = entities
@@ -835,7 +690,7 @@ def diff_case(case, result: SimResult) -> list[str]:
 
 
 def compare(verbose: bool = True) -> bool:
-	"""ref 输出 vs 表钉扎逐组比对；全部一致打印 `23/23 match` 并返回 True，否则打印明细返回 False。"""
+	"""ref 输出 vs 表钉扎逐组比对；全部一致打印 `21/21 match` 并返回 True，否则打印明细返回 False。"""
 	matched = 0
 	for case in CASES:
 		result = simulate_case(case)
@@ -865,9 +720,9 @@ def main(argv=None) -> int:
 				reconfigure(encoding="utf-8", errors="replace")
 			except Exception:
 				pass
-	parser = argparse.ArgumentParser(description="CAPACITY 独立序列参考模拟器：--compare 复核 23 组钉扎")
+	parser = argparse.ArgumentParser(description="CAPACITY 独立序列参考模拟器：--compare 复核 21 组钉扎")
 	parser.add_argument(
-		"--compare", action="store_true", help="ref 全序列输出 vs 表钉扎逐项比对（stdout 含 23/23 match；退出码 0/1）"
+		"--compare", action="store_true", help="ref 全序列输出 vs 表钉扎逐项比对（stdout 含 21/21 match；退出码 0/1）"
 	)
 	args = parser.parse_args(argv)
 	if not args.compare:

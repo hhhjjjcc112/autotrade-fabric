@@ -12,7 +12,7 @@
 	moving：MOVING 移动交易装置（环形矿车轨道持续带动玩家，沿途 12 村民 + 5 输入/输出箱），
 	      世界默认 `AutoTradeMovingTest`
 	capacity：CAPACITY 容量检测装置（复用 STATIC 坐标系单站台；无村民/容器基线，村民与
-	          背包库存由 `test/lib/capacity_scenarios.py` 的 23 组用例逐组布置，生成
+	          背包库存由 `test/lib/capacity_scenarios.py` 的 21 组用例逐组布置，生成
 	          `autotrade_test:cap_<id>` 场景函数），世界默认 `AutoTradeCapacityTest`
 
 用法：
@@ -22,7 +22,7 @@
 	python test/lib/setup_testworld.py --mode void --verify    # 仅校验 VOID 世界
 	python test/lib/setup_testworld.py --mode moving           # MOVING：生成 AutoTradeMovingTest + MOVING 配置
 	python test/lib/setup_testworld.py --mode moving --verify  # 仅校验 MOVING 世界
-	python test/lib/setup_testworld.py --mode capacity         # CAPACITY：生成 AutoTradeCapacityTest + 23 场景函数 + 导出用例表
+	python test/lib/setup_testworld.py --mode capacity         # CAPACITY：生成 AutoTradeCapacityTest + 21 场景函数 + 导出用例表
 	python test/lib/setup_testworld.py --mode capacity --verify# 仅校验 CAPACITY 世界（含表↔脚本同步检查）
 	python test/lib/setup_testworld.py --skip-config
 	python test/lib/setup_testworld.py --fresh
@@ -282,7 +282,7 @@ EXPECTED_DATAPACK_FILES = {
 	"void": SHARED_DATAPACK_FILES + VOID_ONLY_DATAPACK_FILES,
 	# MOVING v2：共享文件 + 专属 moving_maintenance.mcfunction
 	"moving": SHARED_DATAPACK_FILES + MOVING_ONLY_DATAPACK_FILES,
-	# CAPACITY：共享文件 + 23 个用例函数（由 capacity_scenarios.CASES 动态派生，保持单一来源）
+	# CAPACITY：共享文件 + 21 个用例函数（由 capacity_scenarios.CASES 动态派生，保持单一来源）
 	"capacity": SHARED_DATAPACK_FILES
 	+ [f"data/autotrade_test/functions/cap_{case.id}.mcfunction" for case in capacity_scenarios.CASES],
 }
@@ -1151,7 +1151,7 @@ def _verify_capacity_sync(results: list[tuple[str, bool, str]]) -> None:
 		return
 	expected_ids = [case.id for case in capacity_scenarios.CASES]
 	actual_ids = [entry.get("id") for entry in cap_cases]
-	_check(results, "CAP_CASES 条数 == 23", len(cap_cases) == len(capacity_scenarios.CASES), f"len={len(cap_cases)}")
+	_check(results, f"CAP_CASES 条数 == {len(capacity_scenarios.CASES)}", len(cap_cases) == len(capacity_scenarios.CASES), f"len={len(cap_cases)}")
 	_check(results, "CAP_CASES id 顺序 a1..h2", actual_ids == expected_ids, f"{actual_ids}")
 	if len(cap_cases) != len(capacity_scenarios.CASES):
 		return
@@ -1298,7 +1298,7 @@ def verify(world_name: str, mode: str, restock_seconds: int | None = None) -> bo
 			_check(results, "配置文件存在", False, str(CONFIG_PATH))
 
 	if mode == "capacity":
-		# —— CAPACITY 专属：23 个场景函数内容 + 配置 JSON + 表↔脚本同步 ——
+		# —— CAPACITY 专属：21 个场景函数内容 + 配置 JSON + 表↔脚本同步 ——
 		func_dir = dp_dir / "data" / "autotrade_test" / "functions"
 		px, py, pz = CAPACITY_LAYOUT.player_pos
 		for case in capacity_scenarios.CASES:
@@ -1328,7 +1328,7 @@ def verify(world_name: str, mode: str, restock_seconds: int | None = None) -> bo
 				"",
 			)
 		cap_files = list(func_dir.glob("cap_*.mcfunction"))
-		_check(results, "cap 函数数量 == 23", len(cap_files) == len(capacity_scenarios.CASES), f"{len(cap_files)}")
+		_check(results, f"cap 函数数量 == {len(capacity_scenarios.CASES)}", len(cap_files) == len(capacity_scenarios.CASES), f"{len(cap_files)}")
 		# 配置 JSON 断言（mod 配置由 generate 写入 run/config/autotrade.json）
 		if CONFIG_PATH.is_file():
 			generic = None
@@ -1418,7 +1418,7 @@ def generate(args: argparse.Namespace) -> bool:
 	placeholders = build_placeholders(args)
 	rendered = render_datapack(world_dir / "datapacks" / "autotrade_test", placeholders, args.mode)
 
-	# 2b) CAPACITY：渲染后写入 23 个 cap_<id>.mcfunction，并导出用例表（人读 md + 机读 json）到证据目录
+	# 2b) CAPACITY：渲染后写入 21 个 cap_<id>.mcfunction，并导出用例表（人读 md + 机读 json）到证据目录
 	if args.mode == "capacity":
 		func_dir = world_dir / "datapacks" / "autotrade_test" / "data" / "autotrade_test" / "functions"
 		func_dir.mkdir(parents=True, exist_ok=True)

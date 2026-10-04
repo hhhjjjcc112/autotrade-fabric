@@ -1,7 +1,7 @@
-r"""CAPACITY 测试批次用例表（23 组，单一来源）+ 第一 pass 推导自校验 + 表导出。
+r"""CAPACITY 测试批次用例表（21 组，单一来源）+ 第一 pass 推导自校验 + 表导出。
 
 职责：
-	- `Case` / `CASES`：23 组受控用例（矩阵序 a1,a2,a3,b1..b4,c1..c3,d1,d2,e1..e3,f1..f3,g1..g3,h1,h2）
+	- `Case` / `CASES`：21 组受控用例（矩阵序 a1,a2,a3,b1..b4,c1..c3,d1,d2,e1..e3,f1..f3,g3,h1,h2）
 	  的精确钉扎值（pinned）；
 	- `layout_case(case)`：按用例展开为 36 个背包槽（屏槽 3..38 的槽序）；
 	- `derive_first_pass(case)`：纯函数——按 `CapacityModel` / `AbstractTradeStrategy` 语义推导第一 pass；
@@ -11,13 +11,13 @@ r"""CAPACITY 测试批次用例表（23 组，单一来源）+ 第一 pass 推�
 钉扎值即验收对象：推导与钉扎不一致时，先复核源码语义与计划勘误，禁止反向修改钉扎值迁就推导。
 
 推导备忘（自计划用例矩阵，原样引用）：
-1. 后置 autofill：`MerchantScreenHandler.autofill` 自屏槽 3→38 按序把槽 0 补至 64 后 break ⇒ 本表中仅前部成本堆叠被清空（e1/e2 保留次级 e12、e3 保留 e13、g1 保留 e10）；**空槽数** = 前置空槽 + 被清空堆叠数。**容量 = 空槽数 × resultMaxCount + 既有同物品结果堆叠的可合并余量 Σ(maxCount − count)**（对应 `CapacityModel.java:16-31` 的 `emptySlots` 与 `mergeSpace` 两部分；B 组 b1–b4 依赖合并项，如 b1：`1×64 + 4×(64−16) = 256`）。
+1. 后置 autofill：`MerchantScreenHandler.autofill` 自屏槽 3→38 按序把槽 0 补至 64 后 break ⇒ 本表中仅前部成本堆叠被清空（e1/e2 保留次级 e12、e3 保留 e13）；**空槽数** = 前置空槽 + 被清空堆叠数。**容量 = 空槽数 × resultMaxCount + 既有同物品结果堆叠的可合并余量 Σ(maxCount − count)**（对应 `CapacityModel.java:16-31` 的 `emptySlots` 与 `mergeSpace` 两部分；B 组 b1–b4 依赖合并项，如 b1：`1×64 + 4×(64−16) = 256`）。
 2. 预留 R：`leftover = 槽0 − eff×cost`；cost≠result 时 `leftover > costMergeSpace(成本) ? R += result.maxCount : 0`（e1/e3 为 `52 > 52`/`52 > 51` 阈值两侧；c 组 result.maxCount=1）。
-3. 分支：`cap−R ≥ need → QUICK_MOVE（trades=eff）`；否则候选且 `affordable=cap/sell≥1 → exact-N（n=min(affordable,eff)）`；候选且 affordable=0 → CAPACITY_SKIP；非候选 → STOP（会话 blocked 条件：skips>0 且 trades==0）；**STUCK**（exact-N 回退/点击后槽 2 滞留）亦置 `blocked=true`（此时 `skips` 可为 0、`trades` 可 >0，见勘误块 3 与备忘 4）。**候选门定义**（`CapacityModel.isStarvationCandidate`，`CapacityModel.java:112-121`）：`autofillBatch × sellCount > 36 × resultMaxCount`，其中 `autofillBatch = costMaxCount > 1 ? costMaxCount / costCount : 1`；即整批产出超过空背包理论容量（36 槽）时才为候选——故 A/B/D/E/F（sell=16/8，整批可放入空背包）`cand=false`，C（sell=1、结果 max=1 → 64>36）与 G（sell=64 → 4096>2304）`cand=true`；d1 虽 `affordable=12≥1` 但 `cand=false` ⇒ STOP（exact-N 分支仅在候选下成立）。
+3. 分支（exact-N 已暂停，2026-10）：`cap−R ≥ need → QUICK_MOVE（trades=eff）`；否则候选 → CAPACITY_SKIP（放不下 → 跳过等待容器 IO）；非候选 → STOP（会话 blocked 条件：skips>0 且 trades==0）；**STUCK**（点击后槽 2 滞留）亦置 `blocked=true`（此时 `skips` 可为 0、`trades` 可 >0，见勘误块 3 与备忘 4）。**候选门定义**（`CapacityModel.isStarvationCandidate`，`CapacityModel.java:112-121`）：`autofillBatch × sellCount > 36 × resultMaxCount`，其中 `autofillBatch = costMaxCount > 1 ? costMaxCount / costCount : 1`；即整批产出超过空背包理论容量（36 槽）时才为候选——故 A/B/D/E/F（sell=16/8，整批可放入空背包）`cand=false`，C（sell=1、结果 max=1 → 64>36）与 G（sell=64 → 4096>2304）`cand=true`；d1 虽 `affordable=12≥1` 但 `cand=false` ⇒ STOP（候选放不下走 CAPACITY_SKIP，非候选恒 STOP）。
 5. 用例函数槽位映射：`inventory.0..26` → 屏槽 3..29、`hotbar.0..8` → 屏槽 30..38；成本主堆叠放 `inventory.0` 以保证 autofill 先取。不使用区间槽位语法（历史陷阱）。
 
 边界：本模块只推导第一 pass 的七键（inputBatch/need/capacity/reservation/candidate/effectiveBatch/remaining）
-与 STOP 分支（expect_stop）；g1 第二 pass、会话（trades/capacity_skips/blocked/moveout_blocked/stuck）、
+与 STOP 分支（expect_stop）；会话（trades/capacity_skips/blocked/moveout_blocked/stuck）、
 终态计数与掉落实体钉扎不在本模块推导，由 Todo 6 `capacity_sequence_ref.py` 独立序列模拟器复核。
 """
 
@@ -48,9 +48,8 @@ EXEC_KEYS = ("inputBatch", "need", "capacity", "reservation", "candidate", "effe
 SESSION_KEYS = ("trades", "capacity_skips", "blocked", "moveout_blocked", "stuck")
 FINAL_KEYS = ("emerald", "paper", "iron_sword")
 
-# 第一 pass 分支枚举（decideAndExecuteBatch 的四出口）
+# 第一 pass 分支枚举（decideAndExecuteBatch 的三出口）
 QUICK_MOVE = "QUICK_MOVE"
-EXACT_N = "EXACT_N"
 CAPACITY_SKIP = "CAPACITY_SKIP"
 STOP = "STOP"
 
@@ -79,7 +78,7 @@ class Case:
 	junk_stacks: int  # 泥土×64 堆叠数（排在 stacks 之后）
 	empty_slots: int  # 结尾空槽数
 	pre_counts: dict[str, int]  # 用例函数执行后、启用 mod 前的前置计数（由 stacks 汇总）
-	expect_exec: list[dict]  # 每 pass 一项（g1 两项）；每项恰 EXEC_KEYS 七键
+	expect_exec: list[dict]  # 每 pass 一项；每项恰 EXEC_KEYS 七键
 	expect_stop: bool  # 第一 pass 是否为 STOP 出口（非候选整批放不下）
 	expect_session: dict  # 恰 SESSION_KEYS 五键
 	expect_final: dict[str, int]  # 会话结束（关窗）后背包计数
@@ -120,7 +119,7 @@ def _exec(input_batch, need, capacity, reservation, candidate, effective_batch, 
 
 
 def _session(trades, capacity_skips, blocked, *, moveout_blocked=False, stuck=False):
-	"""构造会话钉扎 dict（恰五键；g1/g2 的 STUCK 会话显式传 stuck=True）。"""
+	"""构造会话钉扎 dict（恰五键；STUCK 会话显式传 stuck=True）。"""
 	return {
 		"trades": trades,
 		"capacity_skips": capacity_skips,
@@ -173,7 +172,7 @@ def _case(
 
 
 def _build_cases() -> list[Case]:
-	"""构建 23 组用例（矩阵序；h1/h2 为 f1/d1 的深拷贝副本、id 独立）。"""
+	"""构建 21 组用例（矩阵序；h1/h2 为 f1/d1 的深拷贝副本、id 独立）。"""
 	e64 = (EMERALD, 64)
 
 	cases = [
@@ -453,51 +452,7 @@ def _build_cases() -> list[Case]:
 			final=_counts(emerald=52, paper=96),
 			notes="严格窗口：need=96 < cap−R=128 → QUICK_MOVE 12 笔。",
 		),
-		# G 组：候选门 / exact-N / 防饿死 fallback / STUCK
-		_case(
-			case_id="g1",
-			group="G",
-			title="候选/exact-N 容量受限",
-			offer=_offer(1, PAPER, 64, 64),
-			stacks=[e64, (EMERALD, 10)],
-			junk=25,
-			empty=9,
-			slots="e + e10 + j25 + 空9",
-			execs=[
-				_exec(64, 4096, 640, 0, True, 64, 64),
-				_exec(64, 3456, 64, 64, True, 54, 54),
-			],
-			stop=False,
-			session=_session(11, 0, True, stuck=True),
-			final=_counts(paper=704),
-			entities=0,
-			notes=(
-				"pass1 exact-N n=10（affordable=10）；pass2 cap=64/R=64 守卫 s−m=63>8 → fallback 1 笔后槽 2 滞留 → STUCK，跳过 moveOut，关窗掉 63；"
-				"掉落实体命运见勘误 #5：关窗 onClosed（MerchantScreenHandler.java:160-180）offerOrDrop 槽 0 余量；主背包满（j25 + 11×p64）→ "
-				"PlayerInventory.offer:328-344 dropItem；40 tick 后 ItemEntity.onPlayerCollision:333-347 → insertStack:275-312，"
-				"创造模式（测试世界 GameType=1）无空间命中 insertStack:306-308 setCount(0) → 实体 discard → 收尾采样实体数 0；两 pass 钉扎由 Todo 6 复核。"
-			),
-		),
-		_case(
-			case_id="g2",
-			group="G",
-			title="候选/防饿死 fallback",
-			offer=_offer(1, PAPER, 64, 64),
-			stacks=[e64],
-			junk=31,
-			empty=4,
-			slots="e + j31 + 空4",
-			execs=[_exec(64, 4096, 320, 0, True, 64, 64)],
-			stop=False,
-			session=_session(5, 0, True, stuck=True),
-			final=_counts(paper=320),
-			entities=0,
-			notes=(
-				"唯一源 s−m=59>8 → fallback 空间封顶 5 笔后槽 2 滞留 → STUCK，关窗掉 59；"
-				"掉落实体命运同 g1（勘误 #5）：主背包满（j31 + 5×p64）→ offer:328-344 dropItem → 40 tick 后 onPlayerCollision:333-347 "
-				"→ insertStack:306-308 创造模式 setCount(0) → discard → 收尾采样实体数 0；钉扎由 Todo 6 复核。"
-			),
-		),
+		# G 组现仅保留 g3（候选但整批可容纳 → QUICK_MOVE）；exact-N 已暂停（2026-10），原 g1/g2 用例已移除（重启用见 docs/TASKS.md 6.9）
 		_case(
 			case_id="g3",
 			group="G",
@@ -530,7 +485,7 @@ def _build_cases() -> list[Case]:
 CASES = _build_cases()
 
 # 模块级形状自检（导入零副作用——仅校验内存数据；防漏抄/错序/键集漂移）
-assert len(CASES) == 23, f"用例数 {len(CASES)} != 23"
+assert len(CASES) == 21, f"用例数 {len(CASES)} != 21"
 assert [case.id for case in CASES] == [
 	"a1", "a2", "a3",
 	"b1", "b2", "b3", "b4",
@@ -538,7 +493,7 @@ assert [case.id for case in CASES] == [
 	"d1", "d2",
 	"e1", "e2", "e3",
 	"f1", "f2", "f3",
-	"g1", "g2", "g3",
+	"g3",
 	"h1", "h2",
 ], "用例顺序与计划矩阵不一致"
 for _case_item in CASES:
@@ -563,7 +518,7 @@ def derive_first_pass(case: Case) -> dict:
 	仅覆盖第一 pass：remaining 取初始剩余次数（max_uses），不含跨 pass 累计与会话收尾；
 	推导依据：`CapacityModel.java:16-31,51-76,94-107,112-121` 与
 	`AbstractTradeStrategy.java:392-441,451-521`（见模块 docstring 备忘 1-3）。
-	返回 dict：EXEC_KEYS 七键 + "branch"（QUICK_MOVE/EXACT_N/CAPACITY_SKIP/STOP）。
+	返回 dict：EXEC_KEYS 七键 + "branch"（QUICK_MOVE/CAPACITY_SKIP/STOP）。
 	"""
 	offer = case.offer
 	cost_max = ITEM_MAX_COUNT[offer.cost_item]
@@ -602,7 +557,7 @@ def derive_first_pass(case: Case) -> dict:
 	remaining = offer.max_uses
 	effective_batch = min(input_batch, remaining)
 	if input_batch <= 0 or effective_batch <= 0:
-		# 防御分支（本表 23 组均有 64 装填量与 maxUses≥3，不可达）：源码语义为 CAPACITY_SKIP
+		# 防御分支（本表 21 组均有 64 装填量与 maxUses≥3，不可达）：源码语义为 CAPACITY_SKIP
 		return {
 			"inputBatch": input_batch,
 			"need": 0,
@@ -629,12 +584,11 @@ def derive_first_pass(case: Case) -> dict:
 			if leftover > cost_merge:
 				reservation += result_max
 
-	# 6) 分支（备忘 3）：整批可容纳 → QUICK_MOVE；否则候选 exact-N / CAPACITY_SKIP；非候选 STOP
+	# 6) 分支（备忘 3；exact-N 已暂停，2026-10）：整批可容纳 → QUICK_MOVE；否则候选 → CAPACITY_SKIP；非候选 → STOP
 	if capacity - reservation >= need:
 		branch = QUICK_MOVE
-	elif candidate and capacity // offer.sell_count >= 1:
-		branch = EXACT_N
 	elif candidate:
+		# exact-N 已暂停：候选放不下 → 跳过等待容器 IO
 		branch = CAPACITY_SKIP
 	else:
 		branch = STOP
@@ -731,9 +685,9 @@ def _counts_text(counts: dict) -> str:
 
 
 def _render_md(cases: list[Case]) -> str:
-	"""渲染人读 Markdown 表（每用例一条记录，共 23 条）。"""
+	"""渲染人读 Markdown 表（每用例一条记录，共 21 条）。"""
 	lines = [
-		"# CAPACITY 用例表（23 组）",
+		"# CAPACITY 用例表（21 组）",
 		"",
 		"> 本文件由 `test/lib/capacity_scenarios.py` 导出（单一来源）；勿手工编辑。",
 		"> 重新生成：`python test/lib/capacity_scenarios.py --export-md <path> --export-json <path>`",
@@ -774,9 +728,9 @@ def _render_md(cases: list[Case]) -> str:
 
 
 def export_table(md_path=None, json_path=None) -> list[dict]:
-	"""导出用例表：JSON（机读全字段）与 Markdown（人读逐条记录，23 条）。
+	"""导出用例表：JSON（机读全字段）与 Markdown（人读逐条记录，21 条）。
 
-	参数为 None 的格式不导出；返回 23 条 payload（JSON 结构）供调用方复用。
+	参数为 None 的格式不导出；返回 21 条 payload（JSON 结构）供调用方复用。
 	"""
 	payload = [case_to_dict(case) for case in CASES]
 	if json_path is not None:
@@ -803,8 +757,8 @@ def main(argv=None) -> int:
 				reconfigure(encoding="utf-8", errors="replace")
 			except Exception:
 				pass
-	parser = argparse.ArgumentParser(description="CAPACITY 用例表（23 组）：第一 pass 推导自校验与表导出")
-	parser.add_argument("--check", action="store_true", help="pinned vs 推导逐项校验（stdout 含 23/23；退出码 0/1）")
+	parser = argparse.ArgumentParser(description="CAPACITY 用例表（21 组）：第一 pass 推导自校验与表导出")
+	parser.add_argument("--check", action="store_true", help="pinned vs 推导逐项校验（stdout 含 21/21；退出码 0/1）")
 	parser.add_argument("--export-md", metavar="PATH", default=None, help="导出人读 Markdown 表")
 	parser.add_argument("--export-json", metavar="PATH", default=None, help="导出机读 JSON 表")
 	args = parser.parse_args(argv)

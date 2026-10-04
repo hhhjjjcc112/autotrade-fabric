@@ -1,6 +1,6 @@
 """AutoTradeCapacityTest CAPACITY 自动观测脚本（Minescript）。
 
-用途：进入 AutoTradeCapacityTest 世界后自动逐组执行 23 组「背包空位/容量检测」用例：
+用途：进入 AutoTradeCapacityTest 世界后自动逐组执行 21 组「背包空位/容量检测」用例：
   1. 每组先禁用 mod 并 reset 机器，再执行 `/function autotrade_test:cap_<id>` 布置前置库存与村民；
   2. 校验前置库存是否与用例表（CAP_CASES）一致（不一致 → ok=0 并跳过启用）；
   3. reset + 启用 mod，采样至多 10s（0.5s/次）读取 TradeStats 累计/上次会话成交/已完成会话数、背包与机器空闲状态（正例与负例均在「已完成≥1 个会话 ∧ 机器空闲无在途任务 ∧ 背包==预期终态（负例且 total==0）」连续 2 次采样后退出；机器状态不可读则跑满窗口）；
@@ -45,7 +45,7 @@ from minescript import (
 	screenshot,
 )
 
-# 23 组容量检测用例（矩阵序 a1..h2；纯字面量，供同步检查与前置态校验）
+# 21 组容量检测用例（矩阵序 a1..h2；纯字面量，供同步检查与前置态校验）
 # pre/final 仅含受观注三种物品；items = 关窗后预期掉落实体数
 CAP_CASES = [
 	{"id": "a1", "fn": "cap_a1", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 64, "paper": 0, "iron_sword": 0}, "items": 0},
@@ -66,14 +66,12 @@ CAP_CASES = [
 	{"id": "f1", "fn": "cap_f1", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 52, "paper": 192, "iron_sword": 0}, "items": 0},
 	{"id": "f2", "fn": "cap_f2", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 40, "paper": 192, "iron_sword": 0}, "items": 0},
 	{"id": "f3", "fn": "cap_f3", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 52, "paper": 96, "iron_sword": 0}, "items": 0},
-	{"id": "g1", "fn": "cap_g1", "pre": {"emerald": 74, "paper": 0, "iron_sword": 0}, "final": {"emerald": 0, "paper": 704, "iron_sword": 0}, "items": 0},
-	{"id": "g2", "fn": "cap_g2", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 0, "paper": 320, "iron_sword": 0}, "items": 0},
 	{"id": "g3", "fn": "cap_g3", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 61, "paper": 192, "iron_sword": 0}, "items": 0},
 	{"id": "h1", "fn": "cap_h1", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 52, "paper": 192, "iron_sword": 0}, "items": 0},
 	{"id": "h2", "fn": "cap_h2", "pre": {"emerald": 64, "paper": 0, "iron_sword": 0}, "final": {"emerald": 64, "paper": 0, "iron_sword": 0}, "items": 0},
 ]
 
-DEFAULT_SECONDS = 600.0  # 默认整体时限（秒）；23 组 × ~12.5s ≈ 290s，留足余量
+DEFAULT_SECONDS = 600.0  # 默认整体时限（秒）；21 组 × ~12.5s ≈ 263s，留足余量
 SETUP_WAIT = 1.2  # 执行用例函数后等待库存/村民就位的秒数
 SAMPLE_INTERVAL = 0.5  # 采样间隔（秒）
 SAMPLE_DURATION = 10.0  # 每组启用后的采样窗口上限（秒；会话数/机器空闲状态不可读等无提前退出证据时跑满）
