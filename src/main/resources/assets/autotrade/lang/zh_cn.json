@@ -17,7 +17,7 @@
     "autotrade.message.grab_container_failed": "抓取容器失败：玩家不可用",
     "autotrade.message.invalid_pos": "§c坐标格式错误，请使用空格分隔（如 -13 60 -1）",
     "autotrade.message.invalid_dimension": "§c维度格式错误，如 minecraft:overworld，已恢复原值",
-    "autotrade.message.inventory.full": "§e背包空间不足，已暂停交易；等待输出容器腾出空间后自动恢复",
+    "autotrade.message.inventory.full": "§e背包空间不足，已暂停交易；请清理背包或为输出物品配置容器",
     "autotrade.message.added_trade_pairs": "§a已添加 %d 个交易对",
     "autotrade.message.void.exhausted": "§c检测到村民交易已有使用次数（次数被持久化/残留）——可能是此前误交易留下的次数，或虚空卸载缓冲不足、装置区块被持续加载（出生点/强制加载区块）导致次数回写。交易不会停止，但每次可交易数量会减少；请调大「村民卸载等待」或检查装置位置；若为残留次数，让村民补货或更换村民即可清零",
     "autotrade.message.io.not_container": "§c容器操作失败：目标位置 %s 不是容器（%s），已放弃。请检查「IO输入/IO输出」中的容器坐标",

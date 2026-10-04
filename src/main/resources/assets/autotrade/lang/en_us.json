@@ -17,7 +17,7 @@
     "autotrade.message.grab_container_failed": "Grab container failed: player not available",
     "autotrade.message.invalid_pos": "§cInvalid position format. Use \"x y z\" (e.g. -13 60 -1)",
     "autotrade.message.invalid_dimension": "§cInvalid dimension format (e.g. minecraft:overworld), value restored",
-    "autotrade.message.inventory.full": "§eInventory full - trading paused until output container frees space",
+    "autotrade.message.inventory.full": "§eInventory full - trading paused; free up backpack space or configure an output container",
     "autotrade.message.added_trade_pairs": "§aAdded %d new trade pair(s)",
     "autotrade.message.void.exhausted": "§cVillager trade uses detected (count persisted/leftover) - either a leftover count from a previous wrong trade, or the void unload buffer is too small / the rig's chunk stays loaded (spawn/force-loaded chunks), causing counts to be saved. Trading continues but yields fewer trades per cycle; raise Void Unload Delay or check the rig location, or let the villager restock / replace it to reset the leftover count",
     "autotrade.message.io.not_container": "§cContainer operation failed: target position %s is not a container (%s), aborted. Check the container coordinates in IO Input/IO Output",

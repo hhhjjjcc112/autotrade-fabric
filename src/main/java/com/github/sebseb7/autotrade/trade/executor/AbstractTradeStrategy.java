@@ -23,6 +23,7 @@ import net.minecraft.village.TradeOffer;
 import net.minecraft.village.TradeOfferList;
 
 // 抽象基类：共享全部交易流程（现状逻辑整体迁入，行为等价；uses 仅扫描时刻快照读取）
+// exact-N 触发已于 2026-10 暂停（算法保留，重启用见 docs/TASKS.md 6.9）；受阻批次走既有 blocked/暂停/重试链路（非新增避让）。
 abstract class AbstractTradeStrategy implements TradeStrategy {
 	/**
 	 * exact-N 右键包数预算（语义扩展：每源槽独立判定，值不变 = 8）——单成本路径的 S−M 差值、双成本路径
@@ -467,44 +468,12 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		// CAPACITY_SKIP（空间被本批耗尽或初始即满）；非候选 → STOP
 		int affordable = capacity / result.getCount();
 		if (target.starvationCandidate && affordable >= 1) {
-			// 8) exact-N 路径：整批放不下但至少能容纳一笔时，按可用容量交易 n 笔。
-			// n = min(affordable, effectiveBatch)，不会超过剩余次数。
-			int n = Math.min(affordable, effectiveBatch);
-			// 双成本 offer（第二成本存在）：n 受 D1 输入槽容量预算扩展——
-			// M1 = n×costA.count 与 M2 = n×costB.count 必须 ≤ 64（槽 0/1 物理上限 min(64, maxCount)，
-			// 超限放置时 insertStack 截断 → 光标残留，P0 级）；故 n ≤ 64/costA.count 且 ≤ 64/costB.count。
-			if (!offer.getSecondBuyItem().isEmpty()) {
-				ItemStack costA = offer.getAdjustedFirstBuyItem();
-				ItemStack costB = offer.getSecondBuyItem();
-				n = Math.min(n, 64 / costA.getCount());
-				n = Math.min(n, 64 / costB.getCount());
-				// D1 守卫 1：预算不足（n < 1）→ CAPACITY_SKIP（防御——affordable/effectiveBatch ≥ 1 且
-				// costX.count ≤ 64 ⟹ 64/costX.count ≥ 1，正常不可达；不点击、不 fill）
-				if (n < 1) {
-					AutoTrade.logger.info("[AutoTrade] CAPACITY_SKIP offer {}: 双成本预算不足（n={}）", target.index, n);
-					return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
-				}
-				// ★双成本 exact-N（替代原「双成本守卫 → quickMoveFallback」；本路径永不回退普通 QUICK_MOVE）★
-				// 出口语义：TRADED = 恰交易 n 笔；CAPACITY_SKIP = 守卫失败且撤销成功（槽 0/1/光标已恢复、
-				// 预览清空 → 不会误判滞留）；STUCK = 撤销失败（背包真满，真异常）
-				BatchOutcome dual = exactTradeNDual(mc, handler, target, n, result, slot2);
-				// 9) 滞留检测（D5 守卫 7，仅成交路径需要）：成功路径输入 M1/M2 精确耗尽 → 槽 2 应清空；
-				// 滞留 = 背包满 insertItem 失败 → STUCK（由下轮 cleanupResidualResult 续传）
-				if (dual.result() == BatchResult.TRADED && checkResultStuck(mc, handler, target, slot2,
-						"[AutoTrade] STUCK offer {}: 双成本 exact-N 后结果滞留槽 2 {}x{}，结束会话")) {
-					return new BatchOutcome(BatchResult.STUCK, dual.tradesDone(), false);
-				}
-				return dual;
-			}
-			int tradesDone = exactTradeN(mc, handler, offer, target.index, n, result, slot2);
-			// 9) 滞留检测（守卫回退路径可能滞留预览）：有物品 → STUCK（由下轮 cleanupResidualResult 续传）
-			if (checkResultStuck(mc, handler, target, slot2,
-					"[AutoTrade] STUCK offer {}: exact-N/回退后结果滞留槽 2 {}x{}，结束会话")) {
-				return new BatchOutcome(BatchResult.STUCK, tradesDone, false);
-			}
-			// 10) 点击成功且无滞留 → TRADED（空间被本批耗尽 → 下 pass affordable=0 → CAPACITY_SKIP
-			// 自然移出，每会话最多 1 次 exact-N）
-			return new BatchOutcome(BatchResult.TRADED, tradesDone, false);
+			// [SUSPENDED] exact-N 触发已暂停（算法保留，重启用见 docs/TASKS.md 6.9）：
+			// 整批放不下时仅告警并跳过等待容器 IO，不经 exact-N / 部分成交避让
+			AutoTrade.logger.warn(
+					"[AutoTrade] exact-N 已暂停：offer {} 整批放不下（candidate=true, affordable={}, capacity={}, sell={}x{}）→ 跳过等待容器 IO",
+					target.index, affordable, capacity, Registries.ITEM.getId(result.getItem()), result.getCount());
+			return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
 		}
 		if (target.starvationCandidate) {
 			// 候选但 affordable == 0（空间被本批耗尽或初始即满）→ CAPACITY_SKIP → 移出 → 容器 IO
@@ -555,6 +524,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		return (FillHelpers.countSellItemsInInventory(handler, result) - before) / result.getCount();
 	}
 
+	// [SUSPENDED] exact-N 触发已暂停（算法保留）；重启用见 docs/TASKS.md 6.9。
 	// exact-N 守卫回退助手：先重新装填交易项（槽 0/1 残余成本放回并
 	// autofill 重填、槽 2 预览重建），再空间封顶 QUICK_MOVE 点击——容量 ≥ sellCount → 成交 ≥1（防饿死）；
 	// 容量 < sellCount → 结果滞留 → 由调用方 STUCK 出口终止。不能直接点击空槽 2。
@@ -568,6 +538,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		return tradeClick(mc, handler, slot2, result);
 	}
 
+	// [SUSPENDED] exact-N 触发已暂停（算法保留）；重启用见 docs/TASKS.md 6.9。
 	// exact-N 流程（仅单成本交易）：尽量恰好准备 N 笔成本并返回成交笔数（含守卫回退
 	// 空间封顶 QUICK_MOVE 路径）。流程：a QUICK_MOVE 槽 0 清空 → b PICKUP 成本源槽（3-38 中与 M 最接近
 	// 的堆叠）→ c 右键源槽 (S−M) 次（每次 1 包）→ d 点击槽 0 放置 M → e 槽 2 canCombine 校验 →
@@ -628,6 +599,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		return tradeClick(mc, handler, slot2, result);
 	}
 
+	// [SUSPENDED] exact-N 触发已暂停（算法保留）；重启用见 docs/TASKS.md 6.9。
 	// 双成本 exact-N 守卫失败的出口映射（D5 守卫 2-5）：先撤销（undoFill），撤销成功 → 槽 0/1/光标均恢复、
 	// 预览清空 → CAPACITY_SKIP（该 offer 本会话不再尝试）；撤销失败（背包真满，物品放不回）→ STUCK
 	// （真异常，保留现场由关窗 offerOrDrop 兜底）。@return CAPACITY_SKIP / STUCK 的
@@ -640,6 +612,7 @@ abstract class AbstractTradeStrategy implements TradeStrategy {
 		return new BatchOutcome(BatchResult.CAPACITY_SKIP, 0, false);
 	}
 
+	// [SUSPENDED] exact-N 触发已暂停（算法保留）；重启用见 docs/TASKS.md 6.9。
 	// 双成本 exact-N 流程（计划 D4）：手动精确填满槽 0/1（M1 = n×costA、M2 = n×costB）后 QUICK_MOVE 槽 2，
 	// 服务端 while 循环恰交易 n 笔后输入精确耗尽 → 干净退出（F6）——永不回退空间封顶 QUICK_MOVE。
 	// 流程：① 槽 0 拆分/补充至 M1 → ② 槽 1 对称至 M2 → ③ 槽 2 canCombine 校验 → ④ QUICK_MOVE 槽 2。
